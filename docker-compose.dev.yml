@@ -1,0 +1,115 @@
+services:
+  traefik:
+    image: traefik:v3.2
+    command:
+      - --api.dashboard=true
+      - --api.insecure=true
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+    ports:
+      - "80:80"
+      - "8080:8080" # Traefik dashboard (dev only)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [web]
+
+  postgres:
+    image: postgres:18.1-alpine
+    environment:
+      POSTGRES_DB: pandapages
+      POSTGRES_USER: pandapages
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_password
+    secrets: [pg_password]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pandapages -d pandapages"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [internal]
+    labels:
+      - traefik.enable=false
+
+  migrate:
+    build:
+      context: ./apps/api
+      target: migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./apps/api/migrations:/migrations:ro
+    networks: [internal]
+    restart: "no"
+    labels:
+      - traefik.enable=false
+    command:
+      [
+        "-dir", "/migrations",
+        "postgres",
+        "postgres://pandapages:${PG_PASSWORD}@postgres:5432/pandapages?sslmode=disable",
+        "up"
+      ]
+
+  api:
+    build:
+      context: ./apps/api
+      target: dev
+    environment:
+      DATABASE_URL: postgres://pandapages:${PG_PASSWORD}@postgres:5432/pandapages?sslmode=disable
+      PP_ASSET_DIR: /data/assets
+      PP_PASSCODE: ${PP_PASSCODE}
+      PP_SESSION_SECRET: ${PP_SESSION_SECRET}
+      PP_ADMIN_KEY: ${PP_ADMIN_KEY}
+      PP_LOG_LEVEL: debug
+    volumes:
+      - ./apps/api:/app
+      - assets:/data/assets
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [web, internal]
+    labels:
+      - traefik.enable=true
+      # Critical: force Traefik to use the web network IP (avoids random 504s when service is on multiple networks)
+      - traefik.docker.network=pandapages_web
+      - traefik.http.routers.api.rule=Host(`pandapages.localhost`) && (PathPrefix(`/api`) || PathPrefix(`/assets`) || PathPrefix(`/healthz`))
+      - traefik.http.routers.api.priority=100
+      - traefik.http.services.api.loadbalancer.server.port=8080
+    ports:
+      - "8081:8080" # debug: direct access to API (bypass Traefik). Remove once stable.
+
+  web:
+    build:
+      context: ./apps/web
+      target: dev
+    environment:
+      VITE_API_BASE: http://pandapages.localhost
+      VITE_ADMIN_KEY: ${VITE_ADMIN_KEY}
+    volumes:
+      - ./apps/web:/app
+      - web_node_modules:/app/node_modules
+    depends_on: [api]
+    networks: [web]
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.web.rule=Host(`pandapages.localhost`) && !PathPrefix(`/api`) && !PathPrefix(`/assets`) && !PathPrefix(`/healthz`)
+      - traefik.http.services.web.loadbalancer.server.port=5173
+
+networks:
+  web:
+    name: pandapages_web
+  internal:
+    name: pandapages_internal
+
+volumes:
+  pgdata: {}
+  assets: {}
+  web_node_modules: {}
+
+
+secrets:
+  pg_password:
+    file: ./secrets/pg_password.txt

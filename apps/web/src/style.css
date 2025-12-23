@@ -1,0 +1,15 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+}
+
+html, body {
+  height: 100%;
+  background: #0B1724;
+  color: rgba(255,255,255,0.92);
+}
+
+.prose :where(h1,h2,h3) {
+  letter-spacing: -0.02em;
+}
