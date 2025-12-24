@@ -22,19 +22,10 @@ ENTRYPOINT ["goose"]
 FROM golang:1.25.5-alpine AS builder
 WORKDIR /src
 RUN apk add --no-cache ca-certificates git
-
-# Cache deps
 COPY go.mod go.sum ./
 RUN go mod download
-
-# Copy source
 COPY . .
-
-# Allow you to override where main package is without rewriting Dockerfile
-# Example: docker build --build-arg API_MAIN=./cmd/api .
 ARG API_MAIN=./cmd/api
-
-# Build a small binary
 ENV CGO_ENABLED=0 GOOS=linux GOARCH=amd64
 RUN go build -trimpath -ldflags="-s -w" -o /out/api ${API_MAIN}
 
@@ -45,10 +36,8 @@ FROM alpine:3.20 AS prod
 RUN apk add --no-cache ca-certificates tzdata \
   && addgroup -S app \
   && adduser -S app -G app
-
 WORKDIR /app
 COPY --from=builder /out/api /app/api
-
 USER app
 EXPOSE 8080
 ENTRYPOINT ["/app/api"]

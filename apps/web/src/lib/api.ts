@@ -1,5 +1,11 @@
-const BASE = import.meta.env.VITE_API_BASE || ''
-const ADMIN_KEY = import.meta.env.VITE_ADMIN_KEY || ''
+const rawBase = (import.meta.env.VITE_API_BASE || '').trim()
+
+// Normalise base:
+// - allow '' (same-origin)
+// - strip trailing slashes so `${BASE}${path}` doesn't become `//api/...`
+const BASE = rawBase.replace(/\/+$/, '')
+
+const ADMIN_KEY = (import.meta.env.VITE_ADMIN_KEY || '').trim()
 
 export type APIErrorBody =
   | string
@@ -19,14 +25,12 @@ export type APIError = Error & {
 }
 
 function buildHeaders(path: string, init: RequestInit): Headers {
-  // Always return a Headers instance to keep TS happy.
   const headers = new Headers(init.headers as HeadersInit | undefined)
 
   const hasBody = init.body !== undefined && init.body !== null
   const isStringBody = typeof init.body === 'string'
 
-  // Only set JSON content-type when body is a JSON string.
-  // (Do NOT set for FormData)
+  // Only set JSON content-type when body is a JSON string. (Never for FormData)
   if (hasBody && isStringBody && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
   }
@@ -39,8 +43,14 @@ function buildHeaders(path: string, init: RequestInit): Headers {
   return headers
 }
 
+function buildUrl(path: string): string {
+  // ensure path always starts with /
+  const p = path.startsWith('/') ? path : `/${path}`
+  return `${BASE}${p}`
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await fetch(buildUrl(path), {
     credentials: 'include',
     ...init,
     headers: buildHeaders(path, init),
@@ -64,9 +74,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     err.status = res.status
     err.body = body
     err.code =
-      body && typeof body === 'object' && body?.error?.code
-        ? String(body.error.code)
-        : undefined
+      body && typeof body === 'object' && body?.error?.code ? String(body.error.code) : undefined
     throw err
   }
 
@@ -135,9 +143,7 @@ export async function getStorySegments(slug: string): Promise<StorySegmentsPaylo
 
 /* ----------------------------- Admin ---------------------------- */
 
-export type AdminPreviewRequest = {
-  markdown: string
-}
+export type AdminPreviewRequest = { markdown: string }
 
 export type AdminPreviewSegment = {
   ordinal: number
@@ -200,15 +206,12 @@ export type AdminStoryListItem = {
   updatedAt: string
 }
 
-export type AdminStoriesListResponse = {
-  items: AdminStoryListItem[]
-}
+export type AdminStoriesListResponse = { items: AdminStoryListItem[] }
 
 export async function adminListStories(): Promise<AdminStoriesListResponse> {
   const data = await request<{ items?: AdminStoryListItem[] }>('/api/v1/admin/stories')
   return { items: Array.isArray(data.items) ? data.items : [] }
 }
-
 
 /* ---------------------------- Progress -------------------------- */
 
