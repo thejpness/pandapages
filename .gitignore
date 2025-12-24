@@ -3,3 +3,10 @@ secrets/*.txt
 **/node_modules
 **/dist
 **/.DS_Store
+
+# build/tmp artifacts
+apps/api/tmp/
+
+# local tooling / exports
+export_*.sh
+pandapages-*.txt

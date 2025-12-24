@@ -21,12 +21,13 @@ export const router = createRouter({
     { path: '/library', component: Library, meta: { requiresUnlock: true } },
     { path: '/read/:slug', component: Reader, props: true, meta: { requiresUnlock: true } },
     { path: '/journey', component: Journey, meta: { requiresUnlock: true } },
+
     {
       path: '/admin',
       component: AdminLayout,
       meta: { requiresUnlock: true },
       children: [
-        { path: '', redirect: '/admin/upload' },
+        { path: '', redirect: { path: 'upload' } },
         { path: 'upload', component: AdminUpload },
         { path: 'ai', component: AdminAI },
       ],
@@ -55,7 +56,10 @@ router.beforeEach(async (to) => {
   // If you're already unlocked, no need to sit on /unlock
   if (to.path === '/unlock') {
     const unlocked = await getUnlocked()
-    if (unlocked) return { path: '/library' }
+    if (unlocked) {
+      const next = typeof to.query.next === 'string' ? to.query.next : '/library'
+      return { path: next }
+    }
     return true
   }
 

@@ -17,6 +17,12 @@ type Page = {
   html: string
 }
 
+type Chapter = {
+  title: string
+  segmentOrdinal: number
+  pageIndex: number
+}
+
 function clamp01(n: number) {
   if (!Number.isFinite(n)) return 0
   return Math.max(0, Math.min(1, n))
@@ -52,7 +58,7 @@ function calcPercentScroll(): number {
   return clamp01(scrollTop / scrollHeight)
 }
 
-// Simple v1 paging rule: 1–2 segments per page (keeps toddler vibe + avoids tiny pages)
+// Simple v1 paging rule: 1–2 segments per page
 function buildPages(segments: StorySegment[]): Page[] {
   const out: Page[] = []
   let buf: StorySegment[] = []
@@ -76,12 +82,21 @@ function buildPages(segments: StorySegment[]): Page[] {
   }
   flush()
 
-  // Always return at least 1 page
-  if (!out.length) {
-    out.push({ index: 0, startOrdinal: 0, endOrdinal: 0, html: '<p>No content.</p>' })
-  }
-  // reindex just in case
+  if (!out.length) out.push({ index: 0, startOrdinal: 0, endOrdinal: 0, html: '<p>No content.</p>' })
   return out.map((p, idx) => ({ ...p, index: idx }))
+}
+
+function extractHeadingTextFromHTML(renderedHtml: string): string {
+  // Safe-enough: parse minimal H2 innerText from HTML string
+  try {
+    const div = document.createElement('div')
+    div.innerHTML = renderedHtml
+    const h2 = div.querySelector('h2')
+    const t = (h2?.textContent ?? '').trim()
+    return t
+  } catch {
+    return ''
+  }
 }
 
 const route = useRoute()
@@ -96,6 +111,40 @@ const version = ref(1)
 const segments = ref<StorySegment[] | null>(null)
 const pages = computed<Page[]>(() => (segments.value ? buildPages(segments.value) : []))
 
+// Chapters derived from segments (no backend change required)
+const chapters = computed<Chapter[]>(() => {
+  if (!segments.value?.length || !pages.value.length) return []
+
+  const out: Chapter[] = []
+  for (const s of segments.value) {
+    const loc: any = s.locator || {}
+    const isH2 =
+      (loc && loc.type === 'heading' && Number(loc.h) === 2) ||
+      /^\s*<h2[\s>]/i.test(String(s.renderedHtml || ''))
+
+    if (!isH2) continue
+
+    const t = extractHeadingTextFromHTML(String(s.renderedHtml || '')) || 'Chapter'
+    const segOrd = Number(s.ordinal)
+
+    const pageIdx = pages.value.findIndex(p => segOrd >= p.startOrdinal && segOrd <= p.endOrdinal)
+    out.push({
+      title: t,
+      segmentOrdinal: segOrd,
+      pageIndex: Math.max(0, pageIdx),
+    })
+  }
+
+  // de-dupe consecutive duplicates (some sources repeat headings)
+  const dedup: Chapter[] = []
+  for (const c of out) {
+    const last = dedup[dedup.length - 1]
+    if (last && last.pageIndex === c.pageIndex && last.title === c.title) continue
+    dedup.push(c)
+  }
+  return dedup
+})
+
 const pagedRef = ref<HTMLElement | null>(null)
 const currentPage = ref(0)
 
@@ -106,6 +155,8 @@ const prefs = ref<ReaderPrefs>(loadPrefs())
 watch(prefs, (p) => savePrefs(p), { deep: true })
 
 const showControls = ref(false)
+const showChapters = ref(false)
+
 const resumeToast = ref<{ mode: 'scroll' | 'paged'; y?: number; page?: number; percent: number } | null>(null)
 
 const themeBg = computed(() => (prefs.value.theme === 'warm' ? '#0F1413' : '#0B1724'))
@@ -150,7 +201,6 @@ async function flushSave() {
     return
   }
 
-  // scroll mode
   const y = window.scrollY || 0
   const p = calcPercentScroll()
   if (Math.abs(y - lastSaved.y) < 24 && Math.abs(p - lastSaved.percent) < 0.01) return
@@ -234,11 +284,34 @@ function closeControls() {
   showControls.value = false
 }
 
+function toggleChapters() {
+  if (prefs.value.mode !== 'paged') return
+  if (!chapters.value.length) return
+  showChapters.value = !showChapters.value
+}
+
+function closeChapters() {
+  showChapters.value = false
+}
+
+function jumpToChapter(c: Chapter) {
+  closeChapters()
+  const idx = Math.max(0, Math.min(pages.value.length - 1, c.pageIndex))
+  currentPage.value = idx
+  requestAnimationFrame(() => {
+    const el = pagedRef.value
+    if (!el) return
+    el.scrollTo({ left: idx * el.clientWidth, behavior: 'auto' })
+    requestAnimationFrame(() => el.scrollTo({ left: idx * el.clientWidth, behavior: 'auto' }))
+  })
+  scheduleSave()
+}
+
 function setMode(mode: 'scroll' | 'paged') {
   if (prefs.value.mode === mode) return
   prefs.value.mode = mode
+  showChapters.value = false
 
-  // When switching to paged, try to keep current position sensible
   if (mode === 'paged') {
     currentPage.value = 0
     percent.value = 0
@@ -247,7 +320,6 @@ function setMode(mode: 'scroll' | 'paged') {
       pagedRef.value?.scrollTo({ left: 0, behavior: 'auto' })
     })
   } else {
-    // back to scroll
     nextTick(() => scrollToY(0))
   }
 }
@@ -257,7 +329,6 @@ function setTheme(theme: 'night' | 'warm') {
   prefs.value.theme = theme
 }
 
-// Keep currentPage in sync with horizontal scroll snap
 function onPagedScroll() {
   const el = pagedRef.value
   if (!el) return
@@ -288,7 +359,6 @@ async function checkResumeOffer() {
       return
     }
 
-    // default scroll resume
     const y = Number((loc as any).scrollY ?? 0)
     if (!Number.isFinite(y) || y <= 64) return
     resumeToast.value = { mode: 'scroll', y, percent: clamp01(Number(p.percent || 0)) }
@@ -299,17 +369,14 @@ async function checkResumeOffer() {
 
 async function load() {
   try {
-    // Always fetch story for meta + fallback HTML
     const s = await getStory(slug)
     title.value = s.title
     author.value = s.author || ''
     html.value = s.renderedHtml
     version.value = s.version
 
-    // If paged, fetch segments and build pages
     if (prefs.value.mode === 'paged') {
       const seg = await getStorySegments(slug)
-      // If versions differ (shouldn't), trust story version and still display pages
       segments.value = Array.isArray(seg.segments) ? seg.segments : []
       currentPage.value = 0
     } else {
@@ -371,6 +438,15 @@ onBeforeUnmount(() => {
           <div class="text-xs opacity-70 w-16 text-right">{{ saving ? 'Saving…' : ' ' }}</div>
 
           <button
+            v-if="prefs.mode === 'paged' && chapters.length"
+            class="text-sm rounded-lg border border-white/15 bg-white/5 px-3 py-1.5 hover:bg-white/10 active:scale-[0.99] transition"
+            @pointerdown="haptic('select')"
+            @click="toggleChapters"
+          >
+            Chapters
+          </button>
+
+          <button
             class="text-sm rounded-lg border border-white/15 bg-white/5 px-3 py-1.5 hover:bg-white/10 active:scale-[0.99] transition"
             @pointerdown="haptic('select')"
             @click="toggleControls"
@@ -380,6 +456,32 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </header>
+
+    <!-- Chapter drawer -->
+    <div v-if="showChapters" class="fixed inset-0 z-30" @click.self="closeChapters">
+      <div class="absolute inset-x-0 bottom-0 rounded-t-2xl border border-white/10 bg-[#0b1724]/95 p-5 backdrop-blur
+                  pb-[calc(1.25rem+env(safe-area-inset-bottom))]">
+        <div class="flex items-center justify-between">
+          <div class="text-sm font-semibold">Chapters</div>
+          <button class="text-sm opacity-80" @pointerdown="haptic('select')" @click="closeChapters">
+            Close
+          </button>
+        </div>
+
+        <div class="mt-3 max-h-[50vh] overflow-auto pr-1">
+          <button
+            v-for="c in chapters"
+            :key="`${c.segmentOrdinal}-${c.pageIndex}`"
+            class="w-full text-left rounded-xl border border-white/10 bg-white/5 px-4 py-3 mb-2 hover:bg-white/10 active:scale-[0.99] transition"
+            @pointerdown="haptic('select')"
+            @click="jumpToChapter(c)"
+          >
+            <div class="text-sm font-medium">{{ c.title }}</div>
+            <div class="text-xs opacity-70">Page {{ c.pageIndex + 1 }}</div>
+          </button>
+        </div>
+      </div>
+    </div>
 
     <!-- Resume toast -->
     <div v-if="resumeToast" class="fixed left-0 right-0 bottom-4 z-40 px-4 pb-[env(safe-area-inset-bottom)]">
@@ -432,7 +534,7 @@ onBeforeUnmount(() => {
       <h1 class="text-3xl md:text-4xl font-semibold leading-tight">{{ title }}</h1>
       <p v-if="author" class="mt-2 opacity-75">{{ author }}</p>
 
-      <!-- Scroll mode (existing behaviour) -->
+      <!-- Scroll mode -->
       <section
         v-if="prefs.mode !== 'paged'"
         class="mt-8"
@@ -441,7 +543,7 @@ onBeforeUnmount(() => {
         <article class="reader" v-html="html"></article>
       </section>
 
-      <!-- Paged mode (segments -> swipe pages) -->
+      <!-- Paged mode -->
       <section
         v-else
         ref="pagedRef"
@@ -449,11 +551,7 @@ onBeforeUnmount(() => {
         :style="{ fontSize: `${prefs.fontPx}px`, lineHeight: String(prefs.lineHeight) }"
         @scroll.passive="onPagedScroll"
       >
-        <div
-          v-for="p in pages"
-          :key="p.index"
-          class="page"
-        >
+        <div v-for="p in pages" :key="p.index" class="page">
           <article class="reader" v-html="p.html"></article>
         </div>
 
@@ -564,6 +662,6 @@ onBeforeUnmount(() => {
 .page {
   scroll-snap-align: start;
   flex: 0 0 100%;
-  padding-right: 16px; /* small breathing room */
+  padding-right: 16px;
 }
 </style>

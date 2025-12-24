@@ -1,38 +1,61 @@
 package httpadmin
 
 import (
+	"context"
 	"crypto/subtle"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"pandapages/api/internal/model"
 )
 
-type Config struct {
-	AdminKey     string
-	CookieSecure bool
-	LogRequests  bool
-}
-
 type Store interface {
-	AdminDraftUpsert(req model.AdminDraftUpsertRequest) (model.AdminDraftUpsertResponse, error)
-	AdminPublish(slug string, versionID string) error
+	AdminDraftUpsert(accountID string, req model.AdminDraftUpsertRequest) (model.AdminDraftUpsertResponse, error)
+	AdminPublish(accountID string, slug string, versionID string) error
 	AdminPreview(req model.AdminPreviewRequest) (model.AdminPreviewResponse, error)
+
+	AdminListStories(accountID string) (model.AdminStoriesListResponse, error)
 }
 
 const (
-	cookieName       = "pp_unlocked"
-	maxJSONBodyBytes = 1 << 20 // 1MB
+	cookieName        = "pp_unlocked"
+	accountCookieName = "pp_aid"
+
+	// Admin endpoints need a bigger body limit for large Gutenberg books.
+	// Keep public APIs small; only admin gets this.
+	maxJSONBodyBytes = 20 << 20 // 20MB
 )
+
+var uuidRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+type ctxKey string
+
+const ctxAccountID ctxKey = "pp_account_id"
+
+func accountIDFromCookie(r *http.Request) (string, error) {
+	c, err := r.Cookie(accountCookieName)
+	if err != nil {
+		return "", errors.New("account required")
+	}
+	v := strings.TrimSpace(c.Value)
+	if v == "" || !uuidRe.MatchString(v) {
+		return "", errors.New("invalid account")
+	}
+	return v, nil
+}
+
+func accountIDFromCtx(r *http.Request) string {
+	v, _ := r.Context().Value(ctxAccountID).(string)
+	return v
+}
 
 func New(cfg Config, store Store) http.Handler {
 	adminKey := strings.TrimSpace(cfg.AdminKey)
-	// Fail-closed: if you forgot to set PP_ADMIN_KEY, admin endpoints should not work.
 	if adminKey == "" {
 		panic("PP_ADMIN_KEY is required for admin routes")
 	}
@@ -48,24 +71,27 @@ func New(cfg Config, store Store) http.Handler {
 				return
 			}
 
-			// 2) require admin key (constant time compare)
+			// 2) require account cookie (bind admin actions to an account)
+			aid, err := accountIDFromCookie(r)
+			if err != nil {
+				writeErr(w, http.StatusUnauthorized, "unauthorized", err.Error())
+				return
+			}
+
+			// 3) require admin key (constant time compare)
 			got := strings.TrimSpace(r.Header.Get("X-PP-Admin-Key"))
 			if !adminKeyOK(got, adminKey) {
 				writeErr(w, http.StatusForbidden, "forbidden", "admin key required")
 				return
 			}
 
-			next(w, r)
+			ctx := context.WithValue(r.Context(), ctxAccountID, aid)
+			next(w, r.WithContext(ctx))
 		}
 	}
 
 	// POST /api/v1/admin/preview
-	mux.HandleFunc("/api/v1/admin/preview", withAdmin(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			methodNotAllowed(w, []string{http.MethodPost})
-			return
-		}
-
+	mux.HandleFunc("POST /api/v1/admin/preview", withAdmin(func(w http.ResponseWriter, r *http.Request) {
 		var body model.AdminPreviewRequest
 		if err := decodeJSON(w, r, &body); err != nil {
 			writeErr(w, http.StatusBadRequest, "bad_json", err.Error())
@@ -74,7 +100,6 @@ func New(cfg Config, store Store) http.Handler {
 
 		out, err := store.AdminPreview(body)
 		if err != nil {
-			// Treat as validation / render errors
 			writeErr(w, http.StatusBadRequest, "preview_failed", err.Error())
 			return
 		}
@@ -84,23 +109,15 @@ func New(cfg Config, store Store) http.Handler {
 	}))
 
 	// POST /api/v1/admin/stories/draft
-	mux.HandleFunc("/api/v1/admin/stories/draft", withAdmin(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			methodNotAllowed(w, []string{http.MethodPost})
-			return
-		}
-
+	mux.HandleFunc("POST /api/v1/admin/stories/draft", withAdmin(func(w http.ResponseWriter, r *http.Request) {
 		var body model.AdminDraftUpsertRequest
 		if err := decodeJSON(w, r, &body); err != nil {
 			writeErr(w, http.StatusBadRequest, "bad_json", err.Error())
 			return
 		}
 
-		out, err := store.AdminDraftUpsert(body)
-		if errors.Is(err, sql.ErrNoRows) {
-			writeErr(w, http.StatusNotFound, "not_found", "story not found")
-			return
-		}
+		aid := accountIDFromCtx(r)
+		out, err := store.AdminDraftUpsert(aid, body)
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, "draft_failed", err.Error())
 			return
@@ -110,23 +127,26 @@ func New(cfg Config, store Store) http.Handler {
 		writeJSON(w, http.StatusOK, out)
 	}))
 
-	// POST /api/v1/admin/stories/:slug/publish
-	mux.HandleFunc("/api/v1/admin/stories/", withAdmin(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			methodNotAllowed(w, []string{http.MethodPost})
+	mux.HandleFunc("GET /api/v1/admin/stories", withAdmin(func(w http.ResponseWriter, r *http.Request) {
+		aid := accountIDFromCtx(r)
+
+		out, err := store.AdminListStories(aid)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "list_failed", err.Error())
 			return
 		}
 
-		path := strings.TrimPrefix(r.URL.Path, "/api/v1/admin/stories/")
-		path = strings.Trim(path, "/")
-		parts := strings.Split(path, "/")
+		noStore(w)
+		writeJSON(w, http.StatusOK, out)
+	}))
 
-		if len(parts) != 2 || parts[0] == "" || parts[1] != "publish" {
-			writeErr(w, http.StatusNotFound, "not_found", "unknown admin route")
+	// POST /api/v1/admin/stories/{slug}/publish
+	mux.HandleFunc("POST /api/v1/admin/stories/{slug}/publish", withAdmin(func(w http.ResponseWriter, r *http.Request) {
+		slug := strings.TrimSpace(r.PathValue("slug"))
+		if slug == "" {
+			writeErr(w, http.StatusBadRequest, "bad_request", "slug required")
 			return
 		}
-
-		slug := parts[0]
 
 		var body struct {
 			VersionID string `json:"versionId"`
@@ -135,17 +155,9 @@ func New(cfg Config, store Store) http.Handler {
 			writeErr(w, http.StatusBadRequest, "bad_json", err.Error())
 			return
 		}
-		if strings.TrimSpace(body.VersionID) == "" {
-			writeErr(w, http.StatusBadRequest, "versionId", "versionId required")
-			return
-		}
 
-		if err := store.AdminPublish(slug, body.VersionID); err != nil {
-			// If your store returns sql.ErrNoRows for missing story/version, map to 404:
-			if errors.Is(err, sql.ErrNoRows) {
-				writeErr(w, http.StatusNotFound, "not_found", "story/version not found")
-				return
-			}
+		aid := accountIDFromCtx(r)
+		if err := store.AdminPublish(aid, slug, strings.TrimSpace(body.VersionID)); err != nil {
 			writeErr(w, http.StatusBadRequest, "publish_failed", err.Error())
 			return
 		}
@@ -154,13 +166,14 @@ func New(cfg Config, store Store) http.Handler {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	}))
 
+	// Actually apply middleware stack (you already wrote these helpers)
 	var h http.Handler = mux
 	h = withSecurityHeaders(h)
 	h = withRecover(h)
-	if cfg.LogRequests {
-		h = withLog(h)
-	}
+	h = withLog(h)
+
 	return h
+
 }
 
 /* ------------------------------ helpers ------------------------------ */
@@ -177,11 +190,6 @@ func adminKeyOK(got, want string) bool {
 
 func noStore(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "no-store")
-}
-
-func methodNotAllowed(w http.ResponseWriter, allow []string) {
-	w.Header().Set("Allow", strings.Join(allow, ", "))
-	writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {

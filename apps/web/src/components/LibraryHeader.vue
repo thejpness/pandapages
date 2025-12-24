@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { haptic } from '../lib/haptics'
 
 type Resume = { slug: string; title: string; author?: string; percent: number } | null
@@ -23,8 +24,10 @@ const emit = defineEmits<{
   (e: 'clear'): void
   (e: 'top'): void
   (e: 'go', slug: string): void
+  (e: 'logout'): void
 }>()
 
+const router = useRouter()
 const searchRef = ref<HTMLInputElement | null>(null)
 
 const qModel = computed({
@@ -43,68 +46,111 @@ async function clear() {
   await nextTick()
   focusSearch()
 }
+
+async function logout() {
+  if (props.loading) return
+  haptic('medium')
+
+  // Parent can clear any "unlocked" state it uses (localStorage/store/cookie).
+  emit('logout')
+
+  // Route back to unlock screen.
+  await router.replace('/unlock')
+}
 </script>
 
 <template>
-  <header class="sticky top-0 z-20 border-b border-white/10 bg-[#0B1724]/70 backdrop-blur">
+  <header
+    class="sticky top-0 z-20 border-b border-white/10
+           bg-[#0B1724]/70 backdrop-blur-xl supports-backdrop-filter:bg-[#0B1724]/55"
+  >
     <div class="max-w-6xl mx-auto px-4 md:px-8 py-4 pt-[calc(1rem+env(safe-area-inset-top))]">
       <div class="flex items-end justify-between gap-4">
-        <div>
+        <div class="min-w-0">
           <h1 class="text-2xl font-semibold tracking-tight">Library</h1>
           <p class="text-sm opacity-80">Tap a story to read</p>
-          <p class="mt-1 text-xs opacity-70">{{ personalisationLabel }}</p>
+          <p class="mt-1 text-xs opacity-70 truncate">{{ personalisationLabel }}</p>
         </div>
 
-        <div class="hidden sm:flex items-center gap-2">
-          <button
-            type="button"
-            class="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm hover:bg-white/10 active:scale-[0.99] transition"
-            @pointerdown="haptic('select')"
-            @click="emit('journey')"
-          >
-            ✨ {{ hasPersonalisation ? 'Edit personalisation' : 'Personalise' }}
-          </button>
+        <!-- Actions -->
+        <div class="flex items-center gap-2">
+          <!-- Desktop actions -->
+          <div class="hidden sm:flex items-center gap-2">
+            <button
+              type="button"
+              class="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm
+                     hover:bg-white/10 active:scale-[0.99] transition"
+              @pointerdown="haptic('select')"
+              @click="emit('journey')"
+            >
+              ✨ {{ hasPersonalisation ? 'Edit personalisation' : 'Personalise' }}
+            </button>
 
-          <button
-            type="button"
-            class="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm hover:bg-white/10 active:scale-[0.99] transition"
-            @pointerdown="haptic('select')"
-            @click="emit('admin')"
-          >
-            🛠 Admin
-          </button>
+            <button
+              type="button"
+              class="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm
+                     hover:bg-white/10 active:scale-[0.99] transition"
+              @pointerdown="haptic('select')"
+              @click="emit('admin')"
+            >
+              🛠 Admin
+            </button>
 
+            <button
+              type="button"
+              class="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm
+                     hover:bg-white/10 active:scale-[0.99] transition"
+              @pointerdown="haptic('select')"
+              @click="emit('random')"
+              :disabled="props.loading"
+              :class="props.loading ? 'opacity-50 cursor-not-allowed' : ''"
+            >
+              🎲 Random
+            </button>
+          </div>
+
+          <!-- Always visible (mobile + desktop) -->
           <button
             type="button"
-            class="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm hover:bg-white/10 active:scale-[0.99] transition"
-            @click="emit('random')"
+            class="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm
+                   hover:bg-white/10 active:scale-[0.99] transition"
+            @pointerdown="haptic('select')"
+            @click="logout"
             :disabled="props.loading"
             :class="props.loading ? 'opacity-50 cursor-not-allowed' : ''"
+            aria-label="Lock and return to passcode screen"
+            title="Lock"
           >
-            🎲 Random
+            🔒 Lock
           </button>
         </div>
       </div>
 
+      <!-- Search row -->
       <div class="mt-4 flex items-center gap-3">
         <div class="relative flex-1">
           <input
             ref="searchRef"
             v-model="qModel"
             placeholder="Search stories…"
-            class="w-full rounded-2xl bg-black/20 border border-white/10 px-4 py-3 pr-10 text-sm outline-none focus:border-white/25"
+            class="w-full rounded-2xl bg-black/20 border border-white/10 px-4 py-3 pr-10 text-sm outline-none
+                   focus:border-white/25 focus:bg-black/25 transition"
             inputmode="search"
             autocomplete="off"
             autocapitalize="none"
             enterkeyhint="go"
             @keydown.enter.prevent="emit('top')"
           />
+
           <button
             v-if="qModel"
             type="button"
-            class="absolute right-2 top-1/2 -translate-y-1/2 rounded-xl px-2 py-1 text-xs opacity-80 hover:opacity-100 hover:bg-white/10 transition"
+            class="absolute right-2 top-1/2 -translate-y-1/2 rounded-xl px-2 py-1 text-xs opacity-80
+                   hover:opacity-100 hover:bg-white/10 transition"
             @pointerdown="haptic('select')"
             @click="clear"
+            aria-label="Clear search"
+            title="Clear search"
           >
             ✕
           </button>
@@ -115,19 +161,19 @@ async function clear() {
         </div>
       </div>
 
+      <!-- Resume card -->
       <div v-if="!props.loading && props.resume" class="mt-4">
         <button
           type="button"
-          class="w-full text-left rounded-2xl border border-white/10 bg-white/10 p-5 hover:bg-white/15 active:scale-[0.995] transition"
+          class="w-full text-left rounded-2xl border border-white/10 bg-white/10 p-5
+                 hover:bg-white/15 active:scale-[0.995] transition"
           @pointerdown="haptic('select')"
           @click="emit('go', props.resume.slug)"
         >
           <div class="text-xs opacity-80">Resume</div>
           <div class="mt-1 flex items-baseline justify-between gap-3">
             <div class="text-lg font-semibold truncate">{{ props.resume.title }}</div>
-            <div class="text-xs opacity-70 shrink-0">
-              {{ props.resume.percent }}%
-            </div>
+            <div class="text-xs opacity-70 shrink-0">{{ props.resume.percent }}%</div>
           </div>
           <div v-if="props.resume.author" class="mt-1 text-sm opacity-75 truncate">
             {{ props.resume.author }}
@@ -135,6 +181,7 @@ async function clear() {
         </button>
       </div>
 
+      <!-- Recent mini cards -->
       <div v-if="!props.loading && props.recent.length" class="mt-3">
         <div class="text-xs uppercase tracking-wide opacity-60 mb-2">Recent</div>
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -142,7 +189,8 @@ async function clear() {
             v-for="r in props.recent"
             :key="r.slug"
             type="button"
-            class="text-left rounded-2xl border border-white/10 bg-white/5 p-4 hover:bg-white/10 active:scale-[0.995] transition"
+            class="text-left rounded-2xl border border-white/10 bg-white/5 p-4
+                   hover:bg-white/10 active:scale-[0.995] transition"
             @pointerdown="haptic('select')"
             @click="emit('go', r.slug)"
           >

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref, computed, onBeforeUnmount, watch, nextTick } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import {
   getLibrary,
   getContinue,
@@ -8,7 +9,6 @@ import {
   type LibraryItem,
   type SettingsPayload,
 } from '../lib/api'
-import { useRouter, useRoute } from 'vue-router'
 import StoryCard from '../components/StoryCard.vue'
 import LibraryHeader from '../components/LibraryHeader.vue'
 import { haptic } from '../lib/haptics'
@@ -16,9 +16,10 @@ import { haptic } from '../lib/haptics'
 type Item = LibraryItem
 type RecentCard = ContinueItem & { story: Item }
 
-type HeaderExpose = {
-  focusSearch: () => void
-}
+type HeaderExpose = { focusSearch: () => void }
+
+type HeaderResume = { slug: string; title: string; author?: string; percent: number } | null
+type HeaderRecent = { slug: string; title: string; author?: string; percent: number }
 
 const router = useRouter()
 const route = useRoute()
@@ -26,9 +27,14 @@ const route = useRoute()
 const headerRef = ref<HeaderExpose | null>(null)
 
 const items = ref<Item[]>([])
-const recent = ref<ContinueItem[]>([])
+const recentRaw = ref<ContinueItem[]>([])
 const loading = ref(true)
+
+// Search query
 const q = ref('')
+function setQ(v: string) {
+  q.value = v
+}
 
 // Settings / Journey
 const settings = ref<SettingsPayload | null>(null)
@@ -58,10 +64,11 @@ const hasPersonalisation = computed(() => !!childName.value)
 const infoSlug = ref<string | null>(null)
 const modalStory = computed<Item | null>(() => {
   if (!infoSlug.value) return null
-  return items.value.find(s => s.slug === infoSlug.value) || null
+  return items.value.find((s) => s.slug === infoSlug.value) || null
 })
 
-// --- Querystring sync (prefill + debounced write-back) ---
+/* ---------------- Querystring sync ---------------- */
+
 watch(
   () => route.query.q,
   async (v) => {
@@ -82,28 +89,26 @@ watch(
     if (qTimer) window.clearTimeout(qTimer)
     qTimer = window.setTimeout(() => {
       const trimmed = v.trim()
-      router.replace({
-        path: '/library',
-        query: trimmed ? { q: trimmed } : {},
-      })
+      router.replace({ path: '/library', query: trimmed ? { q: trimmed } : {} })
     }, 250)
   }
 )
 
-// --- Derived state ---
-const resume = computed(() => recent.value[0] || null)
+/* ---------------- Derived state ---------------- */
+
+const resumeRaw = computed(() => recentRaw.value[0] || null)
 
 const resumeItem = computed<Item | null>(() => {
-  const slug = resume.value?.slug || ''
+  const slug = resumeRaw.value?.slug || ''
   if (!slug) return null
-  return items.value.find(x => x.slug === slug) || null
+  return items.value.find((x) => x.slug === slug) || null
 })
 
 const recentCards = computed<RecentCard[]>(() => {
-  const list = recent.value.slice(1, 4)
+  const list = recentRaw.value.slice(1, 4)
   const out: RecentCard[] = []
   for (const r of list) {
-    const story = items.value.find(s => s.slug === r.slug)
+    const story = items.value.find((s) => s.slug === r.slug)
     if (story) out.push({ ...r, story })
   }
   return out
@@ -113,10 +118,11 @@ const filtered = computed<Item[]>(() => {
   const list = items.value
   const s = q.value.trim().toLowerCase()
   if (!s) return list
-  return list.filter(x =>
-    (x.title || '').toLowerCase().includes(s) ||
-    (x.author || '').toLowerCase().includes(s) ||
-    (x.slug || '').toLowerCase().includes(s)
+  return list.filter(
+    (x) =>
+      (x.title || '').toLowerCase().includes(s) ||
+      (x.author || '').toLowerCase().includes(s) ||
+      (x.slug || '').toLowerCase().includes(s)
   )
 })
 
@@ -132,18 +138,19 @@ function pct(p: number) {
   return Math.max(0, Math.min(100, Math.round(v * 100)))
 }
 
-const headerResume = computed(() => {
-  if (!resumeItem.value || !resume.value) return null
+// These shapes match LibraryHeader expectations (title + author included)
+const headerResume = computed<HeaderResume>(() => {
+  if (!resumeItem.value || !resumeRaw.value) return null
   return {
     slug: resumeItem.value.slug,
     title: resumeItem.value.title,
     author: resumeItem.value.author ?? undefined,
-    percent: pct(resume.value.percent),
+    percent: pct(resumeRaw.value.percent),
   }
 })
 
-const headerRecent = computed(() => {
-  return recentCards.value.map(r => ({
+const headerRecent = computed<HeaderRecent[]>(() => {
+  return recentCards.value.map((r) => ({
     slug: r.slug,
     title: r.story.title,
     author: r.story.author ?? undefined,
@@ -151,25 +158,26 @@ const headerRecent = computed(() => {
   }))
 })
 
-// --- Actions ---
-function go(slug: string) {
-  router.push(`/read/${slug}`)
+/* ---------------- Actions ---------------- */
+
+function goStory(slug: string) {
+  router.push(`/read/${encodeURIComponent(slug)}`)
 }
 
-function openAdmin() {
-  router.push('/admin')
+function goAdmin() {
+  router.push('/admin/upload')
 }
 
-function openJourney() {
+function goJourney() {
   router.push('/journey')
 }
 
-function randomStory() {
+function goRandom() {
   const list = filtered.value
   if (!list.length) return
   haptic('light')
   const pick = list[Math.floor(Math.random() * list.length)]!
-  go(pick.slug)
+  goStory(pick.slug)
 }
 
 function clearSearch() {
@@ -178,13 +186,16 @@ function clearSearch() {
   headerRef.value?.focusSearch()
 }
 
+function scrollTop() {
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
 function openTopResult() {
   const list = filtered.value
   if (!list.length) return
-  go(list[0]!.slug)
+  goStory(list[0]!.slug)
 }
 
-// Called by StoryCard (StoryCard already does haptic('select'))
 function openInfo(slug: string) {
   infoSlug.value = slug
 }
@@ -207,13 +218,29 @@ function onKey(e: KeyboardEvent) {
   }
 }
 
+async function logout() {
+  infoSlug.value = null
+  q.value = ''
+  items.value = []
+  recentRaw.value = []
+  await router.replace('/unlock')
+}
+
+/* ---------------- "Top" button visibility ---------------- */
+
+const showTop = ref(false)
+
+function onScroll() {
+  showTop.value = window.scrollY > 600
+}
+
+/* ---------------- Data loading ---------------- */
+
 async function loadSettings() {
   settingsLoaded.value = false
   try {
-    const s = await getSettings()
-    settings.value = s
+    settings.value = await getSettings()
   } catch {
-    // If settings endpoint isn't ready yet, don't punish the user.
     settings.value = null
   } finally {
     settingsLoaded.value = true
@@ -224,27 +251,29 @@ async function load() {
   loading.value = true
   try {
     const [cont, data] = await Promise.all([getContinue(4), getLibrary()])
-    recent.value = Array.isArray(cont?.items) ? cont.items : []
+    recentRaw.value = Array.isArray(cont?.items) ? cont.items : []
     items.value = Array.isArray(data?.items) ? data.items : []
   } catch {
-    recent.value = []
+    recentRaw.value = []
     items.value = []
-    router.replace('/unlock')
+    await router.replace('/unlock')
   } finally {
     loading.value = false
   }
 
-  // Settings load happens after; errors shouldn't bounce to /unlock
   loadSettings()
 }
 
 onMounted(() => {
   load()
   window.addEventListener('keydown', onKey)
+  window.addEventListener('scroll', onScroll, { passive: true })
+  onScroll()
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKey)
+  window.removeEventListener('scroll', onScroll)
   if (qTimer) window.clearTimeout(qTimer)
 })
 </script>
@@ -260,13 +289,14 @@ onBeforeUnmount(() => {
       :recent="headerRecent"
       :personalisationLabel="personalisationLabel"
       :hasPersonalisation="hasPersonalisation"
-      @update:q="(v: string) => (q = v)"
-      @admin="openAdmin"
-      @journey="openJourney"
-      @random="randomStory"
+      @update:q="setQ"
+      @admin="goAdmin"
+      @journey="goJourney"
+      @random="goRandom"
       @clear="clearSearch"
       @top="openTopResult"
-      @go="(slug: string) => go(slug)"
+      @go="goStory"
+      @logout="logout"
     />
 
     <main class="max-w-6xl mx-auto px-4 md:px-8 py-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))]">
@@ -291,7 +321,7 @@ onBeforeUnmount(() => {
           type="button"
           class="mt-4 rounded-xl bg-white text-[#0B1724] px-4 py-2 font-medium"
           @pointerdown="haptic('select')"
-          @click="openAdmin"
+          @click="goAdmin"
         >
           Open Admin
         </button>
@@ -314,9 +344,10 @@ onBeforeUnmount(() => {
           v-for="s in filtered"
           :key="s.slug"
           type="button"
-          class="text-left rounded-2xl border border-white/10 bg-white/5 p-5 hover:bg-white/10 active:scale-[0.995] transition will-change-transform"
+          class="text-left rounded-2xl border border-white/10 bg-white/5 p-5
+                 hover:bg-white/10 active:scale-[0.995] transition will-change-transform"
           @pointerdown="haptic('select')"
-          @click="go(s.slug)"
+          @click="goStory(s.slug)"
         >
           <StoryCard
             :title="s.title"
@@ -331,17 +362,20 @@ onBeforeUnmount(() => {
       <div class="sm:hidden mt-6 space-y-3">
         <button
           type="button"
-          class="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm hover:bg-white/10 active:scale-[0.995] transition"
+          class="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm
+                 hover:bg-white/10 active:scale-[0.995] transition"
           @pointerdown="haptic('select')"
-          @click="openJourney"
+          @click="goJourney"
         >
           ✨ Personalise stories
         </button>
 
         <button
           type="button"
-          class="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm hover:bg-white/10 active:scale-[0.995] transition"
-          @click="randomStory"
+          class="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm
+                 hover:bg-white/10 active:scale-[0.995] transition"
+          @pointerdown="haptic('select')"
+          @click="goRandom"
           :disabled="filtered.length === 0"
           :class="filtered.length === 0 ? 'opacity-50 cursor-not-allowed' : ''"
         >
@@ -350,14 +384,41 @@ onBeforeUnmount(() => {
 
         <button
           type="button"
-          class="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm hover:bg-white/10 active:scale-[0.995] transition"
+          class="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm
+                 hover:bg-white/10 active:scale-[0.995] transition"
           @pointerdown="haptic('select')"
-          @click="openAdmin"
+          @click="goAdmin"
         >
           🛠 Admin
         </button>
+
+        <button
+          type="button"
+          class="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm
+                 hover:bg-white/10 active:scale-[0.995] transition"
+          @pointerdown="haptic('select')"
+          @click="logout"
+        >
+          🔒 Lock
+        </button>
       </div>
     </main>
+
+    <!-- Floating Top button (appears after scrolling) -->
+    <button
+      v-if="showTop"
+      type="button"
+      class="fixed z-30 right-4 bottom-[calc(1rem+env(safe-area-inset-bottom))]
+             rounded-full border border-white/10 bg-white/10 backdrop-blur-xl
+             px-4 py-2 text-sm font-medium shadow-lg
+             hover:bg-white/15 active:scale-[0.98] transition"
+      @pointerdown="haptic('select')"
+      @click="scrollTop"
+      aria-label="Back to top"
+      title="Back to top"
+    >
+      ↑ Top
+    </button>
 
     <!-- Info modal -->
     <div v-if="modalStory !== null" class="fixed inset-0 z-40" @click.self="closeInfo">
@@ -377,7 +438,8 @@ onBeforeUnmount(() => {
 
           <button
             type="button"
-            class="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm hover:bg-white/10 active:scale-[0.99] transition"
+            class="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm
+                   hover:bg-white/10 active:scale-[0.99] transition"
             @pointerdown="haptic('select')"
             @click="closeInfo"
           >
@@ -390,14 +452,15 @@ onBeforeUnmount(() => {
             type="button"
             class="flex-1 rounded-2xl bg-white text-black py-3 font-semibold active:scale-[0.99] transition"
             @pointerdown="haptic('select')"
-            @click="go(modalStory.slug)"
+            @click="goStory(modalStory.slug)"
           >
             Read now
           </button>
 
           <button
             type="button"
-            class="flex-1 rounded-2xl border border-white/10 bg-white/5 py-3 font-semibold hover:bg-white/10 active:scale-[0.99] transition"
+            class="flex-1 rounded-2xl border border-white/10 bg-white/5 py-3 font-semibold
+                   hover:bg-white/10 active:scale-[0.99] transition"
             @pointerdown="haptic('select')"
             @click="searchSlug(modalStory.slug)"
           >
@@ -406,24 +469,30 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
-
   </div>
 </template>
 
 <style scoped>
 @media (prefers-reduced-motion: no-preference) {
-  .shimmer { position: relative; overflow: hidden; }
+  .shimmer {
+    position: relative;
+    overflow: hidden;
+  }
   .shimmer::after {
-    content: "";
+    content: '';
     position: absolute;
     inset: 0;
     transform: translateX(-120%);
-    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.10), transparent);
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
     animation: shimmer 1.2s infinite;
   }
   @keyframes shimmer {
-    0% { transform: translateX(-120%); }
-    100% { transform: translateX(120%); }
+    0% {
+      transform: translateX(-120%);
+    }
+    100% {
+      transform: translateX(120%);
+    }
   }
 }
 </style>

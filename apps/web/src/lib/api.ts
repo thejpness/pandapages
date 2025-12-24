@@ -192,6 +192,24 @@ export async function adminPublishStory(slug: string, versionId: string) {
   })
 }
 
+export type AdminStoryListItem = {
+  slug: string
+  title: string
+  author: string | null
+  isPublished: boolean
+  updatedAt: string
+}
+
+export type AdminStoriesListResponse = {
+  items: AdminStoryListItem[]
+}
+
+export async function adminListStories(): Promise<AdminStoriesListResponse> {
+  const data = await request<{ items?: AdminStoryListItem[] }>('/api/v1/admin/stories')
+  return { items: Array.isArray(data.items) ? data.items : [] }
+}
+
+
 /* ---------------------------- Progress -------------------------- */
 
 export type ProgressState = {
@@ -227,6 +245,7 @@ export async function getContinue(limit = 3): Promise<{ items: ContinueItem[] }>
   const data = await request<{ items?: ContinueItem[] }>(`/api/v1/continue?limit=${limit}`)
   return { items: Array.isArray(data.items) ? data.items : [] }
 }
+
 /* -------------------------- Settings / Journey ------------------- */
 
 export type ChildProfile = {
@@ -255,22 +274,22 @@ export type SettingsUpsert = {
 }
 
 function normaliseSettings(data: Partial<SettingsPayload> | null): SettingsPayload {
+  const child = data?.child
+  const prompt = data?.prompt
+
   return {
     child: {
-      id: data?.child?.id,
-      name: data?.child?.name ?? '',
-      ageMonths: Number(data?.child?.ageMonths ?? 0),
-      interests: Array.isArray(data?.child?.interests) ? (data!.child!.interests as string[]) : [],
-      sensitivities: Array.isArray(data?.child?.sensitivities)
-        ? (data!.child!.sensitivities as string[])
-        : [],
+      id: child?.id,
+      name: child?.name ?? '',
+      ageMonths: Number(child?.ageMonths ?? 0),
+      interests: Array.isArray(child?.interests) ? (child?.interests as string[]) : [],
+      sensitivities: Array.isArray(child?.sensitivities) ? (child?.sensitivities as string[]) : [],
     },
     prompt: {
-      id: data?.prompt?.id,
-      name: data?.prompt?.name ?? '',
-      schemaVersion: Number(data?.prompt?.schemaVersion ?? 1),
-      rules:
-        data?.prompt?.rules && typeof data.prompt.rules === 'object' ? (data.prompt.rules as any) : {},
+      id: prompt?.id,
+      name: prompt?.name ?? '',
+      schemaVersion: Number(prompt?.schemaVersion ?? 1),
+      rules: prompt?.rules && typeof prompt.rules === 'object' ? (prompt.rules as any) : {},
     },
   }
 }

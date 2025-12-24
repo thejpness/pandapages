@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { unlock } from '../lib/api'
 import { haptic } from '../lib/haptics'
@@ -11,6 +11,7 @@ const code = ref('')
 const err = ref('')
 const busy = ref(false)
 const shake = ref(false)
+const otpEl = ref<HTMLInputElement | null>(null)
 
 function onlyDigits6(v: string) {
   return v.replace(/\D/g, '').slice(0, 6)
@@ -20,6 +21,13 @@ const digits = computed(() => {
   const s = code.value
   return Array.from({ length: 6 }, (_, i) => s[i] ?? '')
 })
+
+const canSubmit = computed(() => code.value.length === 6 && !busy.value)
+
+function focusOtp() {
+  // Don't autofocus on mount; only focus on intent (tap / key)
+  otpEl.value?.focus({ preventScroll: true } as any)
+}
 
 function setError(message: string) {
   err.value = message
@@ -32,6 +40,7 @@ function clearAll() {
   haptic('select')
   err.value = ''
   code.value = ''
+  focusOtp()
 }
 
 function backspace() {
@@ -39,17 +48,12 @@ function backspace() {
   haptic('select')
   err.value = ''
   code.value = code.value.slice(0, -1)
-}
-
-function pressDigit(d: string) {
-  if (busy.value) return
-  if (code.value.length >= 6) return
-  haptic('light')
-  err.value = ''
-  code.value = `${code.value}${d}`
+  focusOtp()
 }
 
 async function submit() {
+  if (busy.value) return
+
   err.value = ''
   if (code.value.length !== 6) {
     haptic('heavy')
@@ -57,34 +61,90 @@ async function submit() {
     return
   }
 
-  // Tap feedback for the “Unlock” intent
   haptic('select')
-
   busy.value = true
+
   try {
     await unlock(code.value)
-
-    // Success feels “warmer”
     haptic('medium')
-
     const next = typeof route.query.next === 'string' ? route.query.next : '/library'
     router.replace(next)
   } catch {
-    // Wrong code = heavy
     haptic('heavy')
     setError('Wrong passcode')
+
+    // After the shake finishes, clear so the next attempt is quick.
+    window.setTimeout(() => {
+      if (!busy.value) code.value = ''
+    }, 480)
   } finally {
     busy.value = false
   }
 }
 
-watch(code, async (v) => {
-  code.value = onlyDigits6(v)
-  if (code.value.length === 6 && !busy.value) await submit()
+function maybeAutoSubmit() {
+  // centralised auto-submit gate
+  if (!canSubmit.value) return
+  void submit()
+}
+
+function pressDigit(d: string) {
+  if (busy.value) return
+  focusOtp()
+  if (code.value.length >= 6) return
+
+  haptic('light')
+  err.value = ''
+  code.value = `${code.value}${d}`
+
+  // Auto-submit immediately on 6th digit
+  if (code.value.length === 6) maybeAutoSubmit()
+}
+
+// Keep paste / OTP autofill clean and still auto-submit
+watch(code, (v) => {
+  const cleaned = onlyDigits6(v)
+  if (cleaned !== v) code.value = cleaned
+  if (cleaned.length === 6) maybeAutoSubmit()
 })
 
+function onKeydown(e: KeyboardEvent) {
+  if (busy.value) return
+
+  // Let normal browser shortcuts through
+  if (e.metaKey || e.ctrlKey || e.altKey) return
+
+  const k = e.key
+  if (k >= '0' && k <= '9') {
+    e.preventDefault()
+    pressDigit(k)
+    return
+  }
+  if (k === 'Backspace') {
+    e.preventDefault()
+    backspace()
+    return
+  }
+  if (k === 'Escape') {
+    e.preventDefault()
+    clearAll()
+    return
+  }
+  if (k === 'Enter') {
+    if (code.value.length === 6) {
+      e.preventDefault()
+      void submit()
+    }
+  }
+}
+
 onMounted(() => {
-  // keypad-first UX; don't autofocus
+  // Keypad-first UX; don't autofocus
+  window.addEventListener('keydown', onKeydown, { passive: false })
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKeydown as any)
 })
 
 const keypad = [
@@ -139,6 +199,7 @@ const keypad = [
           class="relative rounded-3xl border border-white/10 bg-white/5 p-5
                  shadow-[0_0_0_1px_rgba(255,255,255,0.02)_inset]
                  backdrop-blur"
+          @pointerdown="focusOtp"
         >
           <div class="pp-watermark pointer-events-none absolute -right-10 -top-10 opacity-[0.12]"></div>
 
@@ -147,6 +208,10 @@ const keypad = [
             class="mx-auto mt-2 w-full select-none"
             :class="shake ? 'pp-shake' : ''"
             aria-label="Passcode entry"
+            role="button"
+            tabindex="0"
+            @click="focusOtp"
+            @keydown.enter.prevent="focusOtp"
           >
             <div class="flex justify-between gap-2">
               <div
@@ -162,12 +227,13 @@ const keypad = [
 
             <p v-if="err" class="mt-3 text-sm text-red-300">{{ err }}</p>
             <p v-else class="mt-3 text-sm opacity-70">
-              Tip: you can paste the code from Notes / a password manager.
+              Tip: tap here to paste / use OTP autofill, or type with your keyboard.
             </p>
           </div>
 
           <!-- Hidden input (paste / OTP autofill) -->
           <input
+            ref="otpEl"
             v-model="code"
             inputmode="numeric"
             pattern="[0-9]*"
@@ -260,6 +326,7 @@ const keypad = [
 </template>
 
 <style scoped>
+/* unchanged styles… (keep your existing style block) */
 .pp-shake { animation: pp-shake 420ms ease-in-out; }
 @keyframes pp-shake {
   0% { transform: translateX(0); }
@@ -284,6 +351,7 @@ const keypad = [
     0 6px 18px rgba(0,0,0,0.22);
 }
 
+/* rest of your existing CSS kept as-is */
 .pp-vignette {
   background: radial-gradient(900px 460px at 50% 10%, rgba(255,255,255,0.06), transparent 65%),
               radial-gradient(900px 520px at 50% 110%, rgba(0,0,0,0.35), transparent 60%);
