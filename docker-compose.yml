@@ -2,11 +2,10 @@ services:
   postgres:
     image: postgres:18.1-alpine
     restart: unless-stopped
-    env_file: .env
     environment:
       POSTGRES_DB: pandapages
       POSTGRES_USER: pandapages
-      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -14,8 +13,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
-    networks:
-      - internal
+    networks: [internal]
     labels:
       - traefik.enable=false
 
@@ -24,23 +22,16 @@ services:
       context: ./apps/api
       target: migrate
     restart: "no"
-    env_file: .env
     depends_on:
       postgres:
         condition: service_healthy
     volumes:
       - ./apps/api/migrations:/migrations:ro
-    networks:
-      - internal
+    networks: [internal]
     labels:
       - traefik.enable=false
-    # goose is ENTRYPOINT in the migrate image; command is just args
-    command:
-      - "-dir"
-      - "/migrations"
-      - "postgres"
-      - "${DATABASE_URL}"
-      - "up"
+    # migrate image ENTRYPOINT is goose; just pass args
+    command: ["-dir", "/migrations", "postgres", "${DATABASE_URL}", "up"]
 
   api:
     build:
@@ -49,51 +40,67 @@ services:
       args:
         API_MAIN: ./cmd/api
     restart: unless-stopped
-    env_file: .env
     depends_on:
       postgres:
         condition: service_healthy
     environment:
+      DATABASE_URL: ${DATABASE_URL}
       PP_ASSET_DIR: /data/assets
-      # DATABASE_URL comes from .env
+      PP_LOG_LEVEL: ${PP_LOG_LEVEL:-info}
+      PP_PASSCODE: ${PP_PASSCODE}
+      PP_SESSION_SECRET: ${PP_SESSION_SECRET}
+      PP_ADMIN_KEY: ${PP_ADMIN_KEY}
     volumes:
       - assets:/data/assets
-    networks:
-      - traefik
-      - internal
+    networks: [traefik, internal]
     labels:
       - traefik.enable=true
       - traefik.docker.network=traefik
 
-      - traefik.http.routers.pandapages-api.rule=Host(`panda-pages.com`,`www.panda-pages.com`) && (PathPrefix(`/api`) || PathPrefix(`/assets`) || PathPrefix(`/healthz`))
+      - traefik.http.services.pandapages-api.loadbalancer.server.port=8080
+
+      # Admin API: inject header here (browser never sees key)
+      - traefik.http.routers.pandapages-api-admin.rule=(Host(`panda-pages.com`) || Host(`www.panda-pages.com`)) && PathPrefix(`/api/v1/admin/`)
+      - traefik.http.routers.pandapages-api-admin.entrypoints=websecure
+      - traefik.http.routers.pandapages-api-admin.tls=true
+      - traefik.http.routers.pandapages-api-admin.tls.certresolver=myresolver
+      - traefik.http.routers.pandapages-api-admin.priority=200
+      - traefik.http.routers.pandapages-api-admin.service=pandapages-api
+      - traefik.http.routers.pandapages-api-admin.middlewares=pandapages-admin-ips@docker,pandapages-admin-key@docker
+
+      # Optional allowlist (defaults to allow-all if PP_ADMIN_IPS not set)
+      - traefik.http.middlewares.pandapages-admin-ips.ipallowlist.sourcerange=${PP_ADMIN_IPS:-0.0.0.0/0,::/0}
+
+      # Inject admin header server-side
+      - traefik.http.middlewares.pandapages-admin-key.headers.customrequestheaders.X-PP-Admin-Key=${PP_ADMIN_KEY}
+
+      # Public API
+      - traefik.http.routers.pandapages-api.rule=(Host(`panda-pages.com`) || Host(`www.panda-pages.com`)) && (PathPrefix(`/api`) || PathPrefix(`/healthz`))
       - traefik.http.routers.pandapages-api.entrypoints=websecure
       - traefik.http.routers.pandapages-api.tls=true
       - traefik.http.routers.pandapages-api.tls.certresolver=myresolver
       - traefik.http.routers.pandapages-api.priority=100
-      - traefik.http.services.pandapages-api.loadbalancer.server.port=8080
+      - traefik.http.routers.pandapages-api.service=pandapages-api
 
   web:
     build:
       context: ./apps/web
       target: prod
       args:
-        VITE_API_BASE: ${VITE_API_BASE:-}
-        VITE_ADMIN_KEY: ${VITE_ADMIN_KEY:-}
+        VITE_API_BASE: ""
+        VITE_ADMIN_KEY: ""
     restart: unless-stopped
-    depends_on:
-      - api
-    networks:
-      - traefik
+    depends_on: [api]
+    networks: [traefik]
     labels:
       - traefik.enable=true
       - traefik.docker.network=traefik
-
-      - traefik.http.routers.pandapages-web.rule=Host(`panda-pages.com`,`www.panda-pages.com`) && !PathPrefix(`/api`) && !PathPrefix(`/assets`) && !PathPrefix(`/healthz`)
+      - traefik.http.services.pandapages-web.loadbalancer.server.port=80
+      - traefik.http.routers.pandapages-web.rule=(Host(`panda-pages.com`) || Host(`www.panda-pages.com`)) && !PathPrefix(`/api`) && !PathPrefix(`/healthz`)
       - traefik.http.routers.pandapages-web.entrypoints=websecure
       - traefik.http.routers.pandapages-web.tls=true
       - traefik.http.routers.pandapages-web.tls.certresolver=myresolver
       - traefik.http.routers.pandapages-web.priority=10
-      - traefik.http.services.pandapages-web.loadbalancer.server.port=80
 
 networks:
   traefik:

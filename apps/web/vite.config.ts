@@ -35,7 +35,7 @@ export default defineConfig(({ mode }) => {
       vue(),
       VitePWA({
         registerType: 'prompt',
-        includeAssets: ['favicon.svg', 'apple-touch-icon.png'],
+        includeAssets: ['logo.png', 'apple-touch-icon.png'],
         manifest: {
           id: '/',
           name: 'Panda Pages',
@@ -47,8 +47,8 @@ export default defineConfig(({ mode }) => {
           background_color: '#0B1724',
           theme_color: '#0B1724',
           icons: [
-            { src: '/pwa-192.png', sizes: '192x192', type: 'image/png' },
-            { src: '/pwa-512.png', sizes: '512x512', type: 'image/png' },
+            { src: '/logo.png', sizes: '192x192', type: 'image/png' },
+            { src: '/logo.png', sizes: '512x512', type: 'image/png' },
           ],
         },
 

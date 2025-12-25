@@ -176,9 +176,15 @@ const keypad = [
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-3">
             <div
-              class="grid h-12 w-12 place-items-center rounded-2xl border border-white/10 bg-white/5 shadow-sm"
+              class="grid h-12 w-12 place-items-center rounded-2xl border border-white/10 bg-white/5 shadow-sm overflow-hidden"
             >
-              <span class="text-2xl">🐼</span>
+              <img
+                src="/logo.png"
+                alt="Panda Pages"
+                class="h-12 w-12"
+                loading="lazy"
+                decoding="async"
+              />
             </div>
 
             <div>

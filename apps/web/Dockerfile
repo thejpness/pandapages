@@ -1,19 +1,16 @@
-FROM node:22-alpine AS build
+FROM node:22-alpine AS builder
 WORKDIR /app
+
+ARG VITE_API_BASE=""
+ENV VITE_API_BASE=$VITE_API_BASE
 
 COPY package*.json ./
 RUN npm ci
 
 COPY . .
-
-ARG VITE_API_BASE=""
-ARG VITE_ADMIN_KEY=""
-ENV VITE_API_BASE=$VITE_API_BASE
-ENV VITE_ADMIN_KEY=$VITE_ADMIN_KEY
-
 RUN npm run build
 
-FROM nginx:alpine AS prod
+FROM nginx:1.29-alpine AS prod
 COPY nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=build /app/dist /usr/share/nginx/html
+COPY --from=builder /app/dist /usr/share/nginx/html
 EXPOSE 80
