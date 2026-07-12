@@ -48,7 +48,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM ${ALPINE_IMAGE} AS runtime-base
 RUN apk add --no-cache ca-certificates tzdata \
   && addgroup -S app \
-  && adduser -S app -G app
+  && adduser -S app -G app \
+  && rm -f /sbin/apk
 WORKDIR /app
 
 FROM runtime-base AS migrate
