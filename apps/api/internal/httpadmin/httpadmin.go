@@ -94,7 +94,7 @@ func New(cfg Config, store Store) http.Handler {
 	mux.HandleFunc("POST /api/v1/admin/preview", withAdmin(func(w http.ResponseWriter, r *http.Request) {
 		var body model.AdminPreviewRequest
 		if err := decodeJSON(w, r, &body); err != nil {
-			writeErr(w, http.StatusBadRequest, "bad_json", err.Error())
+			writeDecodeError(w, err)
 			return
 		}
 
@@ -112,7 +112,7 @@ func New(cfg Config, store Store) http.Handler {
 	mux.HandleFunc("POST /api/v1/admin/stories/draft", withAdmin(func(w http.ResponseWriter, r *http.Request) {
 		var body model.AdminDraftUpsertRequest
 		if err := decodeJSON(w, r, &body); err != nil {
-			writeErr(w, http.StatusBadRequest, "bad_json", err.Error())
+			writeDecodeError(w, err)
 			return
 		}
 
@@ -152,7 +152,7 @@ func New(cfg Config, store Store) http.Handler {
 			VersionID string `json:"versionId"`
 		}
 		if err := decodeJSON(w, r, &body); err != nil {
-			writeErr(w, http.StatusBadRequest, "bad_json", err.Error())
+			writeDecodeError(w, err)
 			return
 		}
 
@@ -206,6 +206,15 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 		return errors.New("unexpected extra json")
 	}
 	return nil
+}
+
+func writeDecodeError(w http.ResponseWriter, err error) {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		writeErr(w, http.StatusRequestEntityTooLarge, "body_too_large", "request body too large")
+		return
+	}
+	writeErr(w, http.StatusBadRequest, "bad_json", err.Error())
 }
 
 func writeErr(w http.ResponseWriter, status int, code string, msg string) {

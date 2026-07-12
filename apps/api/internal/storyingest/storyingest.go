@@ -8,12 +8,13 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/text"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 var slugRe = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
@@ -60,16 +61,18 @@ func ValidateSlug(slug string) error {
 	return nil
 }
 
-// Parse optional YAML frontmatter --- ... ---
-func splitFrontmatter(md string) (fm map[string]any, body string) {
+const maxFrontmatterBytes = 64 << 10 // 64 KiB
+
+// Parse optional YAML frontmatter --- ... ---.
+func splitFrontmatter(md string) (fm map[string]any, body string, err error) {
 	s := strings.TrimLeft(md, "\ufeff \t\r\n")
 	if !strings.HasPrefix(s, "---\n") && !strings.HasPrefix(s, "---\r\n") {
-		return map[string]any{}, md
+		return map[string]any{}, md, nil
 	}
-	// find closing '---' on its own line
+
 	lines := strings.Split(s, "\n")
 	if len(lines) < 3 {
-		return map[string]any{}, md
+		return nil, "", fmt.Errorf("frontmatter is not closed")
 	}
 	end := -1
 	for i := 1; i < len(lines); i++ {
@@ -79,15 +82,20 @@ func splitFrontmatter(md string) (fm map[string]any, body string) {
 		}
 	}
 	if end == -1 {
-		return map[string]any{}, md
+		return nil, "", fmt.Errorf("frontmatter is not closed")
 	}
 
 	fmText := strings.Join(lines[1:end], "\n")
+	if len(fmText) > maxFrontmatterBytes {
+		return nil, "", fmt.Errorf("frontmatter exceeds %d bytes", maxFrontmatterBytes)
+	}
 	body = strings.Join(lines[end+1:], "\n")
 
 	out := map[string]any{}
-	_ = yaml.Unmarshal([]byte(fmText), &out)
-	return out, body
+	if err := yaml.Unmarshal([]byte(fmText), &out); err != nil {
+		return nil, "", fmt.Errorf("invalid YAML frontmatter: %w", err)
+	}
+	return out, body, nil
 }
 
 func render(md string) (string, error) {
@@ -138,7 +146,31 @@ func textContent(src []byte, n ast.Node) string {
 	return strings.TrimSpace(b.String())
 }
 
+func validateUTF8(in Input) error {
+	values := []struct {
+		name  string
+		value string
+	}{
+		{name: "slug", value: in.Slug},
+		{name: "title", value: in.Title},
+		{name: "author", value: in.Author},
+		{name: "markdown", value: in.Markdown},
+		{name: "language", value: in.Language},
+		{name: "source URL", value: in.SourceURL},
+	}
+	for _, field := range values {
+		if !utf8.ValidString(field.value) {
+			return fmt.Errorf("%s is not valid UTF-8", field.name)
+		}
+	}
+	return nil
+}
+
 func Ingest(in Input) (Output, error) {
+	if err := validateUTF8(in); err != nil {
+		return Output{}, err
+	}
+
 	in.Slug = strings.TrimSpace(in.Slug)
 	in.Title = strings.TrimSpace(in.Title)
 	in.Author = strings.TrimSpace(in.Author)
@@ -156,7 +188,10 @@ func Ingest(in Input) (Output, error) {
 		return Output{}, fmt.Errorf("markdown is required")
 	}
 
-	fm, body := splitFrontmatter(in.Markdown)
+	fm, body, err := splitFrontmatter(in.Markdown)
+	if err != nil {
+		return Output{}, err
+	}
 
 	// prefer explicit fields, fall back to frontmatter
 	if v, ok := fm["title"].(string); in.Title == "" && ok {
