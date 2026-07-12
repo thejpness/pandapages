@@ -50,6 +50,7 @@ services:
       PP_PASSCODE: ${PP_PASSCODE}
       PP_SESSION_SECRET: ${PP_SESSION_SECRET}
       PP_ADMIN_KEY: ${PP_ADMIN_KEY}
+      PP_COOKIE_SECURE: "true"
     volumes:
       - assets:/data/assets
     networks: [traefik, internal]
@@ -68,8 +69,8 @@ services:
       - traefik.http.routers.pandapages-api-admin.service=pandapages-api
       - traefik.http.routers.pandapages-api-admin.middlewares=pandapages-admin-ips@docker,pandapages-admin-key@docker
 
-      # Optional allowlist (defaults to allow-all if PP_ADMIN_IPS not set)
-      - traefik.http.middlewares.pandapages-admin-ips.ipallowlist.sourcerange=${PP_ADMIN_IPS:-0.0.0.0/0,::/0}
+      # Required allowlist: never inject the admin key for every internet client.
+      - traefik.http.middlewares.pandapages-admin-ips.ipallowlist.sourcerange=${PP_ADMIN_IPS:?PP_ADMIN_IPS must contain the authorised admin CIDR(s)}
 
       # Inject admin header server-side
       - traefik.http.middlewares.pandapages-admin-key.headers.customrequestheaders.X-PP-Admin-Key=${PP_ADMIN_KEY}
@@ -88,7 +89,6 @@ services:
       target: prod
       args:
         VITE_API_BASE: ""
-        VITE_ADMIN_KEY: ""
     restart: unless-stopped
     depends_on: [api]
     networks: [traefik]

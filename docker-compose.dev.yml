@@ -75,6 +75,11 @@ services:
       - traefik.enable=true
       # Critical: force Traefik to use the web network IP (avoids random 504s when service is on multiple networks)
       - traefik.docker.network=pandapages_web
+      - traefik.http.routers.api-admin.rule=Host(`pandapages.localhost`) && PathPrefix(`/api/v1/admin/`)
+      - traefik.http.routers.api-admin.priority=200
+      - traefik.http.routers.api-admin.service=api
+      - traefik.http.routers.api-admin.middlewares=pandapages-dev-admin-key@docker
+      - traefik.http.middlewares.pandapages-dev-admin-key.headers.customrequestheaders.X-PP-Admin-Key=${PP_ADMIN_KEY}
       - traefik.http.routers.api.rule=Host(`pandapages.localhost`) && (PathPrefix(`/api`) || PathPrefix(`/assets`) || PathPrefix(`/healthz`))
       - traefik.http.routers.api.priority=100
       - traefik.http.services.api.loadbalancer.server.port=8080
@@ -87,7 +92,6 @@ services:
       target: dev
     environment:
       VITE_API_BASE: http://pandapages.localhost
-      VITE_ADMIN_KEY: ${VITE_ADMIN_KEY}
     volumes:
       - ./apps/web:/app
       - web_node_modules:/app/node_modules
