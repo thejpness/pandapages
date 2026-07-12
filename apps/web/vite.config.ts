@@ -6,7 +6,7 @@ import { fileURLToPath, URL } from 'node:url'
 
 export default defineConfig(({ mode }) => {
   // Load env for dev proxy only (build-time vars are still handled by Vite normally)
-  const env = loadEnv(mode, process.cwd(), '')
+  const env = loadEnv(mode, process.cwd(), 'VITE_')
 
   // In dev you can set VITE_API_BASE=http://pandapages.localhost (or http://localhost:8081)
   // In prod you should prefer same-origin (BASE = ''), so the app calls /api/... on panda-pages.com
@@ -35,7 +35,7 @@ export default defineConfig(({ mode }) => {
       vue(),
       VitePWA({
         registerType: 'prompt',
-        includeAssets: ['logo.png', 'apple-touch-icon.png'],
+        includeAssets: ['logo.png'],
         manifest: {
           id: '/',
           name: 'Panda Pages',
@@ -55,51 +55,12 @@ export default defineConfig(({ mode }) => {
         // Helps offline navigation for history-mode routes (/admin/upload, /read/:slug)
         // (nginx fallback still required for normal online refreshes)
         workbox: {
+          cleanupOutdatedCaches: true,
           navigateFallback: '/index.html',
           navigateFallbackDenylist: [
             /^\/api\//,
             /^\/assets\//,
             /^\/healthz$/,
-          ],
-
-          runtimeCaching: [
-            // Cache story/library endpoints only (avoid caching auth/admin/progress/settings etc.)
-            {
-              urlPattern: ({ url, request }) => {
-                if (request.method !== 'GET') return false
-                if (!url.pathname.startsWith('/api/v1/')) return false
-
-                // NEVER cache auth/admin/private state
-                if (url.pathname.startsWith('/api/v1/auth/')) return false
-                if (url.pathname.startsWith('/api/v1/admin/')) return false
-                if (url.pathname.startsWith('/api/v1/progress/')) return false
-                if (url.pathname.startsWith('/api/v1/settings')) return false
-                if (url.pathname.startsWith('/api/v1/continue')) return false
-
-                // Cache “content-ish” endpoints
-                if (url.pathname === '/api/v1/library') return true
-                if (url.pathname.startsWith('/api/v1/story/')) return true
-
-                return false
-              },
-              handler: 'NetworkFirst',
-              options: {
-                cacheName: 'api-content',
-                networkTimeoutSeconds: 3,
-                expiration: { maxEntries: 200, maxAgeSeconds: 60 * 60 * 24 * 7 }, // 7 days
-              },
-            },
-
-            // Cache assets (cover images / rendered assets)
-            {
-              urlPattern: ({ url, request }) =>
-                request.method === 'GET' && url.pathname.startsWith('/assets/'),
-              handler: 'CacheFirst',
-              options: {
-                cacheName: 'assets',
-                expiration: { maxEntries: 500, maxAgeSeconds: 60 * 60 * 24 * 30 }, // 30 days
-              },
-            },
           ],
         },
       }),

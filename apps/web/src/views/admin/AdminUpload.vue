@@ -62,7 +62,7 @@ function promoteChaptersToMarkdown(text: string) {
     const line = raw.trimEnd()
     const m = chapterLike.exec(line.trim())
     if (m) {
-      const head = `${m[1]!.toUpperCase()} ${m[2]!.toUpperCase()}${m[3] ? ` — ${m[3].trim()}` : ''}`
+      const head = `${m[1].toUpperCase()} ${m[2].toUpperCase()}${m[3] ? ` — ${m[3].trim()}` : ''}`
       out.push(`## ${head}`)
       out.push('')
       continue
@@ -83,18 +83,17 @@ function parseTitleAuthorFromFilename(name: string): { title: string; author: st
   const base = name.replace(/\.[^.]+$/, '').trim()
   const parts = base.split(' - ').map((s) => s.trim()).filter(Boolean)
   if (parts.length >= 2) {
-    return { title: parts[0]!, author: parts.slice(1).join(' - ') }
+    return { title: parts[0], author: parts.slice(1).join(' - ') }
   }
   return { title: base, author: '' }
 }
 
 function toMsg(e: unknown, fallback: string) {
-  const anyErr = e as any
-  return anyErr?.message || fallback
+  return e instanceof Error && e.message ? e.message : fallback
 }
 
 function isDuplicateContentErr(e: unknown): boolean {
-  const msg = String((e as any)?.message || '').toLowerCase()
+  const msg = (e instanceof Error ? e.message : '').toLowerCase()
   return (
     msg.includes('content_hash') ||
     msg.includes('story_versions_story_id_content_hash_key') ||
@@ -257,7 +256,7 @@ async function refreshAllStories() {
 }
 
 function openReader(storySlug: string) {
-  router.push(resolveReaderPath(storySlug))
+  void router.push(resolveReaderPath(storySlug))
 }
 
 async function copyReaderLink(storySlug: string) {

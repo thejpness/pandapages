@@ -5,16 +5,35 @@ const rawBase = (import.meta.env.VITE_API_BASE || '').trim()
 // - strip trailing slashes so `${BASE}${path}` doesn't become `//api/...`
 const BASE = rawBase.replace(/\/+$/, '')
 
-export type APIErrorBody =
-  | string
-  | {
-      error?: {
-        code?: string
-        message?: string
-      }
-      [k: string]: any
-    }
+export type JsonValue =
   | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | JsonObject
+
+export type JsonObject = {
+  [key: string]: JsonValue
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+export function isJsonValue(value: unknown): value is JsonValue {
+  if (value === null) return true
+  if (typeof value === 'string' || typeof value === 'boolean') return true
+  if (typeof value === 'number') return Number.isFinite(value)
+  if (Array.isArray(value)) return value.every(isJsonValue)
+  return isJsonObject(value)
+}
+
+export function isJsonObject(value: unknown): value is JsonObject {
+  return isRecord(value) && Object.values(value).every(isJsonValue)
+}
+
+export type APIErrorBody = JsonValue
 
 export type APIError = Error & {
   status?: number
@@ -22,8 +41,27 @@ export type APIError = Error & {
   body?: APIErrorBody
 }
 
+function getErrorDetails(body: APIErrorBody): {
+  code?: string
+  message?: string
+} {
+  if (!isJsonObject(body) || !isJsonObject(body.error)) return {}
+
+  const code =
+    typeof body.error.code === 'string' && body.error.code
+      ? body.error.code
+      : undefined
+
+  const message =
+    typeof body.error.message === 'string' && body.error.message
+      ? body.error.message
+      : undefined
+
+  return { code, message }
+}
+
 function buildHeaders(init: RequestInit): Headers {
-  const headers = new Headers(init.headers as HeadersInit | undefined)
+  const headers = new Headers(init.headers)
 
   const hasBody = init.body !== undefined && init.body !== null
   const isStringBody = typeof init.body === 'string'
@@ -52,23 +90,27 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const contentType = res.headers.get('content-type') || ''
   const isJSON = contentType.includes('application/json')
 
-  let body: any = null
+  let rawBody: unknown = null
   if (res.status !== 204) {
-    body = isJSON ? await res.json().catch(() => null) : await res.text().catch(() => '')
+    rawBody = isJSON
+      ? await res.json().catch(() => null)
+      : await res.text().catch(() => '')
   }
 
+  const body: APIErrorBody = isJsonValue(rawBody) ? rawBody : null
+
   if (!res.ok) {
-    const msg =
+    const details = getErrorDetails(body)
+    const message =
       typeof body === 'string'
         ? body || `Request failed: ${res.status}`
-        : body?.error?.message || `Request failed: ${res.status}`
+        : details.message ?? `Request failed: ${res.status}`
 
-    const err: APIError = new Error(msg)
-    err.status = res.status
-    err.body = body
-    err.code =
-      body && typeof body === 'object' && body?.error?.code ? String(body.error.code) : undefined
-    throw err
+    const error: APIError = new Error(message)
+    error.status = res.status
+    error.body = body
+    error.code = details.code
+    throw error
   }
 
   return body as T
@@ -163,7 +205,7 @@ export type AdminDraftUpsertRequest = {
   markdown: string
   language?: string | null
   sourceUrl?: string | null
-  rights?: Record<string, any>
+  rights?: JsonObject
 }
 
 export type AdminDraftUpsertResponse = {
@@ -210,7 +252,7 @@ export async function adminListStories(): Promise<AdminStoriesListResponse> {
 
 export type ProgressState = {
   version: number
-  locator: unknown | null
+  locator: unknown
   percent: number
 }
 
@@ -218,7 +260,7 @@ export async function getProgress(slug: string): Promise<ProgressState> {
   return request<ProgressState>(`/api/v1/progress/${encodeURIComponent(slug)}`)
 }
 
-export async function saveProgress(slug: string, version: number, locator: unknown, percent: number) {
+export async function saveProgress(slug: string, version: number, locator: JsonValue, percent: number) {
   try {
     await request<{ ok: boolean }>(`/api/v1/progress/${encodeURIComponent(slug)}`, {
       method: 'PUT',
@@ -256,7 +298,7 @@ export type PromptProfile = {
   id?: string
   name: string
   schemaVersion: number
-  rules: Record<string, any>
+  rules: JsonObject
 }
 
 export type SettingsPayload = {
@@ -269,34 +311,46 @@ export type SettingsUpsert = {
   prompt: PromptProfile
 }
 
-function normaliseSettings(data: Partial<SettingsPayload> | null): SettingsPayload {
-  const child = data?.child
-  const prompt = data?.prompt
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string')
+}
+
+function finiteNumber(value: unknown, fallback: number): number {
+  const number = Number(value ?? fallback)
+  return Number.isFinite(number) ? number : fallback
+}
+
+function normaliseSettings(data: unknown): SettingsPayload {
+  const root = isRecord(data) ? data : {}
+  const child = isRecord(root.child) ? root.child : {}
+  const prompt = isRecord(root.prompt) ? root.prompt : {}
 
   return {
     child: {
-      id: child?.id,
-      name: child?.name ?? '',
-      ageMonths: Number(child?.ageMonths ?? 0),
-      interests: Array.isArray(child?.interests) ? (child?.interests as string[]) : [],
-      sensitivities: Array.isArray(child?.sensitivities) ? (child?.sensitivities as string[]) : [],
+      id: typeof child.id === 'string' ? child.id : undefined,
+      name: typeof child.name === 'string' ? child.name : '',
+      ageMonths: finiteNumber(child.ageMonths, 0),
+      interests: isStringArray(child.interests) ? child.interests : [],
+      sensitivities: isStringArray(child.sensitivities)
+        ? child.sensitivities
+        : [],
     },
     prompt: {
-      id: prompt?.id,
-      name: prompt?.name ?? '',
-      schemaVersion: Number(prompt?.schemaVersion ?? 1),
-      rules: prompt?.rules && typeof prompt.rules === 'object' ? (prompt.rules as any) : {},
+      id: typeof prompt.id === 'string' ? prompt.id : undefined,
+      name: typeof prompt.name === 'string' ? prompt.name : '',
+      schemaVersion: finiteNumber(prompt.schemaVersion, 1),
+      rules: isJsonObject(prompt.rules) ? prompt.rules : {},
     },
   }
 }
 
 export async function getSettings(): Promise<SettingsPayload> {
-  const data = await request<Partial<SettingsPayload>>('/api/v1/settings')
+  const data = await request<unknown>('/api/v1/settings')
   return normaliseSettings(data)
 }
 
 export async function saveSettings(payload: SettingsUpsert): Promise<SettingsPayload> {
-  const data = await request<SettingsPayload>('/api/v1/settings', {
+  const data = await request<unknown>('/api/v1/settings', {
     method: 'PUT',
     body: JSON.stringify({
       child: payload.child,

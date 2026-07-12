@@ -1,14 +1,17 @@
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount, ref, nextTick, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getStory, getStorySegments, saveProgress, getProgress, type StorySegment } from '../lib/api'
+import {
+  getStory,
+  getStorySegments,
+  saveProgress,
+  getProgress,
+  isJsonObject,
+  type JsonObject,
+  type StorySegment,
+} from '../lib/api'
 import { loadPrefs, savePrefs, type ReaderPrefs } from '../lib/prefs'
 import { haptic } from '../lib/haptics'
-
-type Locator =
-  | { mode?: 'scroll'; scrollY?: number }
-  | { mode?: 'paged'; page?: number; startOrdinal?: number; endOrdinal?: number }
-  | Record<string, any>
 
 type Page = {
   index: number
@@ -36,18 +39,17 @@ function scrollToY(y: number) {
   window.scrollTo(0, Math.max(0, y || 0))
 }
 
-function asLocator(v: unknown): Locator {
-  if (!v) return {}
-  if (typeof v === 'string') {
-    try {
-      const parsed = JSON.parse(v)
-      return parsed && typeof parsed === 'object' ? (parsed as Locator) : {}
-    } catch {
-      return {}
-    }
+function asLocator(value: unknown): JsonObject {
+  if (typeof value !== 'string') {
+    return isJsonObject(value) ? value : {}
   }
-  if (typeof v === 'object') return v as Locator
-  return {}
+
+  try {
+    const parsed: unknown = JSON.parse(value)
+    return isJsonObject(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
 }
 
 function calcPercentScroll(): number {
@@ -64,14 +66,15 @@ function buildPages(segments: StorySegment[]): Page[] {
   let buf: StorySegment[] = []
 
   const flush = () => {
-    if (!buf.length) return
-    const start = buf[0]!.ordinal
-    const end = buf[buf.length - 1]!.ordinal
+    const first = buf[0]
+    const last = buf.at(-1)
+    if (!first || !last) return
+
     out.push({
       index: out.length,
-      startOrdinal: start,
-      endOrdinal: end,
-      html: buf.map(x => x.renderedHtml).join(''),
+      startOrdinal: first.ordinal,
+      endOrdinal: last.ordinal,
+      html: buf.map((segment) => segment.renderedHtml).join(''),
     })
     buf = []
   }
@@ -87,13 +90,10 @@ function buildPages(segments: StorySegment[]): Page[] {
 }
 
 function extractHeadingTextFromHTML(renderedHtml: string): string {
-  // Safe-enough: parse minimal H2 innerText from HTML string
   try {
-    const div = document.createElement('div')
-    div.innerHTML = renderedHtml
-    const h2 = div.querySelector('h2')
-    const t = (h2?.textContent ?? '').trim()
-    return t
+    const parsed = new DOMParser().parseFromString(renderedHtml, 'text/html')
+    const h2 = parsed.querySelector('h2')
+    return (h2?.textContent ?? '').trim()
   } catch {
     return ''
   }
@@ -117,24 +117,28 @@ const chapters = computed<Chapter[]>(() => {
 
   const out: Chapter[] = []
   for (const s of segments.value) {
-    const loc: any = s.locator || {}
+    const loc = asLocator(s.locator)
     const isH2 =
-      (loc && loc.type === 'heading' && Number(loc.h) === 2) ||
-      /^\s*<h2[\s>]/i.test(String(s.renderedHtml || ''))
+      (loc.type === 'heading' && Number(loc.h) === 2) ||
+      /^\s*<h2[\s>]/i.test(s.renderedHtml)
 
     if (!isH2) continue
 
-    const t = extractHeadingTextFromHTML(String(s.renderedHtml || '')) || 'Chapter'
-    const segOrd = Number(s.ordinal)
+    const chapterTitle = extractHeadingTextFromHTML(s.renderedHtml) || 'Chapter'
+    const segmentOrdinal = s.ordinal
 
-    const pageIdx = pages.value.findIndex(p => segOrd >= p.startOrdinal && segOrd <= p.endOrdinal)
+    const pageIndex = pages.value.findIndex(
+      (page) =>
+        segmentOrdinal >= page.startOrdinal &&
+        segmentOrdinal <= page.endOrdinal,
+    )
+
     out.push({
-      title: t,
-      segmentOrdinal: segOrd,
-      pageIndex: Math.max(0, pageIdx),
+      title: chapterTitle,
+      segmentOrdinal,
+      pageIndex: Math.max(0, pageIndex),
     })
   }
-
   // de-dupe consecutive duplicates (some sources repeat headings)
   const dedup: Chapter[] = []
   for (const c of out) {
@@ -265,7 +269,7 @@ async function startOver() {
 
 function findAgain() {
   resumeToast.value = null
-  router.push({ path: '/library', query: { q: slug } })
+  void router.push({ path: '/library', query: { q: slug } })
 }
 
 function dismissResume() {
@@ -273,7 +277,7 @@ function dismissResume() {
 }
 
 function goLibrary() {
-  router.push('/library')
+  void router.push('/library')
 }
 
 function toggleControls() {
@@ -316,11 +320,11 @@ function setMode(mode: 'scroll' | 'paged') {
     currentPage.value = 0
     percent.value = 0
     lastSaved.page = 0
-    nextTick(() => {
+    void nextTick(() => {
       pagedRef.value?.scrollTo({ left: 0, behavior: 'auto' })
     })
   } else {
-    nextTick(() => scrollToY(0))
+    void nextTick(() => scrollToY(0))
   }
 }
 
@@ -346,22 +350,35 @@ async function checkResumeOffer() {
     if (p.version !== version.value) return
 
     const loc = asLocator(p.locator)
-    const mode = String((loc as any).mode || 'scroll')
+    const mode = loc.mode === 'paged' ? 'paged' : 'scroll'
 
     if (mode === 'paged' && prefs.value.mode === 'paged' && pages.value.length) {
-      const page = Number((loc as any).page ?? 0)
-      const n = pages.value.length
-      const safe = Math.max(0, Math.min(n - 1, Number.isFinite(page) ? page : 0))
-      const perc = clamp01(Number(p.percent || 0))
-      if (safe > 0 || perc > 0.02) {
-        resumeToast.value = { mode: 'paged', page: safe, percent: perc }
+      const page = typeof loc.page === 'number' ? loc.page : 0
+      const count = pages.value.length
+      const safePage = Math.max(
+        0,
+        Math.min(count - 1, Number.isFinite(page) ? page : 0),
+      )
+      const savedPercent = clamp01(p.percent)
+
+      if (safePage > 0 || savedPercent > 0.02) {
+        resumeToast.value = {
+          mode: 'paged',
+          page: safePage,
+          percent: savedPercent,
+        }
       }
       return
     }
 
-    const y = Number((loc as any).scrollY ?? 0)
-    if (!Number.isFinite(y) || y <= 64) return
-    resumeToast.value = { mode: 'scroll', y, percent: clamp01(Number(p.percent || 0)) }
+    const scrollY = typeof loc.scrollY === 'number' ? loc.scrollY : 0
+    if (!Number.isFinite(scrollY) || scrollY <= 64) return
+
+    resumeToast.value = {
+      mode: 'scroll',
+      y: scrollY,
+      percent: clamp01(p.percent),
+    }
   } catch {
     // ignore
   }
@@ -387,7 +404,7 @@ async function load() {
     await checkResumeOffer()
     updatePercent()
   } catch {
-    router.replace('/unlock')
+    await router.replace('/unlock')
   }
 }
 

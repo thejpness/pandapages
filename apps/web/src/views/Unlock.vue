@@ -26,7 +26,7 @@ const canSubmit = computed(() => code.value.length === 6 && !busy.value)
 
 function focusOtp() {
   // Don't autofocus on mount; only focus on intent (tap / key)
-  otpEl.value?.focus({ preventScroll: true } as any)
+  otpEl.value?.focus({ preventScroll: true })
 }
 
 function setError(message: string) {
@@ -68,7 +68,7 @@ async function submit() {
     await unlock(code.value)
     haptic('medium')
     const next = typeof route.query.next === 'string' ? route.query.next : '/library'
-    router.replace(next)
+    void router.replace(next)
   } catch {
     haptic('heavy')
     setError('Wrong passcode')
@@ -144,7 +144,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener('keydown', onKeydown as any)
+  window.removeEventListener('keydown', onKeydown)
 })
 
 const keypad = [

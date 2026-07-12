@@ -2,12 +2,6 @@ import { createRouter, createWebHistory } from 'vue-router'
 
 import Unlock from './views/Unlock.vue'
 import Library from './views/Library.vue'
-import Reader from './views/Reader.vue'
-import Journey from './views/Journey.vue'
-
-import AdminLayout from './views/admin/AdminLayout.vue'
-import AdminUpload from './views/admin/AdminUpload.vue'
-import AdminAI from './views/admin/AdminAI.vue'
 
 import { authStatus } from './lib/api'
 
@@ -19,17 +13,17 @@ export const router = createRouter({
     { path: '/unlock', component: Unlock },
 
     { path: '/library', component: Library, meta: { requiresUnlock: true } },
-    { path: '/read/:slug', component: Reader, props: true, meta: { requiresUnlock: true } },
-    { path: '/journey', component: Journey, meta: { requiresUnlock: true } },
+    { path: '/read/:slug', component: () => import('./views/Reader.vue'), props: true, meta: { requiresUnlock: true } },
+    { path: '/journey', component: () => import('./views/Journey.vue'), meta: { requiresUnlock: true } },
 
     {
       path: '/admin',
-      component: AdminLayout,
+      component: () => import('./views/admin/AdminLayout.vue'),
       meta: { requiresUnlock: true },
       children: [
         { path: '', redirect: { path: 'upload' } },
-        { path: 'upload', component: AdminUpload },
-        { path: 'ai', component: AdminAI },
+        { path: 'upload', component: () => import('./views/admin/AdminUpload.vue') },
+        { path: 'ai', component: () => import('./views/admin/AdminAI.vue') },
       ],
     },
   ],
