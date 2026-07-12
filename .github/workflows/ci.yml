@@ -1,0 +1,207 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: apps/api/go.mod
+          cache: true
+          cache-dependency-path: apps/api/go.sum
+
+      - name: Download Go modules
+        run: go mod download
+
+      - name: Verify Go modules
+        run: go mod verify
+
+      - name: Run Go tests
+        run: go test ./...
+
+      - name: Run Go race tests
+        run: go test -race ./...
+
+      - name: Run Go vet
+        run: go vet ./...
+
+      - name: Build production API
+        env:
+          CGO_ENABLED: "0"
+          GOARCH: amd64
+          GOOS: linux
+        run: go build -trimpath -ldflags="-s -w" -o /tmp/pandapages-api ./cmd/api
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install locked frontend dependencies
+        run: npm ci
+
+      - name: Run frontend tests
+        run: npm test
+
+      - name: Build production frontend
+        run: npm run build
+
+  configuration:
+    name: Configuration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      DATABASE_URL: postgres://pandapages:ci-only-postgres-password-not-for-production@postgres:5432/pandapages?sslmode=disable
+      PG_PASSWORD: ci-only-postgres-password-not-for-production
+      POSTGRES_PASSWORD: ci-only-postgres-password-not-for-production
+      PP_ADMIN_IPS: 192.0.2.1/32
+      PP_ADMIN_KEY: ci-only-admin-key-not-for-production-00000000
+      PP_PASSCODE: ci-only-passcode-not-for-production
+      PP_SESSION_SECRET: ci-only-session-secret-not-for-production-00000000
+    steps:
+      - name: Check out repository with history
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate production Compose configuration
+        run: docker compose --env-file /dev/null -f docker-compose.yml config --quiet
+
+      - name: Validate development Compose configuration
+        run: docker compose --env-file /dev/null -f docker-compose.dev.yml config --quiet
+
+      - name: Confirm production admin allowlist fails closed
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if env -u PP_ADMIN_IPS docker compose --env-file /dev/null -f docker-compose.yml config --quiet >/dev/null 2>&1; then
+            echo "Production Compose unexpectedly accepted a missing PP_ADMIN_IPS" >&2
+            exit 1
+          fi
+
+          if PP_ADMIN_IPS= docker compose --env-file /dev/null -f docker-compose.yml config --quiet >/dev/null 2>&1; then
+            echo "Production Compose unexpectedly accepted an empty PP_ADMIN_IPS" >&2
+            exit 1
+          fi
+
+      - name: Check changed-line whitespace
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+
+          readonly zero_sha=0000000000000000000000000000000000000000
+
+          case "$EVENT_NAME" in
+            pull_request)
+              if [[ -z "$PR_BASE_SHA" ]]; then
+                echo "Pull request base SHA is unavailable" >&2
+                exit 1
+              fi
+              git diff --check "$PR_BASE_SHA" HEAD
+              ;;
+            push)
+              if [[ -n "$PUSH_BEFORE_SHA" && "$PUSH_BEFORE_SHA" != "$zero_sha" ]] && git cat-file -e "${PUSH_BEFORE_SHA}^{commit}" 2>/dev/null; then
+                git diff --check "$PUSH_BEFORE_SHA" HEAD
+              elif git rev-parse --verify HEAD^ >/dev/null 2>&1; then
+                git diff --check HEAD^ HEAD
+              else
+                git show --check --format= HEAD
+              fi
+              ;;
+            workflow_dispatch)
+              if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
+                git diff --check HEAD^ HEAD
+              else
+                git show --check --format= HEAD
+              fi
+              ;;
+            *)
+              echo "Unsupported event: $EVENT_NAME" >&2
+              exit 1
+              ;;
+          esac
+
+  docker-builds:
+    name: Docker builds
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Build production API image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: apps/api
+          file: apps/api/Dockerfile
+          target: prod
+          push: false
+          tags: pandapages-api:ci
+          build-args: API_MAIN=./cmd/api
+          cache-from: type=gha,scope=pandapages-api
+          cache-to: type=gha,mode=max,scope=pandapages-api,ignore-error=true
+
+      - name: Build production web image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: apps/web
+          file: apps/web/Dockerfile
+          target: prod
+          push: false
+          tags: pandapages-web:ci
+          build-args: VITE_API_BASE=
+          cache-from: type=gha,scope=pandapages-web
+          cache-to: type=gha,mode=max,scope=pandapages-web,ignore-error=true
