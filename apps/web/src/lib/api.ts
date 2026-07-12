@@ -5,8 +5,6 @@ const rawBase = (import.meta.env.VITE_API_BASE || '').trim()
 // - strip trailing slashes so `${BASE}${path}` doesn't become `//api/...`
 const BASE = rawBase.replace(/\/+$/, '')
 
-const ADMIN_KEY = (import.meta.env.VITE_ADMIN_KEY || '').trim()
-
 export type APIErrorBody =
   | string
   | {
@@ -24,7 +22,7 @@ export type APIError = Error & {
   body?: APIErrorBody
 }
 
-function buildHeaders(path: string, init: RequestInit): Headers {
+function buildHeaders(init: RequestInit): Headers {
   const headers = new Headers(init.headers as HeadersInit | undefined)
 
   const hasBody = init.body !== undefined && init.body !== null
@@ -33,11 +31,6 @@ function buildHeaders(path: string, init: RequestInit): Headers {
   // Only set JSON content-type when body is a JSON string. (Never for FormData)
   if (hasBody && isStringBody && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
-  }
-
-  // Only attach admin key for admin API routes
-  if (path.startsWith('/api/v1/admin/') && ADMIN_KEY) {
-    headers.set('X-PP-Admin-Key', ADMIN_KEY)
   }
 
   return headers
@@ -53,7 +46,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(buildUrl(path), {
     credentials: 'include',
     ...init,
-    headers: buildHeaders(path, init),
+    headers: buildHeaders(init),
   })
 
   const contentType = res.headers.get('content-type') || ''

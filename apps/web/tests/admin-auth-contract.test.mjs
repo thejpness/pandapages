@@ -1,0 +1,125 @@
+import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
+import test from 'node:test'
+import { transformWithEsbuild } from 'vite'
+
+const apiSourceURL = new URL('../src/lib/api.ts', import.meta.url)
+
+async function loadAPI() {
+  const source = await readFile(apiSourceURL, 'utf8')
+  const testableSource = source.replaceAll('import.meta.env.VITE_API_BASE', "''")
+  const transformed = await transformWithEsbuild(testableSource, 'api.ts', {
+    loader: 'ts',
+    format: 'esm',
+    target: 'es2022',
+  })
+  const moduleURL =
+    'data:text/javascript;base64,' +
+    Buffer.from(transformed.code).toString('base64') +
+    '#' +
+    Date.now() +
+    Math.random()
+
+  return { api: await import(moduleURL), source }
+}
+
+function jsonResponse(body) {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
+test('admin list uses the fixed same-origin path and browser credentials', async (t) => {
+  const originalFetch = globalThis.fetch
+  t.after(() => {
+    globalThis.fetch = originalFetch
+  })
+
+  let request
+  globalThis.fetch = async (url, init) => {
+    request = { url, init }
+    return jsonResponse({ items: [] })
+  }
+
+  const { api, source } = await loadAPI()
+  assert.doesNotMatch(source, /VITE_ADMIN_KEY|X-PP-Admin-Key/)
+  assert.deepEqual(await api.adminListStories(), { items: [] })
+  assert.equal(request.url, '/api/v1/admin/stories')
+  assert.equal(request.init.credentials, 'include')
+
+  const headers = new Headers(request.init.headers)
+  assert.equal(headers.has('Authorization'), false)
+  assert.equal(headers.has('X-PP-Admin-Key'), false)
+})
+
+test('UTF-8 imported text is sent unchanged to the fixed draft path', async (t) => {
+  const originalFetch = globalThis.fetch
+  t.after(() => {
+    globalThis.fetch = originalFetch
+  })
+
+  let request
+  globalThis.fetch = async (url, init) => {
+    request = { url, init }
+    return jsonResponse({
+      storyId: 'story-id',
+      storyVersionId: 'version-id',
+      slug: 'cafe-panda',
+      version: 1,
+      segmentsCount: 2,
+      renderedHtml: '<h1>Café Panda 🐼</h1>',
+    })
+  }
+
+  const { api } = await loadAPI()
+  const newline = String.fromCodePoint(10)
+  const markdown = '# Café Panda 🐼' + newline + newline + '“Olá”, said the panda. 你好。' + newline
+  await api.adminDraftUpsertStory({
+    slug: 'cafe-panda',
+    title: 'Café Panda 🐼',
+    markdown,
+  })
+
+  assert.equal(request.url, '/api/v1/admin/stories/draft')
+  assert.equal(request.init.method, 'POST')
+  assert.equal(request.init.credentials, 'include')
+  assert.deepEqual(JSON.parse(String(request.init.body)), {
+    slug: 'cafe-panda',
+    title: 'Café Panda 🐼',
+    markdown,
+  })
+})
+
+test('Compose keeps browser credentials out and proxy credentials server-side', async () => {
+  const productionCompose = await readFile(
+    new URL('../../../docker-compose.yml', import.meta.url),
+    'utf8'
+  )
+  const developmentCompose = await readFile(
+    new URL('../../../docker-compose.dev.yml', import.meta.url),
+    'utf8'
+  )
+  const requiredAllowlist =
+    'ipallowlist.sourcerange=' +
+    '$' +
+    '{PP_ADMIN_IPS:?PP_ADMIN_IPS must contain the authorised admin CIDR(s)}'
+
+  assert.match(
+    productionCompose,
+    /pandapages-api-admin\.middlewares=pandapages-admin-ips@docker,pandapages-admin-key@docker/
+  )
+  assert.ok(productionCompose.includes(requiredAllowlist))
+  assert.match(productionCompose, /PP_COOKIE_SECURE: "true"/)
+  assert.doesNotMatch(productionCompose, /VITE_ADMIN_KEY/)
+
+  assert.match(
+    developmentCompose,
+    /api-admin\.middlewares=pandapages-dev-admin-key@docker/
+  )
+  assert.match(
+    developmentCompose,
+    /pandapages-dev-admin-key\.headers\.customrequestheaders\.X-PP-Admin-Key=/
+  )
+  assert.doesNotMatch(developmentCompose, /VITE_ADMIN_KEY/)
+})
