@@ -400,7 +400,9 @@ complexity solely to remove a few minutes of planned interruption.
    made reproducible.
 7. The VPS reports `NTP=yes` but `NTPSynchronized=no`, and its clock was about
    47 seconds ahead of the audit workstation. Fix time synchronisation before
-   relying on cross-host log or recovery timestamps.
+   relying on cross-host log or recovery timestamps. The durable diagnosis,
+   repair, and rollout gate are documented in
+   [production-time-synchronisation.md](production-time-synchronisation.md).
 
 ## Reproduction tooling
 
