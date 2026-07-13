@@ -9,6 +9,10 @@ shell history, process arguments, or Git.
 Read the measured storage evidence and migration decision in
 [postgresql-18-storage-audit.md](postgresql-18-storage-audit.md) first.
 
+The proposed scheduled, encrypted, off-host implementation is documented in
+[postgresql-automated-backups.md](postgresql-automated-backups.md). Its
+recovery targets do not become established until deployment and verification.
+
 ## Current recovery posture
 
 As of 2026-07-13, no recurring, monitored, encrypted, or restore-tested Panda
