@@ -24,7 +24,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U pandapages -d pandapages"]
+      test: ["CMD-SHELL", "pg_isready -U pandapages_app -d pandapages"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -45,20 +45,18 @@ services:
     restart: "no"
     labels:
       - traefik.enable=false
-    command:
-      [
-        "-dir", "/migrations",
-        "postgres",
-        "postgres://pandapages:${PG_PASSWORD}@postgres:5432/pandapages?sslmode=disable",
-        "up"
-      ]
+    environment:
+      GOOSE_DRIVER: postgres
+      GOOSE_DBSTRING: ${MIGRATION_DATABASE_URL:?MIGRATION_DATABASE_URL must use the dedicated migration role}
+      GOOSE_MIGRATION_DIR: /migrations
+    command: ["up"]
 
   api:
     build:
       context: ./apps/api
       target: dev
     environment:
-      DATABASE_URL: postgres://pandapages:${PG_PASSWORD}@postgres:5432/pandapages?sslmode=disable
+      DATABASE_URL: ${APP_DATABASE_URL:?APP_DATABASE_URL must use the dedicated application role}
       PP_ASSET_DIR: /data/assets
       PP_PASSCODE: ${PP_PASSCODE}
       PP_SESSION_SECRET: ${PP_SESSION_SECRET}
@@ -70,6 +68,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     networks: [web, internal]
     labels:
       - traefik.enable=true
