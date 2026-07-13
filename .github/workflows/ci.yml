@@ -141,6 +141,16 @@ jobs:
             exit 1
           fi
 
+      - name: Validate operations scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n \
+            scripts/postgresql-readonly-audit.sh \
+            scripts/postgresql-restore-rehearsal.sh
+          scripts/postgresql-readonly-audit.sh --help >/dev/null
+          scripts/postgresql-restore-rehearsal.sh --help >/dev/null
+
       - name: Check changed-line whitespace
         shell: bash
         env:
