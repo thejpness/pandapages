@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"pandapages/api/internal/model"
@@ -183,5 +184,20 @@ func TestAdminDraftImportAcceptsUTF8PlainText(t *testing.T) {
 	}
 	if store.draftRequest.Markdown != markdown {
 		t.Fatalf("UTF-8 markdown changed: got %q, want %q", store.draftRequest.Markdown, markdown)
+	}
+}
+
+func TestAdminDraftRejectsOversizedBody(t *testing.T) {
+	store := &fakeAdminStore{}
+	body := []byte(`{"slug":"large-story","title":"Large Story","markdown":"` +
+		strings.Repeat("x", maxJSONBodyBytes) + `"}`)
+
+	rec := serveAdmin(t, store, http.MethodPost, "/api/v1/admin/stories/draft", body, "1", testAccount, testAdminKey)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusRequestEntityTooLarge, rec.Body.String())
+	}
+	if store.draftCalls != 0 {
+		t.Fatal("store called for oversized request")
 	}
 }

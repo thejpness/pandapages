@@ -89,7 +89,7 @@ watch(
     if (qTimer) window.clearTimeout(qTimer)
     qTimer = window.setTimeout(() => {
       const trimmed = v.trim()
-      router.replace({ path: '/library', query: trimmed ? { q: trimmed } : {} })
+      void router.replace({ path: '/library', query: trimmed ? { q: trimmed } : {} })
     }, 250)
   }
 )
@@ -161,28 +161,28 @@ const headerRecent = computed<HeaderRecent[]>(() => {
 /* ---------------- Actions ---------------- */
 
 function goStory(slug: string) {
-  router.push(`/read/${encodeURIComponent(slug)}`)
+  void router.push(`/read/${encodeURIComponent(slug)}`)
 }
 
 function goAdmin() {
-  router.push('/admin/upload')
+  void router.push('/admin/upload')
 }
 
 function goJourney() {
-  router.push('/journey')
+  void router.push('/journey')
 }
 
 function goRandom() {
   const list = filtered.value
   if (!list.length) return
   haptic('light')
-  const pick = list[Math.floor(Math.random() * list.length)]!
+  const pick = list[Math.floor(Math.random() * list.length)]
   goStory(pick.slug)
 }
 
 function clearSearch() {
   q.value = ''
-  router.replace({ path: '/library', query: {} })
+  void router.replace({ path: '/library', query: {} })
   headerRef.value?.focusSearch()
 }
 
@@ -193,7 +193,7 @@ function scrollTop() {
 function openTopResult() {
   const list = filtered.value
   if (!list.length) return
-  goStory(list[0]!.slug)
+  goStory(list[0].slug)
 }
 
 function openInfo(slug: string) {
@@ -261,11 +261,11 @@ async function load() {
     loading.value = false
   }
 
-  loadSettings()
+  void loadSettings()
 }
 
 onMounted(() => {
-  load()
+  void load()
   window.addEventListener('keydown', onKey)
   window.addEventListener('scroll', onScroll, { passive: true })
   onScroll()

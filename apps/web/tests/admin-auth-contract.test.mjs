@@ -1,18 +1,14 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
-import { transformWithEsbuild } from 'vite'
+import { transformWithOxc } from 'vite'
 
 const apiSourceURL = new URL('../src/lib/api.ts', import.meta.url)
 
 async function loadAPI() {
   const source = await readFile(apiSourceURL, 'utf8')
   const testableSource = source.replaceAll('import.meta.env.VITE_API_BASE', "''")
-  const transformed = await transformWithEsbuild(testableSource, 'api.ts', {
-    loader: 'ts',
-    format: 'esm',
-    target: 'es2022',
-  })
+  const transformed = await transformWithOxc(testableSource, 'api.ts')
   const moduleURL =
     'data:text/javascript;base64,' +
     Buffer.from(transformed.code).toString('base64') +
@@ -122,4 +118,32 @@ test('Compose keeps browser credentials out and proxy credentials server-side', 
     /pandapages-dev-admin-key\.headers\.customrequestheaders\.X-PP-Admin-Key=/
   )
   assert.doesNotMatch(developmentCompose, /VITE_ADMIN_KEY/)
+})
+
+test('PWA caches static assets only and protected routes are split', async () => {
+  const viteConfig = await readFile(
+    new URL('../vite.config.ts', import.meta.url),
+    'utf8'
+  )
+
+  assert.match(viteConfig, /loadEnv\(mode, process\.cwd\(\), 'VITE_'\)/)
+  assert.match(viteConfig, /cleanupOutdatedCaches: true/)
+  assert.doesNotMatch(viteConfig, /runtimeCaching/)
+  assert.doesNotMatch(viteConfig, /api-content/)
+  assert.doesNotMatch(viteConfig, /\/api\/v1\/library/)
+
+  const routerSource = await readFile(
+    new URL('../src/router.ts', import.meta.url),
+    'utf8'
+  )
+  assert.doesNotMatch(routerSource, /^import (Reader|Journey|Admin)/m)
+  for (const modulePath of [
+    './views/Reader.vue',
+    './views/Journey.vue',
+    './views/admin/AdminLayout.vue',
+    './views/admin/AdminUpload.vue',
+    './views/admin/AdminAI.vue',
+  ]) {
+    assert.ok(routerSource.includes(`import('${modulePath}')`))
+  }
 })

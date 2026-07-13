@@ -1,11 +1,11 @@
 module pandapages/api
 
-go 1.25.5
+go 1.26.5
 
 require (
-	github.com/jackc/pgx/v5 v5.7.6
-	github.com/yuin/goldmark v1.7.13
-	gopkg.in/yaml.v3 v3.0.1
+	github.com/jackc/pgx/v5 v5.10.0
+	github.com/yuin/goldmark v1.8.4
+	go.yaml.in/yaml/v3 v3.0.4
 )
 
 require (
@@ -14,7 +14,6 @@ require (
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
-	golang.org/x/crypto v0.37.0 // indirect
-	golang.org/x/sync v0.13.0 // indirect
-	golang.org/x/text v0.24.0 // indirect
+	golang.org/x/sync v0.22.0 // indirect
+	golang.org/x/text v0.40.0 // indirect
 )

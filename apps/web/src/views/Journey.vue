@@ -1,9 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { getSettings, saveSettings, type SettingsPayload } from '../lib/api'
+import { getSettings, isJsonObject, saveSettings, type SettingsPayload } from '../lib/api'
 
 const router = useRouter()
+
+function storedRuleValue(value: unknown): unknown {
+  return isJsonObject(value) && value.value != null ? value.value : value
+}
 
 const saving = ref(false)
 const savedMsg = ref<string | null>(null)
@@ -81,17 +85,31 @@ async function load() {
     interests.value = Array.isArray(s.child?.interests) ? [...s.child.interests] : []
     sensitivities.value = Array.isArray(s.child?.sensitivities) ? [...s.child.sensitivities] : []
 
-    const rules: any = s.prompt?.rules || {}
-    if (rules && typeof rules === 'object') {
-      // tolerate older shapes if you ever stored { value: "calm" }
-      const t = rules.tone?.value ?? rules.tone
-      const g = rules.genre?.value ?? rules.genre
-      const c = rules.complexity?.value ?? rules.complexity
+    const rules = s.prompt.rules
+    // Tolerate older shapes such as { value: "calm" }.
+    const t = storedRuleValue(rules.tone)
+    const g = storedRuleValue(rules.genre)
+    const c = storedRuleValue(rules.complexity)
 
-      if (t) tone.value = t
-      if (g) genre.value = g
-      if (c) complexity.value = c
-      if (rules.readingTimeMinutes != null) minutes.value = Number(rules.readingTimeMinutes)
+    if (t === 'calm' || t === 'funny' || t === 'adventurous' || t === 'cosy') {
+      tone.value = t
+    }
+    if (
+      g === 'bedtime' ||
+      g === 'animals' ||
+      g === 'space' ||
+      g === 'fantasy' ||
+      g === 'everyday'
+    ) {
+      genre.value = g
+    }
+    if (c === 'simple' || c === 'growing' || c === 'chaptery') {
+      complexity.value = c
+    }
+    const readingTime = rules.readingTimeMinutes
+    if (typeof readingTime === 'number' || typeof readingTime === 'string') {
+      const parsed = Number(readingTime)
+      if (Number.isFinite(parsed)) minutes.value = parsed
     }
   } catch {
     // ok in v1 if no rows yet
@@ -134,15 +152,15 @@ async function persist() {
 
     savedMsg.value = 'Saved.'
     step.value = 3
-  } catch (e: any) {
-    errMsg.value = e?.message || 'Save failed.'
+  } catch (error) {
+    errMsg.value = error instanceof Error && error.message ? error.message : 'Save failed.'
   } finally {
     saving.value = false
   }
 }
 
 function goLibrary() {
-  router.push('/library')
+  void router.push('/library')
 }
 
 onMounted(load)

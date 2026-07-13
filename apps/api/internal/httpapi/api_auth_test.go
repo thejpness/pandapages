@@ -92,3 +92,16 @@ func TestUnlockSetsSecureHostOnlyCookiesForAllRoutes(t *testing.T) {
 		}
 	}
 }
+
+func TestUnlockRejectsOversizedBody(t *testing.T) {
+	handler := New(Config{Passcode: "123456"}, authTestStore{})
+	body := `{"passcode":"` + strings.Repeat("0", maxJSONBodyBytes) + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/unlock", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusRequestEntityTooLarge, rec.Body.String())
+	}
+}

@@ -1,6 +1,6 @@
 services:
   traefik:
-    image: traefik:v3.2
+    image: traefik:v3.7.7@sha256:1cb3845d7a05e1473c9086351426597e911db49db382b6e4769f9b0744962ac8
     command:
       - --api.dashboard=true
       - --api.insecure=true
@@ -9,7 +9,7 @@ services:
       - --entrypoints.web.address=:80
     ports:
       - "80:80"
-      - "8080:8080" # Traefik dashboard (dev only)
+      - "127.0.0.1:8080:8080" # Traefik dashboard (dev only)
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks: [web]
@@ -84,7 +84,7 @@ services:
       - traefik.http.routers.api.priority=100
       - traefik.http.services.api.loadbalancer.server.port=8080
     ports:
-      - "8081:8080" # debug: direct access to API (bypass Traefik). Remove once stable.
+      - "127.0.0.1:8081:8080" # debug: direct access to API (bypass Traefik). Remove once stable.
 
   web:
     build:

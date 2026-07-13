@@ -75,12 +75,25 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: "22"
+          node-version-file: apps/web/.nvmrc
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
 
+      - name: Set up pinned npm
+        working-directory: .
+        run: |
+          npm install --global --no-audit --no-fund npm@12.0.1
+          test "$(node --version)" = "v24.18.0"
+          test "$(npm --version)" = "12.0.1"
+
       - name: Install locked frontend dependencies
         run: npm ci
+
+      - name: Lint frontend
+        run: npm run lint
+
+      - name: Type-check frontend
+        run: npm run typecheck
 
       - name: Run frontend tests
         run: npm test
@@ -205,3 +218,14 @@ jobs:
           build-args: VITE_API_BASE=
           cache-from: type=gha,scope=pandapages-web
           cache-to: type=gha,mode=max,scope=pandapages-web,ignore-error=true
+
+      - name: Build migration image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: apps/api
+          file: apps/api/Dockerfile
+          target: migrate
+          push: false
+          tags: pandapages-migrate:ci
+          cache-from: type=gha,scope=pandapages-migrate
+          cache-to: type=gha,mode=max,scope=pandapages-migrate,ignore-error=true

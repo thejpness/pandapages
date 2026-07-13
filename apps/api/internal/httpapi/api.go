@@ -73,7 +73,7 @@ func New(cfg Config, store Store) http.Handler {
 			Passcode string `json:"passcode"`
 		}
 		if err := decodeJSON(w, r, &body); err != nil {
-			writeErr(w, http.StatusBadRequest, "bad_json", err.Error())
+			writeDecodeError(w, err)
 			return
 		}
 
@@ -246,7 +246,7 @@ func New(cfg Config, store Store) http.Handler {
 				Percent float64         `json:"percent"`
 			}
 			if err := decodeJSON(w, r, &body); err != nil {
-				writeErr(w, http.StatusBadRequest, "bad_json", err.Error())
+				writeDecodeError(w, err)
 				return
 			}
 			if body.Version <= 0 {
@@ -335,7 +335,7 @@ func New(cfg Config, store Store) http.Handler {
 		case http.MethodPut:
 			var body model.SettingsUpsert
 			if err := decodeJSON(w, r, &body); err != nil {
-				writeErr(w, http.StatusBadRequest, "bad_json", err.Error())
+				writeDecodeError(w, err)
 				return
 			}
 			out, err := store.SettingsPut(accountID, body)
@@ -408,6 +408,15 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 		return errors.New("unexpected extra json")
 	}
 	return nil
+}
+
+func writeDecodeError(w http.ResponseWriter, err error) {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		writeErr(w, http.StatusRequestEntityTooLarge, "body_too_large", "request body too large")
+		return
+	}
+	writeErr(w, http.StatusBadRequest, "bad_json", err.Error())
 }
 
 func writeErr(w http.ResponseWriter, status int, code string, msg string) {
