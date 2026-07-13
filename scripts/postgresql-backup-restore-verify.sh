@@ -210,7 +210,7 @@ if grep -Eq "(SCRAM-SHA-256\\\$|md5[0-9a-f]{32}|PASSWORD[[:space:]]+'[^']+)" \
 fi
 
 report_dir="$workdir/rehearsal-report"
-if ! "$restore_script" \
+if ! TMPDIR="$tmp_parent" "$restore_script" \
   --dump "$bundle_dir/database.dump" \
   --report-dir "$report_dir" \
   --expected-row-counts "$bundle_dir/expectations/row-counts.tsv" \

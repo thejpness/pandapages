@@ -229,6 +229,8 @@ creating a dump:
 ```bash
 sudo systemd-run --wait --pipe \
   --property=EnvironmentFile=/etc/pandapages/postgresql-backup.env \
+  --property=RuntimeDirectory=pandapages-postgresql-backup \
+  --property=RuntimeDirectoryMode=0750 \
   /opt/pandapages/scripts/postgresql-backup.sh --dry-run
 ```
 
@@ -258,6 +260,14 @@ inner checksums, and invokes
 `postgresql-restore-rehearsal.sh`. Its PostgreSQL container, internal network,
 new volume, password file, decrypted dump, and report directory are removed on
 success or failure. It never restores globals into the disposable target.
+
+The backup and restore units retain `PrivateTmp=true`. Temporary backup,
+decryption, and restore-secret files therefore use the host-visible, ephemeral
+systemd runtime directory `/run/pandapages-postgresql-backup`, not `/tmp` or
+`/var/tmp`. This is required because the host Docker daemon resolves bind-mount
+sources outside the service's private temporary-file namespace. The restore
+wrapper also overrides `TMPDIR` for the rehearsal so its generated password
+file remains in that protected runtime directory.
 
 ### Status and freshness
 

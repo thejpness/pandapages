@@ -144,8 +144,9 @@ fake_bin="$test_root/bin"
 remote_root="$test_root/remote"
 state_dir="$test_root/state"
 lock_dir="$test_root/lock"
-tmp_parent="$test_root/tmp"
-mkdir -p "$fake_bin" "$remote_root/postgresql" "$state_dir" "$lock_dir" "$tmp_parent"
+tmp_parent="$test_root/runtime"
+poison_tmp="$test_root/private-tmp"
+mkdir -p "$fake_bin" "$remote_root/postgresql" "$state_dir" "$lock_dir" "$tmp_parent" "$poison_tmp"
 
 cat >"$fake_bin/age" <<'EOF'
 #!/usr/bin/env bash
@@ -247,6 +248,7 @@ chmod 0600 "$rclone_config" "$recipients_file" "$identities_file"
 
 environment=(
   "PATH=$fake_bin:$PATH"
+  "TMPDIR=$poison_tmp"
   "FAKE_REMOTE_ROOT=$remote_root"
   "PP_BACKUP_POSTGRES_CONTAINER=$source_container"
   "PP_BACKUP_DATABASE=pandapages_test"
@@ -300,7 +302,8 @@ after_rehearsal_resources="$test_root/after-rehearsal-resources"
 docker ps -aq --filter label=com.pandapages.disposable=restore-rehearsal | sort \
   >"$after_rehearsal_resources"
 diff -u "$before_rehearsal_resources" "$after_rehearsal_resources"
-if compgen -G "$tmp_parent/pandapages-postgresql-*" >/dev/null; then
+if compgen -G "$tmp_parent/pandapages-postgresql-*" >/dev/null ||
+  compgen -G "$tmp_parent/pandapages-pg-restore-secret.*" >/dev/null; then
   printf 'Backup or restore plaintext temporary directory remained\n' >&2
   exit 1
 fi
