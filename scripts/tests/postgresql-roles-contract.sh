@@ -6,7 +6,7 @@ umask 077
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 cd "$repo_root"
 
-for command_name in docker jq mktemp rg; do
+for command_name in docker git grep jq mktemp; do
   command -v "$command_name" >/dev/null 2>&1 || {
     printf 'Required command is unavailable: %s\n' "$command_name" >&2
     exit 1
@@ -110,18 +110,18 @@ if MIGRATION_DATABASE_URL='' APP_DATABASE_URL="$app_url" \
 fi
 printf 'ok 4 - empty runtime and migration credentials also fail closed\n'
 
-if rg -n 'MIGRATION_DATABASE_URL|APP_DATABASE_URL|PP_BACKUP_DATABASE_USER' apps/web >/dev/null; then
+if git grep -n -E 'MIGRATION_DATABASE_URL|APP_DATABASE_URL|PP_BACKUP_DATABASE_USER' -- apps/web >/dev/null; then
   printf 'A database credential contract leaked into frontend source\n' >&2
   exit 1
 fi
-if rg -n 'MIGRATION_DATABASE_URL|APP_DATABASE_URL' apps/api --glob '*.go' >/dev/null; then
+if git grep -n -E 'MIGRATION_DATABASE_URL|APP_DATABASE_URL' -- ':(glob)apps/api/**/*.go' >/dev/null; then
   printf 'The API source reads host-side migration or application URL names directly\n' >&2
   exit 1
 fi
-rg -q 'os.Getenv\("DATABASE_URL"\)' apps/api/cmd/api/main.go
+git grep -q -F 'os.Getenv("DATABASE_URL")' -- apps/api/cmd/api/main.go
 printf 'ok 5 - frontend has no database credentials and API accepts only its container-scoped URL\n'
 
-if rg -n 'PP_BACKUP_GLOBALS_USER|pg_read_all_data' \
+if git grep -n -E 'PP_BACKUP_GLOBALS_USER|pg_read_all_data' -- \
   scripts/postgresql-backup.sh deploy/postgresql-backup/postgresql-backup.env.example >/dev/null; then
   printf 'Backup automation still depends on a bootstrap user or cluster-wide read role\n' >&2
   exit 1
