@@ -10,7 +10,9 @@ Read the measured storage evidence and migration decision in
 [postgresql-18-storage-audit.md](postgresql-18-storage-audit.md) first.
 
 The proposed scheduled, encrypted, off-host implementation is documented in
-[postgresql-automated-backups.md](postgresql-automated-backups.md). Its
+[postgresql-automated-backups.md](postgresql-automated-backups.md). The
+least-privilege source and recovery role model is in
+[postgresql-least-privilege-roles.md](postgresql-least-privilege-roles.md). The backup
 recovery targets do not become established until deployment and verification.
 
 ## Current recovery posture
@@ -79,6 +81,8 @@ ssh <PRODUCTION_SSH_ALIAS> \
     --username=<DATABASE_ROLE> \
     --dbname=<DATABASE_NAME> \
     --format=custom \
+    --schema=public \
+    --extension=pgcrypto \
     --compress=zstd:6 \
     --no-owner \
     --no-acl \
@@ -119,11 +123,11 @@ chmod 0600 "$backup_dir/globals-no-passwords.sql.sha256"
 ```
 
 Review this file before restore. It can contain privileged role definitions and
-tablespace paths even though passwords are omitted. The current deployment has
-one non-system role, `pandapages`, with bootstrap superuser capabilities and no
-external tablespaces. Reproducing those capabilities during disaster recovery
-preserves current behavior; reducing them is a separate, tested security
-migration.
+tablespace paths even though passwords are omitted. The reviewed target model
+uses `pandapages_owner`, `pandapages_migrator`, `pandapages_app`, and
+`pandapages_backup`; restore those attributes and memberships without password
+verifiers, then set fresh login credentials through the protected secret path.
+Do not blindly recreate the legacy bootstrap superuser as an application login.
 
 ### Backup verification
 
@@ -181,12 +185,13 @@ Do not run `docker compose down`, `docker volume rm`, or a current production
 Compose command as part of target creation. Record the new volume ID and verify
 through `docker inspect` that it is not the live volume before proceeding.
 
-The official image bootstrap role is a superuser. For an exact recovery, use
-the recovered role definition or bootstrap the existing `pandapages` role and
-set its password interactively/from the approved secret source. Never pass the
-password on a command line. If a least-privilege owner/migrator/application role
-split is desired, implement and test that separately rather than during an
-emergency restore.
+The official image bootstrap role is a superuser and is used only to establish
+the reviewed roles on the isolated target. Apply the idempotent policy from
+`deploy/postgresql-roles` before connecting an application. Set fresh login
+passwords interactively or through the approved secret source; never pass a
+password on a command line. The restored API must use `pandapages_app`, Goose
+must use `pandapages_migrator`, and backup automation must use
+`pandapages_backup`.
 
 ### Restore globals, schema, and data
 
@@ -203,6 +208,8 @@ emergency restore.
 docker exec <NEW_TARGET_CONTAINER> pg_restore \
   --username=<RESTORED_OWNER_ROLE> \
   --dbname=<EMPTY_TARGET_DATABASE> \
+  --clean \
+  --if-exists \
   --no-owner \
   --no-privileges \
   --exit-on-error \
