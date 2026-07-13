@@ -20,8 +20,9 @@ fake_bin="$test_root/bin"
 remote_root="$test_root/remote"
 state_dir="$test_root/state"
 lock_dir="$test_root/lock"
-tmp_parent="$test_root/tmp"
-mkdir -p "$fake_bin" "$remote_root" "$state_dir" "$lock_dir" "$tmp_parent"
+tmp_parent="$test_root/runtime"
+poison_tmp="$test_root/private-tmp"
+mkdir -p "$fake_bin" "$remote_root" "$state_dir" "$lock_dir" "$tmp_parent" "$poison_tmp"
 
 cat >"$fake_bin/docker" <<'EOF'
 #!/usr/bin/env bash
@@ -225,13 +226,18 @@ cat >"$fake_bin/fake-restore" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 report_dir=""
+dump_path=""
 while (($# > 0)); do
   case "$1" in
     --report-dir)
       report_dir=${2:?}
       shift 2
       ;;
-    --dump|--expected-row-counts|--expected-metadata-dir|--image)
+    --dump)
+      dump_path=${2:?}
+      shift 2
+      ;;
+    --expected-row-counts|--expected-metadata-dir|--image)
       shift 2
       ;;
     *)
@@ -239,6 +245,10 @@ while (($# > 0)); do
       ;;
   esac
 done
+[[ ${TMPDIR:-} == ${PP_BACKUP_TMP_PARENT:?} ]]
+[[ -d "$TMPDIR" ]]
+[[ "$dump_path" == "$TMPDIR"/* ]]
+[[ "$report_dir" == "$TMPDIR"/* ]]
 mkdir -p "$report_dir"
 printf '%s\n' result=success cleanup=complete >"$report_dir/summary.txt"
 EOF
@@ -255,6 +265,7 @@ chmod 0600 "$rclone_config" "$recipients_file" "$identities_file"
 
 base_environment=(
   "PATH=$fake_bin:$PATH"
+  "TMPDIR=$poison_tmp"
   "FAKE_REMOTE_ROOT=$remote_root"
   "PP_BACKUP_POSTGRES_CONTAINER=test-postgres"
   "PP_BACKUP_DATABASE=pandapages_test"
@@ -283,7 +294,8 @@ fail() {
 }
 
 assert_no_plaintext_temp() {
-  if compgen -G "$tmp_parent/pandapages-postgresql-*" >/dev/null; then
+  if compgen -G "$tmp_parent/pandapages-postgresql-*" >/dev/null ||
+    compgen -G "$tmp_parent/pandapages-pg-restore-secret.*" >/dev/null; then
     fail "temporary plaintext directory remained"
   fi
 }
@@ -299,7 +311,7 @@ run_backup() {
   env "${base_environment[@]}" "PP_BACKUP_TEST_NOW_UTC=$timestamp" "$@" "$backup_script"
 }
 
-printf '1..13\n'
+printf '1..14\n'
 
 reset_remote
 if ! run_backup 20260713T031700Z >"$test_root/success.out" 2>"$test_root/success.err"; then
@@ -443,3 +455,16 @@ env -u PP_BACKUP_NOTIFY_CURL_CONFIG "$notify_script" --unit test-backup.service 
 grep -q 'notification_hook=not_configured' "$test_root/notify.err" ||
   fail "provider-neutral notification fallback"
 pass "notification fallback remains visible in root-only scheduler logs"
+
+configured_tmp_parent=$(awk -F= '$1 == "PP_BACKUP_TMP_PARENT" { print $2 }' \
+  "$repo_root/deploy/postgresql-backup/postgresql-backup.env.example")
+restore_unit="$repo_root/deploy/systemd/pandapages-postgresql-restore-verify.service"
+[[ "$configured_tmp_parent" == /run/pandapages-postgresql-backup ]] ||
+  fail "systemd host-visible temporary directory contract"
+grep -qx 'PrivateTmp=true' "$restore_unit" ||
+  fail "systemd host-visible temporary directory contract"
+grep -qx 'RuntimeDirectory=pandapages-postgresql-backup' "$restore_unit" ||
+  fail "systemd host-visible temporary directory contract"
+grep -q '^ReadWritePaths=.* /run/pandapages-postgresql-backup$' "$restore_unit" ||
+  fail "systemd host-visible temporary directory contract"
+pass "restore keeps PrivateTmp while Docker bind sources use the managed runtime directory"
