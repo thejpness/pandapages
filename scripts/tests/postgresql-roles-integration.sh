@@ -119,6 +119,22 @@ done
   exit 1
 }
 
+database_ready=false
+for ((attempt = 0; attempt < 30; attempt++)); do
+  if docker exec "$source_container" \
+    psql -X --username="$admin_user" --dbname="$database" \
+    --set=ON_ERROR_STOP=1 --tuples-only --command='SELECT 1;' \
+    >/dev/null 2>&1; then
+    database_ready=true
+    break
+  fi
+  sleep 1
+done
+[[ "$database_ready" == true ]] || {
+  printf 'Generated PostgreSQL database did not become connectable\n' >&2
+  exit 1
+}
+
 apply_policy() {
   "$role_script" apply \
     --container "$source_container" \
@@ -158,11 +174,15 @@ expect_denied() {
 
 printf '1..12\n'
 
+"$role_script" audit \
+  --container "$source_container" \
+  --database "$database" \
+  --admin-user "$admin_user" >/dev/null
 apply_policy
 identity=$(psql_as "$migration_role" --tuples-only --no-align \
   --command="SELECT session_user || '|' || current_user;")
 [[ "$identity" == "$migration_role|$owner_role" ]]
-printf 'ok 1 - non-superuser migrator assumes only the NOLOGIN owner\n'
+printf 'ok 1 - pre-apply audit accepts absent roles and the migrator assumes only the NOLOGIN owner\n'
 
 docker exec -i "$source_container" \
   psql -X --username="$admin_user" --dbname="$database" --set=ON_ERROR_STOP=1 <<SQL >/dev/null
