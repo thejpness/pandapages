@@ -49,9 +49,9 @@ case ${1:-} in
         [[ "$export_statement" == 'SELECT pg_export_snapshot();' ]]
         printf '00000003-0000001B-1\n'
         cat >/dev/null
-      elif [[ "$arguments" == *"pg_read_all_data"* ]]; then
+      elif [[ "$arguments" == *"role_policy_ok"* ]]; then
         [[ ${FAKE_ROLE_CONNECTION_FAIL:-false} != true ]] || exit 1
-        printf '%s\n' "${FAKE_ROLE_CHECK:-pandapages_backup|false|true|true}"
+        printf '%s\n' "${FAKE_ROLE_CHECK:-pandapages_backup|true}"
       elif [[ "$arguments" == *"SHOW server_version"* ]]; then
         printf '18.1\n'
       elif [[ "$arguments" == *"information_schema.schemata"* ]]; then
@@ -259,7 +259,6 @@ base_environment=(
   "PP_BACKUP_POSTGRES_CONTAINER=test-postgres"
   "PP_BACKUP_DATABASE=pandapages_test"
   "PP_BACKUP_DATABASE_USER=pandapages_backup"
-  "PP_BACKUP_GLOBALS_USER=application_owner"
   "PP_BACKUP_REMOTE=fake:postgresql"
   "PP_BACKUP_RCLONE_CONFIG=$rclone_config"
   "PP_BACKUP_AGE_RECIPIENTS_FILE=$recipients_file"
