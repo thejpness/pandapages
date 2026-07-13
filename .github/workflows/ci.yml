@@ -146,10 +146,30 @@ jobs:
         run: |
           set -euo pipefail
           bash -n \
+            scripts/lib/postgresql-backup-common.sh \
+            scripts/postgresql-backup.sh \
+            scripts/postgresql-backup-healthcheck.sh \
+            scripts/postgresql-backup-notify.sh \
+            scripts/postgresql-backup-restore-verify.sh \
+            scripts/postgresql-backup-retention.sh \
             scripts/postgresql-readonly-audit.sh \
-            scripts/postgresql-restore-rehearsal.sh
+            scripts/postgresql-restore-rehearsal.sh \
+            scripts/tests/postgresql-backup-integration.sh \
+            scripts/tests/postgresql-backup-unit.sh
+          scripts/postgresql-backup.sh --help >/dev/null
+          scripts/postgresql-backup-healthcheck.sh --help >/dev/null
+          scripts/postgresql-backup-notify.sh --help >/dev/null
+          scripts/postgresql-backup-restore-verify.sh --help >/dev/null
+          scripts/postgresql-backup-retention.sh --help >/dev/null
           scripts/postgresql-readonly-audit.sh --help >/dev/null
           scripts/postgresql-restore-rehearsal.sh --help >/dev/null
+
+      - name: Test PostgreSQL backup automation with generated data
+        shell: bash
+        run: |
+          set -euo pipefail
+          scripts/tests/postgresql-backup-unit.sh
+          scripts/tests/postgresql-backup-integration.sh
 
       - name: Check changed-line whitespace
         shell: bash
