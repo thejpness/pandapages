@@ -1,0 +1,30 @@
+[Unit]
+Description=Report Panda Pages PostgreSQL backup failure for %i
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+EnvironmentFile=-/etc/pandapages/postgresql-backup.env
+ExecStart=/opt/pandapages/scripts/postgresql-backup-notify.sh --unit %i
+TimeoutStartSec=30s
+UMask=0077
+LogsDirectory=pandapages-postgresql-backup
+LogsDirectoryMode=0700
+StandardOutput=append:/var/log/pandapages-postgresql-backup/operations.log
+StandardError=append:/var/log/pandapages-postgresql-backup/operations.log
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true

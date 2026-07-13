@@ -14,6 +14,7 @@ Usage:
     --dump /private/path/database.dump \
     --report-dir /private/path/rehearsal-report \
     [--expected-row-counts /private/path/row-counts.tsv] \
+    [--expected-metadata-dir /private/path/expectations] \
     [--image postgres:18.1-alpine@sha256:...] \
     [--dry-run]
 
@@ -24,12 +25,17 @@ volume. The report directory must be outside a Git worktree.
 
 Expected row counts use one sorted record per line:
   public.stories|6
+
+The optional metadata directory must contain schemas.tsv, tables.tsv,
+extensions.tsv, sequences.tsv, and structural-summary.tsv as emitted by
+postgresql-backup.sh.
 EOF
 }
 
 dump_path=""
 report_dir=""
 expected_row_counts=""
+expected_metadata_dir=""
 image=$default_image
 dry_run=false
 
@@ -45,6 +51,10 @@ while (($# > 0)); do
       ;;
     --expected-row-counts)
       expected_row_counts=${2:?missing value for --expected-row-counts}
+      shift 2
+      ;;
+    --expected-metadata-dir)
+      expected_metadata_dir=${2:?missing value for --expected-metadata-dir}
       shift 2
       ;;
     --image)
@@ -102,6 +112,20 @@ if [[ -n "$expected_row_counts" ]]; then
     printf 'Expected row-count manifest has an invalid record\n' >&2
     exit 1
   fi
+fi
+
+if [[ -n "$expected_metadata_dir" ]]; then
+  expected_metadata_dir=$(realpath -e "$expected_metadata_dir")
+  if [[ ! -d "$expected_metadata_dir" || -L "$expected_metadata_dir" ]]; then
+    printf 'Expected metadata path is not a non-symlink directory: %s\n' "$expected_metadata_dir" >&2
+    exit 1
+  fi
+  for expectation_file in schemas.tsv tables.tsv extensions.tsv sequences.tsv structural-summary.tsv; do
+    if [[ ! -f "$expected_metadata_dir/$expectation_file" || -L "$expected_metadata_dir/$expectation_file" ]]; then
+      printf 'Expected metadata file is missing or unsafe: %s\n' "$expectation_file" >&2
+      exit 1
+    fi
+  done
 fi
 
 mkdir -p "$report_dir"
@@ -340,6 +364,65 @@ WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
 ORDER BY schemaname, tablename
 \gexec
 SQL
+docker exec -i "$container_name" \
+  psql -X --username="$target_user" --dbname="$target_database" \
+  --set=ON_ERROR_STOP=1 --tuples-only --no-align <<'SQL' >"$report_dir/actual-schemas.tsv"
+SELECT schema_name
+FROM information_schema.schemata
+WHERE schema_name NOT IN ('pg_catalog', 'information_schema')
+  AND schema_name !~ '^pg_toast'
+ORDER BY schema_name;
+SQL
+
+docker exec -i "$container_name" \
+  psql -X --username="$target_user" --dbname="$target_database" \
+  --set=ON_ERROR_STOP=1 --tuples-only --no-align <<'SQL' >"$report_dir/actual-tables.tsv"
+SELECT schemaname || '.' || tablename
+FROM pg_tables
+WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+ORDER BY schemaname, tablename;
+SQL
+
+docker exec -i "$container_name" \
+  psql -X --username="$target_user" --dbname="$target_database" \
+  --set=ON_ERROR_STOP=1 --tuples-only --no-align <<'SQL' >"$report_dir/actual-extensions.tsv"
+SELECT extname || '|' || extversion
+FROM pg_extension
+ORDER BY extname;
+SQL
+
+docker exec -i "$container_name" \
+  psql -X --username="$target_user" --dbname="$target_database" \
+  --set=ON_ERROR_STOP=1 --tuples-only --no-align <<'SQL' >"$report_dir/actual-sequences.tsv"
+SELECT schemaname || '.' || sequencename || '|' || COALESCE(last_value::text, '<unavailable>')
+FROM pg_sequences
+WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+ORDER BY schemaname, sequencename;
+SQL
+
+docker exec -i "$container_name" \
+  psql -X --username="$target_user" --dbname="$target_database" \
+  --set=ON_ERROR_STOP=1 --tuples-only --no-align <<'SQL' >"$report_dir/actual-structural-summary.tsv"
+SELECT 'foreign_keys|' || count(*)::text || '|' || COALESCE(bool_and(convalidated), true)::text
+FROM pg_constraint
+WHERE contype = 'f'
+UNION ALL
+SELECT 'indexes|' || count(*)::text || '|' || COALESCE(bool_and(indisvalid AND indisready), true)::text
+FROM pg_index
+JOIN pg_class ON pg_class.oid = indexrelid
+JOIN pg_namespace ON pg_namespace.oid = pg_class.relnamespace
+WHERE pg_namespace.nspname NOT IN ('pg_catalog', 'information_schema')
+UNION ALL
+SELECT 'utf8_multibyte_story_versions|' || count(*)::text || '|true'
+FROM story_versions
+WHERE octet_length(markdown) > char_length(markdown)
+UNION ALL
+SELECT 'utf8_roundtrip_failures|' || count(*)::text || '|true'
+FROM story_versions
+WHERE markdown <> convert_from(convert_to(markdown, 'UTF8'), 'UTF8')
+ORDER BY 1;
+SQL
+
 
 LC_ALL=C sort -o "$report_dir/actual-row-counts.tsv" "$report_dir/actual-row-counts.tsv"
 
@@ -350,6 +433,19 @@ if [[ -n "$expected_row_counts" ]]; then
     "$report_dir/actual-row-counts.tsv" \
     >"$report_dir/row-counts.diff"
 fi
+if [[ -n "$expected_metadata_dir" ]]; then
+  for expectation_name in schemas tables extensions sequences structural-summary; do
+    LC_ALL=C sort "$expected_metadata_dir/$expectation_name.tsv" \
+      >"$report_dir/expected-$expectation_name.tsv"
+    LC_ALL=C sort -o "$report_dir/actual-$expectation_name.tsv" \
+      "$report_dir/actual-$expectation_name.tsv"
+    diff -u \
+      "$report_dir/expected-$expectation_name.tsv" \
+      "$report_dir/actual-$expectation_name.tsv" \
+      >"$report_dir/$expectation_name.diff"
+  done
+fi
+
 
 validation_finished_ns=$(date +%s%N)
 total_finished_ns=$(date +%s%N)

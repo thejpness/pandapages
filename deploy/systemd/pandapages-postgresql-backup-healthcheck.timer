@@ -1,0 +1,12 @@
+[Unit]
+Description=Check Panda Pages PostgreSQL backup freshness twice daily
+
+[Timer]
+OnCalendar=*-*-* 09:00:00 UTC
+OnCalendar=*-*-* 21:00:00 UTC
+Persistent=true
+AccuracySec=1min
+Unit=pandapages-postgresql-backup-healthcheck.service
+
+[Install]
+WantedBy=timers.target

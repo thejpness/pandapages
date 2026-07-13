@@ -1,0 +1,11 @@
+[Unit]
+Description=Run a weekly Panda Pages PostgreSQL restore rehearsal
+
+[Timer]
+OnCalendar=Sun *-*-* 05:00:00 UTC
+Persistent=true
+AccuracySec=1min
+Unit=pandapages-postgresql-restore-verify.service
+
+[Install]
+WantedBy=timers.target
