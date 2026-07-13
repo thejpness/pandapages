@@ -30,9 +30,9 @@ systemd daily timer
   -> root-owned host script (flock + private temporary directory)
   -> docker exec against the existing PostgreSQL Unix socket
        -> one exported read-only database snapshot shared by:
-            -> pg_dump --format=custom as pandapages_backup
+            -> public-schema + pgcrypto custom dump as pandapages_backup
             -> aggregate restore expectations
-       -> pg_dumpall --globals-only --no-role-passwords as bootstrap role
+       -> pg_dumpall --globals-only --no-role-passwords as pandapages_backup
   -> deterministic tar bundle
   -> age client-side encryption
   -> rclone S3-compatible remote outside the VPS
@@ -155,31 +155,32 @@ repository update and a successful generated-data backup/restore test.
 
 ## Dedicated database role
 
-The database dump must use a dedicated non-superuser login that is a member of
-PostgreSQL's predefined `pg_read_all_data` role. The script verifies both
-conditions before dumping. The current application/bootstrap role is retained
-only for `pg_dumpall --globals-only --no-role-passwords`, because a complete
-globals dump requires broader cluster visibility. No password is accepted by
-the scripts or passed in process arguments; both commands use the container's
-local Unix-socket authentication contract.
+Both dumps use `pandapages_backup`, the dedicated role defined in
+[postgresql-least-privilege-roles.md](postgresql-least-privilege-roles.md).
+It is a non-superuser login with no memberships, database or schema ownership,
+write privileges, routine execution, or schema creation. It receives direct
+`SELECT` on public tables and sequences, `CONNECT` to `pandapages`, `USAGE` on
+`public`, and a database-specific read-only transaction default. It does not
+receive the broader `pg_read_all_data` predefined role.
 
-Creating the role is a production database change and therefore remains a
-deployment prerequisite requiring explicit approval. From an approved
-superuser session, the intended statements are:
+The custom archive is explicitly scoped to the application `public` schema
+plus `pgcrypto`. This keeps unrelated operator schemas outside the backup
+contract. `pg_dumpall --globals-only --no-role-passwords` uses the same backup
+login and includes visible role and global metadata without password verifiers.
+The legacy bootstrap superuser is never used by either timer.
 
-```sql
-CREATE ROLE pandapages_backup
-  LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOREPLICATION;
-GRANT pg_read_all_data TO pandapages_backup;
-GRANT CONNECT ON DATABASE pandapages TO pandapages_backup;
-```
+The backup script verifies this exact privilege shape before dumping: role
+attributes and memberships, target-database connect, public-schema usage,
+read access to every public table and sequence, and absence of write or
+sequence-update privileges. An unexpected or inaccessible schema is a policy
+review, not a reason to grant a cluster-wide role.
 
-Before enabling the timer, confirm through the container's local socket that
-the role can run the custom `pg_dump`, cannot create objects or roles, and
-cannot authenticate over a public network. PostgreSQL must remain unexposed.
-If the current HBA rules do not permit safe local authentication, stop and
-review a credential-file design; do not put a password in arguments or relax
-host authentication.
+No password is accepted by the script or passed in process arguments. The
+intended production contract uses the existing container-local Unix socket.
+If reviewed HBA rules require authentication, use a root-owned PostgreSQL
+passfile or equivalent protected secret and test it separately; do not put a
+password in arguments, the tracked environment example, or logs. PostgreSQL
+must remain unexposed.
 
 ## Deployment prerequisites requiring approval
 
@@ -193,7 +194,8 @@ None of these steps are performed by this pull request:
 4. Install and verify the pinned `age` and `rclone` binaries.
 5. Generate the age identity offline, escrow it separately, and install only
    the required identity/recipient files.
-6. Create and verify the dedicated PostgreSQL backup role.
+6. Apply and verify the reviewed least-privilege role policy, including the
+   dedicated backup role; follow its staged rollout and rollback runbook.
 7. Copy the example configuration files to `/etc/pandapages`, replace every
    placeholder, set owner `root:root`, and set mode `0600`.
 8. Copy the scripts to `/opt/pandapages/scripts` and units to
