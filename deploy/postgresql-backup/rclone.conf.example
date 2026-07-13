@@ -1,0 +1,10 @@
+# Install as /etc/pandapages/postgresql-backup-rclone.conf with mode 0600.
+# The endpoint and credentials are placeholders, not usable values.
+[s3-backups]
+type = s3
+provider = Other
+env_auth = false
+access_key_id = REPLACE_WITH_SCOPED_ACCESS_KEY
+secret_access_key = REPLACE_WITH_SCOPED_SECRET_KEY
+endpoint = https://REPLACE_WITH_S3_ENDPOINT
+acl = private

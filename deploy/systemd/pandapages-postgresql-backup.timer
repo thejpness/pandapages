@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the Panda Pages PostgreSQL backup every 24 hours
+
+[Timer]
+OnCalendar=*-*-* 03:17:00 UTC
+Persistent=true
+AccuracySec=1min
+Unit=pandapages-postgresql-backup.service
+
+[Install]
+WantedBy=timers.target

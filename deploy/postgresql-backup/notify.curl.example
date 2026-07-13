@@ -1,0 +1,6 @@
+# Optional. Install as /etc/pandapages/postgresql-backup-notify.curl with mode 0600.
+# curl reads the URL and any authorization header from this file so neither is
+# exposed in process arguments. Replace the non-routable example values.
+url = "https://monitoring.example.invalid/pandapages-postgresql"
+request = "POST"
+header = "Authorization: Bearer REPLACE_WITH_MONITORING_TOKEN"

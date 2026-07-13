@@ -1,0 +1,3 @@
+# Install as /etc/pandapages/postgresql-backup-age-recipients.txt with mode 0600.
+# Replace this comment with one or more real age public recipients.
+# age1REPLACE_WITH_PUBLIC_RECIPIENT
