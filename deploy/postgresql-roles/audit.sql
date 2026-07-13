@@ -38,9 +38,18 @@ ORDER BY member.rolname, granted.rolname;
 SELECT
   'database_access' AS record,
   database.datname,
-  has_database_privilege(:'application_role', database.oid, 'CONNECT') AS application_connect,
-  has_database_privilege(:'migration_role', database.oid, 'CONNECT') AS migration_connect,
-  has_database_privilege(:'backup_role', database.oid, 'CONNECT') AS backup_connect,
+  COALESCE(
+    has_database_privilege(to_regrole(:'application_role'), database.oid, 'CONNECT'),
+    false
+  ) AS application_connect,
+  COALESCE(
+    has_database_privilege(to_regrole(:'migration_role'), database.oid, 'CONNECT'),
+    false
+  ) AS migration_connect,
+  COALESCE(
+    has_database_privilege(to_regrole(:'backup_role'), database.oid, 'CONNECT'),
+    false
+  ) AS backup_connect,
   EXISTS (
     SELECT 1
     FROM aclexplode(COALESCE(database.datacl, acldefault('d', database.datdba))) privilege
@@ -55,9 +64,18 @@ SELECT
   'schema' AS record,
   namespace.nspname,
   pg_get_userbyid(namespace.nspowner) AS owner,
-  has_schema_privilege(:'application_role', namespace.oid, 'USAGE') AS application_usage,
-  has_schema_privilege(:'application_role', namespace.oid, 'CREATE') AS application_create,
-  has_schema_privilege(:'backup_role', namespace.oid, 'USAGE') AS backup_usage,
+  COALESCE(
+    has_schema_privilege(to_regrole(:'application_role'), namespace.oid, 'USAGE'),
+    false
+  ) AS application_usage,
+  COALESCE(
+    has_schema_privilege(to_regrole(:'application_role'), namespace.oid, 'CREATE'),
+    false
+  ) AS application_create,
+  COALESCE(
+    has_schema_privilege(to_regrole(:'backup_role'), namespace.oid, 'USAGE'),
+    false
+  ) AS backup_usage,
   EXISTS (
     SELECT 1
     FROM aclexplode(COALESCE(namespace.nspacl, acldefault('n', namespace.nspowner))) privilege
