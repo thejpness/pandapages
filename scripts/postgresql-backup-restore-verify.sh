@@ -56,7 +56,7 @@ backup_require_private_file "$age_identities" "age identities file"
   backup_die "restore rehearsal script is unavailable or not executable: $restore_script"
 [[ "$postgres_image" == *@sha256:* ]] || backup_die "PostgreSQL restore image must be pinned by digest"
 
-for command_name in age awk chmod diff docker flock grep head mkdir mktemp mv realpath rclone rm sha256sum sort stat tar; do
+for command_name in age awk chmod diff docker flock grep head mkdir mktemp mv realpath rclone rm sha256sum sort stat tail tar; do
   backup_require_command "$command_name"
 done
 backup_verify_tool_versions "$expected_age_version" "$expected_rclone_version"
@@ -217,6 +217,20 @@ if ! "$restore_script" \
   --expected-metadata-dir "$bundle_dir/expectations" \
   --image "$postgres_image" \
   >"$workdir/rehearsal.stdout"; then
+  for diagnostic in \
+    container.log \
+    restore.stderr.log \
+    row-counts.diff \
+    schemas.diff \
+    tables.diff \
+    extensions.diff \
+    sequences.diff \
+    structural-summary.diff; do
+    if [[ -s "$report_dir/$diagnostic" ]]; then
+      printf 'restore_diagnostic=%s\n' "$diagnostic" >&2
+      tail -n 40 "$report_dir/$diagnostic" >&2
+    fi
+  done
   backup_die "disposable restore verification failed"
 fi
 

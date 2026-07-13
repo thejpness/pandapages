@@ -19,9 +19,9 @@ expectations, encrypts the bundle with age, uploads it through an explicitly
 configured rclone remote, verifies the uploaded ciphertext, applies tiered
 retention, and records local success state.
 
-No database password is accepted by this script. The database dump role must
-be a dedicated non-superuser member of pg_read_all_data that can authenticate
-over the container's local Unix socket.
+No database password is accepted by this script. The database and globals dump
+use the same dedicated non-superuser role with explicit read-only grants. It
+authenticates over the container's local Unix socket.
 EOF
 }
 
@@ -46,7 +46,6 @@ done
 postgres_container=${PP_BACKUP_POSTGRES_CONTAINER:-}
 database=${PP_BACKUP_DATABASE:-}
 database_user=${PP_BACKUP_DATABASE_USER:-}
-globals_user=${PP_BACKUP_GLOBALS_USER:-}
 remote=${PP_BACKUP_REMOTE:-}
 rclone_config=${PP_BACKUP_RCLONE_CONFIG:-}
 age_recipients=${PP_BACKUP_AGE_RECIPIENTS_FILE:-}
@@ -64,7 +63,6 @@ for pair in \
   "PP_BACKUP_POSTGRES_CONTAINER:$postgres_container" \
   "PP_BACKUP_DATABASE:$database" \
   "PP_BACKUP_DATABASE_USER:$database_user" \
-  "PP_BACKUP_GLOBALS_USER:$globals_user" \
   "PP_BACKUP_REMOTE:$remote" \
   "PP_BACKUP_RCLONE_CONFIG:$rclone_config" \
   "PP_BACKUP_AGE_RECIPIENTS_FILE:$age_recipients"; do
@@ -75,9 +73,6 @@ done
   backup_die "invalid PostgreSQL container name"
 [[ "$database" =~ ^[A-Za-z_][A-Za-z0-9_.-]*$ ]] || backup_die "invalid database name"
 [[ "$database_user" =~ ^[A-Za-z_][A-Za-z0-9_.-]*$ ]] || backup_die "invalid database backup role"
-[[ "$globals_user" =~ ^[A-Za-z_][A-Za-z0-9_.-]*$ ]] || backup_die "invalid globals role"
-[[ "$database_user" != "$globals_user" ]] ||
-  backup_die "database and globals users must differ so the data dump uses a dedicated least-privilege role"
 backup_validate_remote "$remote"
 backup_require_private_file "$rclone_config" "rclone config"
 backup_require_private_file "$age_recipients" "age recipients file"
@@ -114,13 +109,55 @@ if ! role_check=$(docker exec \
   "$postgres_container" \
   psql -X --username="$database_user" --dbname="$database" \
   --set=ON_ERROR_STOP=1 --tuples-only --no-align \
-  --command="SELECT current_user || '|' || rolsuper::text || '|' || rolinherit::text || '|' || pg_has_role(current_user, 'pg_read_all_data', 'MEMBER')::text FROM pg_roles WHERE rolname = current_user;" \
+  --command="SELECT current_user || '|' || (
+    NOT role.rolsuper
+    AND NOT role.rolcreatedb
+    AND NOT role.rolcreaterole
+    AND NOT role.rolinherit
+    AND NOT role.rolreplication
+    AND NOT role.rolbypassrls
+    AND NOT EXISTS (
+      SELECT 1 FROM pg_auth_members membership WHERE membership.member = role.oid
+    )
+    AND has_database_privilege(current_user, current_database(), 'CONNECT')
+    AND has_schema_privilege(current_user, 'public', 'USAGE')
+    AND COALESCE((
+      SELECT bool_and(
+        has_table_privilege(current_user, class.oid, 'SELECT')
+        AND NOT has_table_privilege(current_user, class.oid, 'INSERT')
+        AND NOT has_table_privilege(current_user, class.oid, 'UPDATE')
+        AND NOT has_table_privilege(current_user, class.oid, 'DELETE')
+        AND NOT has_table_privilege(current_user, class.oid, 'TRUNCATE')
+        AND NOT has_table_privilege(current_user, class.oid, 'REFERENCES')
+        AND NOT has_table_privilege(current_user, class.oid, 'TRIGGER')
+        AND NOT has_table_privilege(current_user, class.oid, 'MAINTAIN')
+      )
+      FROM pg_class class
+      JOIN pg_namespace namespace ON namespace.oid = class.relnamespace
+      WHERE namespace.nspname = 'public'
+        AND class.relkind IN ('r', 'p', 'v', 'm', 'f')
+    ), true)
+    AND COALESCE((
+      SELECT bool_and(
+        has_sequence_privilege(current_user, class.oid, 'SELECT')
+        AND NOT has_sequence_privilege(current_user, class.oid, 'USAGE')
+        AND NOT has_sequence_privilege(current_user, class.oid, 'UPDATE')
+      )
+      FROM pg_class class
+      JOIN pg_namespace namespace ON namespace.oid = class.relnamespace
+      WHERE namespace.nspname = 'public'
+        AND class.relkind = 'S'
+    ), true)
+  )::text AS role_policy_ok
+  FROM pg_roles role
+  WHERE role.rolname = current_user;" \
   2>/dev/null); then
   backup_die "dedicated database backup role could not connect"
 fi
 
-[[ "$role_check" == "$database_user|false|true|true" ]] ||
-  backup_die "database backup role must be a non-superuser inheriting member of pg_read_all_data"
+[[ "$role_check" == "$database_user|true" ]] ||
+  backup_die "database backup role does not match the explicit read-only privilege policy"
+
 
 if $dry_run; then
   printf 'plan=validated\n'
@@ -214,6 +251,8 @@ if ! docker exec \
   pg_dump \
   --username="$database_user" \
   --dbname="$database" \
+  --schema=public \
+  --extension=pgcrypto \
   --format=custom \
   --compress=zstd:6 \
   --snapshot="$snapshot_id" \
@@ -230,7 +269,8 @@ if ! docker exec \
   -e 'PGOPTIONS=-c default_transaction_read_only=on' \
   "$postgres_container" \
   pg_dumpall \
-  --username="$globals_user" \
+  --username="$database_user" \
+  --database="$database" \
   --globals-only \
   --no-role-passwords \
   >"$bundle_dir/globals-no-passwords.sql" \
@@ -254,15 +294,15 @@ run_query() {
 }
 
 run_query "$expectations_dir/schemas.tsv" \
-  "SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog', 'information_schema') AND schema_name !~ '^pg_toast' ORDER BY schema_name;"
+  "SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'public' ORDER BY schema_name;"
 run_query "$expectations_dir/tables.tsv" \
-  "SELECT schemaname || '.' || tablename FROM pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema') ORDER BY schemaname, tablename;"
+  "SELECT schemaname || '.' || tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY schemaname, tablename;"
 run_query "$expectations_dir/extensions.tsv" \
   "SELECT extname || '|' || extversion FROM pg_extension ORDER BY extname;"
 run_query "$expectations_dir/sequences.tsv" \
-  "SELECT schemaname || '.' || sequencename || '|' || COALESCE(last_value::text, '<unavailable>') FROM pg_sequences WHERE schemaname NOT IN ('pg_catalog', 'information_schema') ORDER BY schemaname, sequencename;"
+  "SELECT schemaname || '.' || sequencename || '|' || COALESCE(last_value::text, '<unavailable>') FROM pg_sequences WHERE schemaname = 'public' ORDER BY schemaname, sequencename;"
 run_query "$expectations_dir/structural-summary.tsv" \
-  "SELECT 'foreign_keys|' || count(*)::text || '|' || COALESCE(bool_and(convalidated), true)::text FROM pg_constraint WHERE contype = 'f' UNION ALL SELECT 'indexes|' || count(*)::text || '|' || COALESCE(bool_and(indisvalid AND indisready), true)::text FROM pg_index JOIN pg_class ON pg_class.oid = indexrelid JOIN pg_namespace ON pg_namespace.oid = pg_class.relnamespace WHERE pg_namespace.nspname NOT IN ('pg_catalog', 'information_schema') UNION ALL SELECT 'utf8_multibyte_story_versions|' || count(*)::text || '|true' FROM story_versions WHERE octet_length(markdown) > char_length(markdown) UNION ALL SELECT 'utf8_roundtrip_failures|' || count(*)::text || '|true' FROM story_versions WHERE markdown <> convert_from(convert_to(markdown, 'UTF8'), 'UTF8') ORDER BY 1;"
+  "SELECT 'foreign_keys|' || count(*)::text || '|' || COALESCE(bool_and(con.convalidated), true)::text FROM pg_constraint con JOIN pg_class relation ON relation.oid = con.conrelid JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace WHERE con.contype = 'f' AND namespace.nspname = 'public' UNION ALL SELECT 'indexes|' || count(*)::text || '|' || COALESCE(bool_and(idx.indisvalid AND idx.indisready), true)::text FROM pg_index idx JOIN pg_class relation ON relation.oid = idx.indexrelid JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace WHERE namespace.nspname = 'public' UNION ALL SELECT 'utf8_multibyte_story_versions|' || count(*)::text || '|true' FROM public.story_versions WHERE octet_length(markdown) > char_length(markdown) UNION ALL SELECT 'utf8_roundtrip_failures|' || count(*)::text || '|true' FROM public.story_versions WHERE markdown <> convert_from(convert_to(markdown, 'UTF8'), 'UTF8') ORDER BY 1;"
 
 if ! docker exec -i \
   -e 'PGOPTIONS=-c default_transaction_read_only=on' \
@@ -279,7 +319,7 @@ SELECT format(
   tablename
 )
 FROM pg_tables
-WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+WHERE schemaname = 'public'
 ORDER BY schemaname, tablename
 \gexec
 ROLLBACK;

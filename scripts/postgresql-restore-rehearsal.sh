@@ -315,6 +315,8 @@ docker exec "$container_name" \
   pg_restore \
   --username="$target_user" \
   --dbname="$target_database" \
+  --clean \
+  --if-exists \
   --no-owner \
   --no-privileges \
   --exit-on-error \
@@ -339,15 +341,17 @@ SELECT 'server_version', current_setting('server_version');
 SELECT 'encoding', pg_encoding_to_char(encoding) FROM pg_database WHERE datname = current_database();
 SELECT 'data_checksums', current_setting('data_checksums');
 SELECT 'database_size_bytes', pg_database_size(current_database());
-SELECT 'schema_count', count(*) FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog', 'information_schema') AND schema_name !~ '^pg_toast';
-SELECT 'table_count', count(*) FROM pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema');
+SELECT 'schema_count', count(*) FROM information_schema.schemata WHERE schema_name = 'public';
+SELECT 'table_count', count(*) FROM pg_tables WHERE schemaname = 'public';
 SELECT 'extensions', string_agg(extname || ':' || extversion, ',' ORDER BY extname) FROM pg_extension;
-SELECT 'foreign_keys', count(*), bool_and(convalidated) FROM pg_constraint WHERE contype = 'f';
-SELECT 'indexes', count(*), bool_and(indisvalid AND indisready) FROM pg_index JOIN pg_class ON pg_class.oid = indexrelid JOIN pg_namespace ON pg_namespace.oid = pg_class.relnamespace WHERE pg_namespace.nspname NOT IN ('pg_catalog', 'information_schema');
+SELECT 'foreign_keys', count(*), bool_and(convalidated) FROM pg_constraint JOIN pg_class ON pg_class.oid = conrelid
+JOIN pg_namespace ON pg_namespace.oid = pg_class.relnamespace
+WHERE contype = 'f' AND pg_namespace.nspname = 'public';
+SELECT 'indexes', count(*), bool_and(indisvalid AND indisready) FROM pg_index JOIN pg_class ON pg_class.oid = indexrelid JOIN pg_namespace ON pg_namespace.oid = pg_class.relnamespace WHERE pg_namespace.nspname = 'public';
 SELECT 'application_library_rows', count(*) FROM stories AS story JOIN story_versions AS version ON version.id = story.published_version_id WHERE story.published_version_id IS NOT NULL;
 SELECT 'utf8_roundtrip_failures', count(*) FROM story_versions WHERE markdown <> convert_from(convert_to(markdown, 'UTF8'), 'UTF8');
 SELECT 'utf8_multibyte_story_versions', count(*) FROM story_versions WHERE octet_length(markdown) > char_length(markdown);
-SELECT 'sequence', schemaname, sequencename, COALESCE(last_value::text, '<unavailable>') FROM pg_sequences WHERE schemaname NOT IN ('pg_catalog', 'information_schema') ORDER BY schemaname, sequencename;
+SELECT 'sequence', schemaname, sequencename, COALESCE(last_value::text, '<unavailable>') FROM pg_sequences WHERE schemaname = 'public' ORDER BY schemaname, sequencename;
 SQL
 
 docker exec -i "$container_name" \
@@ -360,7 +364,7 @@ SELECT format(
   tablename
 )
 FROM pg_tables
-WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+WHERE schemaname = 'public'
 ORDER BY schemaname, tablename
 \gexec
 SQL
@@ -379,7 +383,7 @@ docker exec -i "$container_name" \
   --set=ON_ERROR_STOP=1 --tuples-only --no-align <<'SQL' >"$report_dir/actual-tables.tsv"
 SELECT schemaname || '.' || tablename
 FROM pg_tables
-WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+WHERE schemaname = 'public'
 ORDER BY schemaname, tablename;
 SQL
 
@@ -396,7 +400,7 @@ docker exec -i "$container_name" \
   --set=ON_ERROR_STOP=1 --tuples-only --no-align <<'SQL' >"$report_dir/actual-sequences.tsv"
 SELECT schemaname || '.' || sequencename || '|' || COALESCE(last_value::text, '<unavailable>')
 FROM pg_sequences
-WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+WHERE schemaname = 'public'
 ORDER BY schemaname, sequencename;
 SQL
 
@@ -405,13 +409,15 @@ docker exec -i "$container_name" \
   --set=ON_ERROR_STOP=1 --tuples-only --no-align <<'SQL' >"$report_dir/actual-structural-summary.tsv"
 SELECT 'foreign_keys|' || count(*)::text || '|' || COALESCE(bool_and(convalidated), true)::text
 FROM pg_constraint
-WHERE contype = 'f'
+JOIN pg_class ON pg_class.oid = conrelid
+JOIN pg_namespace ON pg_namespace.oid = pg_class.relnamespace
+WHERE contype = 'f' AND pg_namespace.nspname = 'public'
 UNION ALL
 SELECT 'indexes|' || count(*)::text || '|' || COALESCE(bool_and(indisvalid AND indisready), true)::text
 FROM pg_index
 JOIN pg_class ON pg_class.oid = indexrelid
 JOIN pg_namespace ON pg_namespace.oid = pg_class.relnamespace
-WHERE pg_namespace.nspname NOT IN ('pg_catalog', 'information_schema')
+WHERE pg_namespace.nspname = 'public'
 UNION ALL
 SELECT 'utf8_multibyte_story_versions|' || count(*)::text || '|true'
 FROM story_versions

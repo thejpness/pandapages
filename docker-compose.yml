@@ -5,11 +5,11 @@ services:
     environment:
       POSTGRES_DB: pandapages
       POSTGRES_USER: pandapages
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must contain the administrative database credential}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U pandapages -d pandapages"]
+      test: ["CMD-SHELL", "pg_isready -U pandapages_app -d pandapages"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -30,8 +30,13 @@ services:
     networks: [internal]
     labels:
       - traefik.enable=false
-    # migrate image ENTRYPOINT is goose; just pass args
-    command: ["-dir", "/migrations", "postgres", "${DATABASE_URL}", "up"]
+    environment:
+      GOOSE_DRIVER: postgres
+      GOOSE_DBSTRING: ${MIGRATION_DATABASE_URL:?MIGRATION_DATABASE_URL must use the dedicated migration role}
+      GOOSE_MIGRATION_DIR: /migrations
+    # The database URL remains in the migration container environment rather
+    # than the Goose process arguments.
+    command: ["up"]
 
   api:
     build:
@@ -43,8 +48,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     environment:
-      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL: ${APP_DATABASE_URL:?APP_DATABASE_URL must use the dedicated application role}
       PP_ASSET_DIR: /data/assets
       PP_LOG_LEVEL: ${PP_LOG_LEVEL:-info}
       PP_PASSCODE: ${PP_PASSCODE}
