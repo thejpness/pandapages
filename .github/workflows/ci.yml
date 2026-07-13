@@ -104,11 +104,11 @@ jobs:
   configuration:
     name: Configuration
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     env:
-      DATABASE_URL: postgres://pandapages:ci-only-postgres-password-not-for-production@postgres:5432/pandapages?sslmode=disable
-      PG_PASSWORD: ci-only-postgres-password-not-for-production
-      POSTGRES_PASSWORD: ci-only-postgres-password-not-for-production
+      APP_DATABASE_URL: postgres://pandapages_app:ci-only-app-password-not-for-production@postgres:5432/pandapages?sslmode=disable
+      MIGRATION_DATABASE_URL: postgres://pandapages_migrator:ci-only-migration-password-not-for-production@postgres:5432/pandapages?sslmode=disable
+      POSTGRES_PASSWORD: ci-only-admin-password-not-for-production
       PP_ADMIN_IPS: 192.0.2.1/32
       PP_ADMIN_KEY: ci-only-admin-key-not-for-production-00000000
       PP_PASSCODE: ci-only-passcode-not-for-production
@@ -153,21 +153,33 @@ jobs:
             scripts/postgresql-backup-restore-verify.sh \
             scripts/postgresql-backup-retention.sh \
             scripts/postgresql-readonly-audit.sh \
+            scripts/postgresql-roles.sh \
             scripts/postgresql-restore-rehearsal.sh \
+            scripts/tests/postgresql-api-role-smoke.sh \
             scripts/tests/postgresql-backup-integration.sh \
-            scripts/tests/postgresql-backup-unit.sh
+            scripts/tests/postgresql-backup-unit.sh \
+            scripts/tests/postgresql-roles-contract.sh \
+            scripts/tests/postgresql-roles-integration.sh
           scripts/postgresql-backup.sh --help >/dev/null
           scripts/postgresql-backup-healthcheck.sh --help >/dev/null
           scripts/postgresql-backup-notify.sh --help >/dev/null
           scripts/postgresql-backup-restore-verify.sh --help >/dev/null
           scripts/postgresql-backup-retention.sh --help >/dev/null
           scripts/postgresql-readonly-audit.sh --help >/dev/null
+          scripts/postgresql-roles.sh --help >/dev/null
           scripts/postgresql-restore-rehearsal.sh --help >/dev/null
 
-      - name: Test PostgreSQL backup automation with generated data
+      - name: Build API and migration images for generated role tests
+        run: |
+          docker build --target prod --build-arg API_MAIN=./cmd/api --tag pandapages-api:role-test apps/api
+          docker build --target migrate --tag pandapages-migrate:role-test apps/api
+
+      - name: Test PostgreSQL roles and backup automation with generated data
         shell: bash
         run: |
           set -euo pipefail
+          scripts/tests/postgresql-roles-contract.sh
+          scripts/tests/postgresql-roles-integration.sh
           scripts/tests/postgresql-backup-unit.sh
           scripts/tests/postgresql-backup-integration.sh
 
