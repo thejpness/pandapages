@@ -198,15 +198,30 @@ None of these steps are performed by this pull request:
    dedicated backup role; follow its staged rollout and rollback runbook.
 7. Copy the example configuration files to `/etc/pandapages`, replace every
    placeholder, set owner `root:root`, and set mode `0600`.
-8. Copy the scripts to `/opt/pandapages/scripts` and units to
-   `/etc/systemd/system`, preserving executable modes.
-9. Run `systemd-analyze verify` against all units and confirm the root-only
+8. Copy the scripts to `/opt/pandapages/scripts`, preserving executable modes.
+9. Install `deploy/tmpfiles.d/pandapages-postgresql-backup.conf` as
+   `/etc/tmpfiles.d/pandapages-postgresql-backup.conf`, owned by `root:root`
+   with mode `0644`. Before installing or starting the services, create and
+   verify their shared operations-log directory:
+
+   ```bash
+   sudo systemd-tmpfiles --create \
+     /etc/tmpfiles.d/pandapages-postgresql-backup.conf
+   sudo stat -c '%U:%G:%a' /var/log/pandapages-postgresql-backup
+   ```
+
+   The expected result is `root:root:700`. systemd opens each `append:` output
+   target while preparing the service. If its parent directory does not
+   already exist, startup fails with `209/STDOUT` before the job script runs;
+   `LogsDirectory=` alone is not a sufficient bootstrap for that append path.
+10. Copy the units to `/etc/systemd/system`, preserving mode `0644`. Run
+   `systemd-analyze verify` against all units and confirm the root-only
    operations log path has appropriate host disk monitoring.
-10. Run one on-demand backup and one restore verification before enabling the
+11. Run one on-demand backup and one restore verification before enabling the
     stale checker or timers.
-11. Confirm the remote objects, local success stamps, cleanup, root-only
+12. Confirm the remote objects, local success stamps, cleanup, root-only
     operations log, and notification delivery.
-12. Enable the three timers only after review of the evidence.
+13. Enable the three timers only after review of the evidence.
 
 The tracked examples are:
 
@@ -214,6 +229,7 @@ The tracked examples are:
 - `deploy/postgresql-backup/rclone.conf.example`;
 - `deploy/postgresql-backup/age-recipients.txt.example`;
 - `deploy/postgresql-backup/notify.curl.example`;
+- `deploy/tmpfiles.d/pandapages-postgresql-backup.conf`;
 - `deploy/systemd/pandapages-postgresql-*.service` and `.timer`.
 
 Never commit the installed files, private identity, real remote name, endpoint,
