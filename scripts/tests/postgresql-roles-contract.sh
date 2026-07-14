@@ -5,6 +5,7 @@ umask 077
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 cd "$repo_root"
+readonly verifier='scripts/postgresql-api-role-verify.sh'
 
 for command_name in docker git grep jq mktemp; do
   command -v "$command_name" >/dev/null 2>&1 || {
@@ -57,7 +58,7 @@ expect_compose_failure() {
   fi
 }
 
-printf '1..6\n'
+printf '1..7\n'
 
 production_json="$test_root/production.json"
 development_json="$test_root/development.json"
@@ -74,6 +75,7 @@ printf 'ok 2 - runtime and migration credentials each fail closed when absent\n'
 for config in "$production_json" "$development_json"; do
   jq -e --arg app "$app_url" --arg migration "$migration_url" '
     .services.api.environment.DATABASE_URL == $app
+    and .services.api.environment.PGAPPNAME == "pandapages-api"
     and .services.migrate.environment.GOOSE_DBSTRING == $migration
     and .services.migrate.environment.GOOSE_DRIVER == "postgres"
     and .services.migrate.environment.GOOSE_MIGRATION_DIR == "/migrations"
@@ -81,8 +83,10 @@ for config in "$production_json" "$development_json"; do
     and (.services.api.environment | has("POSTGRES_PASSWORD") | not)
     and (.services.migrate.environment | has("DATABASE_URL") | not)
     and (.services.migrate.environment | has("POSTGRES_PASSWORD") | not)
+    and (.services.migrate.environment | has("PGAPPNAME") | not)
     and (.services.postgres.environment | has("DATABASE_URL") | not)
     and (.services.postgres.environment | has("GOOSE_DBSTRING") | not)
+    and (.services.postgres.environment | has("PGAPPNAME") | not)
     and ([.services.api.environment[]] | index($migration) | not)
     and ([.services.migrate.environment[]] | index($app) | not)
     and (.services.postgres.healthcheck.test | join(" ") | contains("pandapages_app"))
@@ -133,3 +137,23 @@ if scripts/postgresql-roles.sh apply --container unreachable --database pandapag
 fi
 grep -q 'apply requires --confirm-apply' "$test_root/unconfirmed.err"
 printf 'ok 6 - backup and role tooling have no privileged fallback or destructive default\n'
+
+if grep -nE -- 'api_ip|--(api|client)-(ip|address)|--command=.*pg_stat_activity' "$verifier" >/dev/null; then
+  printf 'API role verifier contains the failed inline-address SQL pattern\n' >&2
+  exit 1
+fi
+grep -q -- '--file=-' "$verifier"
+grep -q 'FROM pg_stat_activity' "$verifier"
+grep -q 'host(client_addr)' "$verifier"
+grep -q 'application_name' "$verifier"
+if "$verifier" \
+  --api-container generated-api \
+  --postgres-container generated-postgres \
+  --database generated_database \
+  --api-address 'malformed;SELECT-current_user' \
+  >"$test_root/address.out" 2>"$test_root/address.err"; then
+  printf 'API role verifier accepted caller-provided client-address input\n' >&2
+  exit 1
+fi
+grep -q '^Usage:' "$test_root/address.err"
+printf 'ok 7 - API activity verification uses fixed SQL and accepts no client-address input\n'

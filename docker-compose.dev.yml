@@ -57,6 +57,7 @@ services:
       target: dev
     environment:
       DATABASE_URL: ${APP_DATABASE_URL:?APP_DATABASE_URL must use the dedicated application role}
+      PGAPPNAME: pandapages-api
       PP_ASSET_DIR: /data/assets
       PP_PASSCODE: ${PP_PASSCODE}
       PP_SESSION_SECRET: ${PP_SESSION_SECRET}

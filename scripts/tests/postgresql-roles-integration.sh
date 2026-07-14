@@ -15,8 +15,10 @@ readonly owner_role=pandapages_owner
 readonly migration_role=pandapages_migrator
 readonly application_role=pandapages_app
 readonly backup_role=pandapages_backup
+readonly legacy_role=pandapages
 readonly migration_password='generated-migrator-password-not-for-production'
 readonly application_password='generated-application-password-not-for-production'
+readonly legacy_password='generated-legacy-password-not-for-production'
 
 for command_name in docker grep mktemp sed sort; do
   command -v "$command_name" >/dev/null 2>&1 || {
@@ -188,6 +190,7 @@ docker exec -i "$source_container" \
   psql -X --username="$admin_user" --dbname="$database" --set=ON_ERROR_STOP=1 <<SQL >/dev/null
 ALTER ROLE $migration_role PASSWORD '$migration_password';
 ALTER ROLE $application_role PASSWORD '$application_password';
+CREATE ROLE $legacy_role LOGIN SUPERUSER PASSWORD '$legacy_password';
 SQL
 
 if ! docker run --rm \
@@ -226,7 +229,10 @@ role_state=$(docker exec "$source_container" \
 [[ "$role_state" == "$application_role:false:false:false:false:false,$backup_role:false:false:false:false:false,$migration_role:false:false:false:false:false,$owner_role:false:false:false:false:false" ]]
 printf 'ok 4 - all policy roles have non-superuser non-administrative attributes\n'
 
+smoke_tmp="$test_root/api-role-smoke-tmp"
+mkdir -p "$smoke_tmp"
 env \
+  TMPDIR="$smoke_tmp" \
   PP_ROLE_TEST_SOURCE_CONTAINER="$source_container" \
   PP_ROLE_TEST_NETWORK="$source_network" \
   PP_ROLE_TEST_API_IMAGE="$api_image" \
@@ -236,7 +242,13 @@ env \
   PP_ROLE_TEST_APPLICATION_PASSWORD="$application_password" \
   PP_ROLE_TEST_MIGRATION_ROLE="$migration_role" \
   PP_ROLE_TEST_MIGRATION_PASSWORD="$migration_password" \
+  PP_ROLE_TEST_LEGACY_ROLE="$legacy_role" \
+  PP_ROLE_TEST_LEGACY_PASSWORD="$legacy_password" \
   "$api_smoke_script" >/dev/null
+[[ -z $(find "$smoke_tmp" -mindepth 1 -print -quit) ]] || {
+  printf 'API role smoke test left temporary files behind\n' >&2
+  exit 1
+}
 
 docker exec -i "$source_container" \
   psql -X --username="$admin_user" --dbname="$database" --set=ON_ERROR_STOP=1 <<'SQL' >/dev/null
