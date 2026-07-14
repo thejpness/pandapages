@@ -6,12 +6,16 @@ import {
   getStorySegments,
   saveProgress,
   getProgress,
+  getAPIErrorStatus,
   isJsonObject,
   type JsonObject,
   type StorySegment,
 } from '../lib/api'
 import { loadPrefs, savePrefs, type ReaderPrefs } from '../lib/prefs'
 import { haptic } from '../lib/haptics'
+import { authState } from '../lib/session'
+import { safeNextPath } from '../lib/session-navigation'
+import { navigationDidFail } from '../lib/session-transitions'
 
 type Page = {
   index: number
@@ -107,6 +111,8 @@ const title = ref('')
 const author = ref('')
 const html = ref('')
 const version = ref(1)
+const storyLoading = ref(false)
+const loadError = ref('')
 
 const segments = ref<StorySegment[] | null>(null)
 const pages = computed<Page[]>(() => (segments.value ? buildPages(segments.value) : []))
@@ -385,6 +391,10 @@ async function checkResumeOffer() {
 }
 
 async function load() {
+  if (storyLoading.value) return
+  storyLoading.value = true
+  loadError.value = ''
+
   try {
     const s = await getStory(slug)
     title.value = s.title
@@ -403,8 +413,28 @@ async function load() {
     await nextTick()
     await checkResumeOffer()
     updatePercent()
-  } catch {
-    await router.replace('/unlock')
+  } catch (error) {
+    if (getAPIErrorStatus(error) === 401) {
+      title.value = ''
+      author.value = ''
+      html.value = ''
+      segments.value = null
+      authState.confirmLocked()
+      const next = safeNextPath(`/read/${encodeURIComponent(slug)}`)
+      try {
+        const result = await router.replace({ path: '/unlock', query: { next } })
+        if (navigationDidFail(result)) {
+          loadError.value = 'The session ended, but the passcode screen could not be opened. Reload to continue.'
+        }
+      } catch {
+        loadError.value = 'The session ended, but the passcode screen could not be opened. Reload to continue.'
+      }
+      return
+    }
+
+    loadError.value = 'Could not load this story. Check the connection and try again.'
+  } finally {
+    storyLoading.value = false
   }
 }
 
@@ -548,6 +578,25 @@ onBeforeUnmount(() => {
 
     <!-- Reader container -->
     <main class="mx-auto px-4 py-8" :style="{ maxWidth: `${prefs.widthPx}px` }">
+      <div
+        v-if="loadError"
+        class="mb-6 rounded-2xl border border-red-300/30 bg-red-300/10 p-4 text-sm"
+        role="alert"
+      >
+        <p>{{ loadError }}</p>
+        <button
+          type="button"
+          class="mt-3 rounded-xl bg-white px-4 py-2 font-medium text-[#0B1724] disabled:opacity-60"
+          :disabled="storyLoading"
+          @click="load"
+        >
+          {{ storyLoading ? 'Loading…' : 'Try again' }}
+        </button>
+      </div>
+      <p v-else-if="storyLoading && !title" class="text-sm opacity-75" aria-live="polite">
+        Loading story…
+      </p>
+
       <h1 class="text-3xl md:text-4xl font-semibold leading-tight">{{ title }}</h1>
       <p v-if="author" class="mt-2 opacity-75">{{ author }}</p>
 

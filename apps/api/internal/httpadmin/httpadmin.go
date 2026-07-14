@@ -8,13 +8,15 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"regexp"
 	"strings"
 
+	"pandapages/api/internal/httpauth"
 	"pandapages/api/internal/model"
 )
 
 type Store interface {
+	AccountExists(accountID string) (bool, error)
+
 	AdminDraftUpsert(accountID string, req model.AdminDraftUpsertRequest) (model.AdminDraftUpsertResponse, error)
 	AdminPublish(accountID string, slug string, versionID string) error
 	AdminPreview(req model.AdminPreviewRequest) (model.AdminPreviewResponse, error)
@@ -23,31 +25,14 @@ type Store interface {
 }
 
 const (
-	cookieName        = "pp_unlocked"
-	accountCookieName = "pp_aid"
-
 	// Admin endpoints need a bigger body limit for large Gutenberg books.
 	// Keep public APIs small; only admin gets this.
 	maxJSONBodyBytes = 20 << 20 // 20MB
 )
 
-var uuidRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-
 type ctxKey string
 
 const ctxAccountID ctxKey = "pp_account_id"
-
-func accountIDFromCookie(r *http.Request) (string, error) {
-	c, err := r.Cookie(accountCookieName)
-	if err != nil {
-		return "", errors.New("account required")
-	}
-	v := strings.TrimSpace(c.Value)
-	if v == "" || !uuidRe.MatchString(v) {
-		return "", errors.New("invalid account")
-	}
-	return v, nil
-}
 
 func accountIDFromCtx(r *http.Request) string {
 	v, _ := r.Context().Value(ctxAccountID).(string)
@@ -59,26 +44,25 @@ func New(cfg Config, store Store) http.Handler {
 	if adminKey == "" {
 		panic("PP_ADMIN_KEY is required for admin routes")
 	}
+	authenticator := httpauth.New(cfg.Sessions, store)
 
 	mux := http.NewServeMux()
 
 	withAdmin := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			// 1) require unlock cookie
-			c, err := r.Cookie(cookieName)
-			if err != nil || c.Value != "1" {
+			// 1) require the shared signed session and its existing account.
+			aid, err := authenticator.Authenticate(r)
+			if errors.Is(err, httpauth.ErrInvalidSession) {
+				cfg.Sessions.Clear(w)
 				writeErr(w, http.StatusUnauthorized, "unauthorized", "unlock required")
 				return
 			}
-
-			// 2) require account cookie (bind admin actions to an account)
-			aid, err := accountIDFromCookie(r)
 			if err != nil {
-				writeErr(w, http.StatusUnauthorized, "unauthorized", err.Error())
+				writeErr(w, http.StatusServiceUnavailable, "session_unavailable", "session validation unavailable")
 				return
 			}
 
-			// 3) require admin key (constant time compare)
+			// 2) retain the proxy-injected admin key boundary.
 			got := strings.TrimSpace(r.Header.Get("X-PP-Admin-Key"))
 			if !adminKeyOK(got, adminKey) {
 				writeErr(w, http.StatusForbidden, "forbidden", "admin key required")

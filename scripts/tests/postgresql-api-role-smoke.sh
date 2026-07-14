@@ -65,9 +65,16 @@ docker image inspect "$api_image" >/dev/null 2>&1 || {
   exit 1
 }
 
+source_disposable_label=$(docker inspect --format '{{index .Config.Labels "com.pandapages.disposable"}}' "$source_container" 2>/dev/null || true)
+[[ "$source_disposable_label" == role-integration ]] || {
+  printf 'Role smoke test source must be a disposable role-integration container\n' >&2
+  exit 1
+}
+
 readonly api_container="${source_container}-api"
 api_created=false
 manual_session_started=false
+account_access_revoked=false
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/pandapages-api-role-smoke.XXXXXX")
 
 cleanup() {
@@ -78,9 +85,18 @@ cleanup() {
   if $manual_session_started; then
     docker exec "$source_container" psql -X --username="$admin_user" --dbname="$database" --set=ON_ERROR_STOP=1 --command="SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = 'manual-psql' AND pid <> pg_backend_pid();" >/dev/null 2>&1
   fi
+  if $account_access_revoked; then
+    docker exec -i "$source_container" \
+      psql -X --username="$admin_user" --dbname="$database" \
+      --set=ON_ERROR_STOP=1 --set=application_role="$application_role" \
+      --file=- >/dev/null 2>&1 <<'SQL'
+GRANT SELECT, INSERT ON TABLE accounts TO :"application_role";
+SQL
+  fi
   rm -rf -- "$test_root"
 }
 trap cleanup EXIT
+trap 'printf "Generated API role smoke failed at line %d\n" "$LINENO" >&2' ERR
 
 stop_api() {
   if $api_created; then
@@ -131,7 +147,7 @@ verify_arguments=(
   --api-container "$api_container"
   --postgres-container "$source_container"
   --database "$database"
-  --session-contract legacy
+  --session-contract signed
   --admin-user "$admin_user"
   --application-role "$application_role"
   --application-name "$expected_application_name"
@@ -168,6 +184,7 @@ missing_runtime_environment="$test_root/missing-runtime.env"
   printf 'MIGRATION_DATABASE_URL=postgres://%s:%s@%s:5432/%s?sslmode=disable\n' \
     "$migration_role" "$migration_password" "$source_container" "$database"
   printf 'PP_PASSCODE=123456\n'
+  printf 'PP_SESSION_SECRET=generated-session-secret-not-for-production\n'
 } >"$missing_runtime_environment"
 chmod 0600 "$missing_runtime_environment"
 
@@ -190,31 +207,38 @@ if ! "$verifier" "${verify_arguments[@]}" >"$test_root/warm-cache.out" 2>"$test_
   exit 1
 fi
 grep -q '^api_role_verification=passed$' "$test_root/warm-cache.out"
-grep -q '^api_session_contract=legacy$' "$test_root/warm-cache.out"
+grep -q '^api_session_contract=signed$' "$test_root/warm-cache.out"
 assert_no_generated_credentials "$test_root/warm-cache.out"
 assert_no_generated_credentials "$test_root/warm-cache.err"
 assert_probe_cleanup
 
-# Ensure the durable probe still refreshes pg_stat_activity after the unlock
-# path has warmed its default-account cache. The three-second age gate makes the
-# first verifier's database activity too old to satisfy the second run.
+# Ensure a repeated durable probe still refreshes pg_stat_activity. The
+# three-second age gate makes the first verifier's activity too old to satisfy
+# the second run.
 sleep 5
 if ! "$verifier" "${verify_arguments[@]}" --max-activity-age-seconds 3 \
-  >"$test_root/cached-unlock.out" 2>"$test_root/cached-unlock.err"; then
-  printf 'Cached-unlock API role verification failed: ' >&2
-  sed 's/^postgresql-api-role-verify: //' "$test_root/cached-unlock.err" >&2
+  >"$test_root/repeated-unlock.out" 2>"$test_root/repeated-unlock.err"; then
+  printf 'Repeated-unlock API role verification failed: ' >&2
+  sed 's/^postgresql-api-role-verify: //' "$test_root/repeated-unlock.err" >&2
   exit 1
 fi
-grep -q '^api_role_verification=passed$' "$test_root/cached-unlock.out"
-grep -q '^api_session_contract=legacy$' "$test_root/cached-unlock.out"
-assert_no_generated_credentials "$test_root/cached-unlock.out"
-assert_no_generated_credentials "$test_root/cached-unlock.err"
+grep -q '^api_role_verification=passed$' "$test_root/repeated-unlock.out"
+grep -q '^api_session_contract=signed$' "$test_root/repeated-unlock.out"
+assert_no_generated_credentials "$test_root/repeated-unlock.out"
+assert_no_generated_credentials "$test_root/repeated-unlock.err"
 assert_probe_cleanup
 stop_api
 
-# A failed application probe must fail closed and remove its protected
-# request, response, and cookie material.
-start_api "$application_role" "$application_password" "$expected_application_name" 12345
+# A database-backed application probe without access to its required table must
+# fail closed and remove its protected request, response, and cookie material.
+docker exec -i "$source_container" \
+  psql -X --username="$admin_user" --dbname="$database" \
+  --set=ON_ERROR_STOP=1 --set=application_role="$application_role" \
+  --file=- >/dev/null <<'SQL'
+REVOKE SELECT, INSERT ON TABLE accounts FROM :"application_role";
+SQL
+account_access_revoked=true
+start_api "$application_role" "$application_password" "$expected_application_name"
 if "$verifier" "${verify_arguments[@]}" \
   >"$test_root/probe-failure.out" 2>"$test_root/probe-failure.err"; then
   printf 'Verifier accepted a failed database-backed application probe\n' >&2
@@ -225,6 +249,13 @@ assert_no_generated_credentials "$test_root/probe-failure.out"
 assert_no_generated_credentials "$test_root/probe-failure.err"
 assert_probe_cleanup
 stop_api
+docker exec -i "$source_container" \
+  psql -X --username="$admin_user" --dbname="$database" \
+  --set=ON_ERROR_STOP=1 --set=application_role="$application_role" \
+  --file=- >/dev/null <<'SQL'
+GRANT SELECT, INSERT ON TABLE accounts TO :"application_role";
+SQL
+account_access_revoked=false
 
 # An application-role session with the wrong workload name is not qualifying
 # evidence, even though the API itself can start and answer the probe.

@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
-import { useRouter } from 'vue-router'
 import { haptic } from '../lib/haptics'
 
 type Resume = { slug: string; title: string; author?: string; percent: number } | null
@@ -8,6 +7,7 @@ type Recent = { slug: string; title: string; author?: string; percent: number }
 
 const props = defineProps<{
   loading: boolean
+  locking: boolean
   q: string
   resultsLabel: string
   resume: Resume
@@ -27,7 +27,6 @@ const emit = defineEmits<{
   (e: 'logout'): void
 }>()
 
-const router = useRouter()
 const searchRef = ref<HTMLInputElement | null>(null)
 
 const qModel = computed({
@@ -47,15 +46,10 @@ async function clear() {
   focusSearch()
 }
 
-async function logout() {
-  if (props.loading) return
+function logout() {
+  if (props.locking) return
   haptic('medium')
-
-  // Parent can clear any "unlocked" state it uses (localStorage/store/cookie).
   emit('logout')
-
-  // Route back to unlock screen.
-  await router.replace('/unlock')
 }
 </script>
 
@@ -116,12 +110,12 @@ async function logout() {
                    hover:bg-white/10 active:scale-[0.99] transition"
             @pointerdown="haptic('select')"
             @click="logout"
-            :disabled="props.loading"
-            :class="props.loading ? 'opacity-50 cursor-not-allowed' : ''"
+            :disabled="props.locking"
+            :class="props.locking ? 'opacity-50 cursor-not-allowed' : ''"
             aria-label="Lock and return to passcode screen"
             title="Lock"
           >
-            🔒 Lock
+            🔒 {{ props.locking ? 'Locking…' : 'Lock' }}
           </button>
         </div>
       </div>
