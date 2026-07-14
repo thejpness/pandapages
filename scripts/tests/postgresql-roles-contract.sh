@@ -122,7 +122,8 @@ if git grep -n -E 'MIGRATION_DATABASE_URL|APP_DATABASE_URL' -- ':(glob)apps/api/
   printf 'The API source reads host-side migration or application URL names directly\n' >&2
   exit 1
 fi
-git grep -q -F 'os.Getenv("DATABASE_URL")' -- apps/api/cmd/api/main.go
+git grep -q -F 'databaseURL:   getenv("DATABASE_URL")' -- apps/api/cmd/api/main.go
+git grep -q -F 'db.MustOpen(cfg.databaseURL)' -- apps/api/cmd/api/main.go
 printf 'ok 5 - frontend has no database credentials and API accepts only its container-scoped URL\n'
 
 if git grep -n -E 'PP_BACKUP_GLOBALS_USER|pg_read_all_data' -- \

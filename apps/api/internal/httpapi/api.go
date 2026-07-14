@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -10,18 +11,21 @@ import (
 	"strconv"
 	"strings"
 
+	"pandapages/api/internal/httpauth"
 	"pandapages/api/internal/model"
+	"pandapages/api/internal/session"
 )
 
 type Config struct {
-	Passcode     string
-	CookieSecure bool
-	LogRequests  bool
+	Passcode    string
+	LogRequests bool
+	Sessions    *session.Manager
 }
 
 type Store interface {
 	// Phase A: derive an account id from today's unlock mechanism.
 	EnsureDefaultAccount() (string, error)
+	AccountExists(accountID string) (bool, error)
 
 	Library(accountID string) ([]model.StoryItem, error)
 	StoryLatest(accountID, slug string) (model.StoryPayload, error)
@@ -37,22 +41,17 @@ type Store interface {
 }
 
 const (
-	cookieName        = "pp_unlocked"
-	accountCookieName = "pp_aid"
-
 	maxJSONBodyBytes   = 1 << 20 // 1MB
 	defaultContinueLim = 3
 	maxContinueLim     = 10
-
-	// Cookie MaxAge is seconds. Keep this a const to avoid InvalidConstInit.
-	sessionMaxAgeSeconds = 30 * 24 * 60 * 60 // 30 days
 )
 
 func New(cfg Config, store Store) http.Handler {
-	pass := strings.TrimSpace(cfg.Passcode)
-	if pass == "" {
-		panic("PP_PASSCODE is required")
+	pass := cfg.Passcode
+	if !validPasscode(pass) {
+		panic("a six-digit ASCII passcode is required")
 	}
+	authenticator := httpauth.New(cfg.Sessions, store)
 
 	mux := http.NewServeMux()
 
@@ -77,8 +76,7 @@ func New(cfg Config, store Store) http.Handler {
 			return
 		}
 
-		body.Passcode = strings.TrimSpace(body.Passcode)
-		if len(body.Passcode) != 6 || body.Passcode != pass {
+		if len(body.Passcode) != len(pass) || subtle.ConstantTimeCompare([]byte(body.Passcode), []byte(pass)) != 1 {
 			writeErr(w, http.StatusUnauthorized, "unauthorized", "invalid passcode")
 			return
 		}
@@ -89,52 +87,62 @@ func New(cfg Config, store Store) http.Handler {
 			return
 		}
 
-		// IMPORTANT: set BOTH cookies so isUnlocked() passes.
-		http.SetCookie(w, &http.Cookie{
-			Name:     cookieName,
-			Value:    "1",
-			Path:     "/",
-			HttpOnly: true,
-			SameSite: http.SameSiteStrictMode,
-			Secure:   cfg.CookieSecure,
-			MaxAge:   sessionMaxAgeSeconds,
-		})
-		http.SetCookie(w, &http.Cookie{
-			Name:     accountCookieName,
-			Value:    accountID,
-			Path:     "/",
-			HttpOnly: true,
-			SameSite: http.SameSiteStrictMode,
-			Secure:   cfg.CookieSecure,
-			MaxAge:   sessionMaxAgeSeconds,
-		})
+		if err := cfg.Sessions.Set(w, accountID); err != nil {
+			writeErr(w, http.StatusInternalServerError, "session", "session creation failed")
+			return
+		}
 
 		noStore(w)
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
 
-	// Optional status endpoint (handy for UI)
+	// Status distinguishes a definitively invalid session from unavailable
+	// account storage. The frontend must not turn the latter into signed-out.
 	mux.HandleFunc("/api/v1/auth/status", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			methodNotAllowed(w, []string{http.MethodGet})
 			return
 		}
+		_, err := authenticator.Authenticate(r)
+		if errors.Is(err, httpauth.ErrInvalidSession) {
+			cfg.Sessions.Clear(w)
+			noStore(w)
+			writeJSON(w, http.StatusOK, map[string]any{"unlocked": false})
+			return
+		}
+		if err != nil {
+			writeErr(w, http.StatusServiceUnavailable, "session_unavailable", "session validation unavailable")
+			return
+		}
+
 		noStore(w)
-		writeJSON(w, http.StatusOK, map[string]any{"unlocked": isUnlocked(r)})
+		writeJSON(w, http.StatusOK, map[string]any{"unlocked": true})
+	})
+
+	// Logout is deliberately browser-local and does not need a valid session or
+	// a working database in order to expire authentication cookies.
+	mux.HandleFunc("/api/v1/auth/logout", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w, []string{http.MethodPost})
+			return
+		}
+		cfg.Sessions.Clear(w)
+		noStore(w)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
 
 	type authedHandler func(w http.ResponseWriter, r *http.Request, accountID string)
 
 	withUnlock := func(next authedHandler) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			if !isUnlocked(r) {
+			accountID, err := authenticator.Authenticate(r)
+			if errors.Is(err, httpauth.ErrInvalidSession) {
+				cfg.Sessions.Clear(w)
 				writeErr(w, http.StatusUnauthorized, "unauthorized", "unlock required")
 				return
 			}
-			accountID := mustAccountID(r)
-			if accountID == "" {
-				// Should never happen if isUnlocked() is correct, but keep it safe.
-				writeErr(w, http.StatusUnauthorized, "unauthorized", "unlock required")
+			if err != nil {
+				writeErr(w, http.StatusServiceUnavailable, "session_unavailable", "session validation unavailable")
 				return
 			}
 			next(w, r, accountID)
@@ -366,21 +374,16 @@ func New(cfg Config, store Store) http.Handler {
 
 /* -------------------- helpers & middleware -------------------- */
 
-func mustAccountID(r *http.Request) string {
-	c, err := r.Cookie(accountCookieName)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(c.Value)
-}
-
-func isUnlocked(r *http.Request) bool {
-	c, err := r.Cookie(cookieName)
-	if err != nil || c.Value != "1" {
+func validPasscode(passcode string) bool {
+	if len(passcode) != 6 {
 		return false
 	}
-	a, err := r.Cookie(accountCookieName)
-	return err == nil && strings.TrimSpace(a.Value) != ""
+	for index := range passcode {
+		if passcode[index] < '0' || passcode[index] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func noStore(w http.ResponseWriter) {

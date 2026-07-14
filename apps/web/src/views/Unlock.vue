@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { unlock } from '../lib/api'
+import { getAPIErrorStatus, unlock } from '../lib/api'
 import { haptic } from '../lib/haptics'
+import { authState } from '../lib/session'
+import { safeNextPath } from '../lib/session-navigation'
+import { navigationDidFail } from '../lib/session-transitions'
 
 const router = useRouter()
 const route = useRoute()
@@ -66,17 +69,31 @@ async function submit() {
 
   try {
     await unlock(code.value)
-    haptic('medium')
-    const next = typeof route.query.next === 'string' ? route.query.next : '/library'
-    void router.replace(next)
-  } catch {
+    authState.confirmUnlocked()
+  } catch (error) {
     haptic('heavy')
-    setError('Wrong passcode')
+    if (getAPIErrorStatus(error) === 401) {
+      setError('Wrong passcode')
 
-    // After the shake finishes, clear so the next attempt is quick.
-    window.setTimeout(() => {
-      if (!busy.value) code.value = ''
-    }, 480)
+      // After the shake finishes, clear so the next attempt is quick.
+      window.setTimeout(() => {
+        if (!busy.value) code.value = ''
+      }, 480)
+    } else {
+      setError('Could not unlock Panda Pages. Check the connection and try again.')
+    }
+    busy.value = false
+    return
+  }
+
+  haptic('medium')
+  try {
+    const result = await router.replace(safeNextPath(route.query.next))
+    if (navigationDidFail(result)) {
+      setError('Unlocked, but Panda Pages could not open the next page. Try again.')
+    }
+  } catch {
+    setError('Unlocked, but Panda Pages could not open the next page. Try again.')
   } finally {
     busy.value = false
   }

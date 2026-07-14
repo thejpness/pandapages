@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -18,9 +19,6 @@ type Store struct {
 	queryTimeout time.Duration
 
 	mu sync.Mutex
-
-	// cached "default account" (Phase A)
-	defaultAccountID string
 
 	// cached "Default" profile per account
 	defaultProfileByAccount map[string]string
@@ -116,54 +114,82 @@ func clamp01(p float64) float64 {
 
 /* ----------------------------- Accounts (Phase A) ----------------------------- */
 
-// EnsureDefaultAccount returns the oldest account id (creates one if needed).
+// Stable application-scoped key for serializing default-account creation.
+const ensureDefaultAccountLockID int64 = 0x50504143434f554e
+
+var accountIDRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// EnsureDefaultAccount returns the deterministically oldest account id, creating
+// one when the table is empty. The transaction-level advisory lock coordinates
+// initialization across processes and replicas; correctness does not depend on
+// this Store's in-process mutex or a cached account id.
 func (s *Store) EnsureDefaultAccount() (string, error) {
 	ctx, cancel := s.ctx()
 	defer cancel()
 
-	// fast path cache
-	s.mu.Lock()
-	if s.defaultAccountID != "" {
-		id := s.defaultAccountID
-		s.mu.Unlock()
-		return id, nil
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
 	}
-	s.mu.Unlock()
+	defer func() { _ = tx.Rollback() }()
 
-	// pick oldest
-	var id string
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id
-		FROM accounts
-		ORDER BY created_at ASC
-		LIMIT 1
-	`).Scan(&id)
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, ensureDefaultAccountLockID); err != nil {
+		return "", err
+	}
 
-	if err == sql.ErrNoRows {
-		// create then reselect
-		_, err = s.db.ExecContext(ctx, `
-			INSERT INTO accounts (name)
-			VALUES ('Default')
-		`)
-		if err != nil {
-			return "", err
-		}
-		err = s.db.QueryRowContext(ctx, `
+	selectOldest := func() (string, error) {
+		var id string
+		err := tx.QueryRowContext(ctx, `
 			SELECT id
 			FROM accounts
-			ORDER BY created_at ASC
+			ORDER BY created_at ASC, id ASC
 			LIMIT 1
 		`).Scan(&id)
+		return id, err
+	}
+
+	id, err := selectOldest()
+	if err == sql.ErrNoRows {
+		if _, err = tx.ExecContext(ctx, `
+				INSERT INTO accounts (name)
+				VALUES ('Default')
+			`); err != nil {
+			return "", err
+		}
+		id, err = selectOldest()
 	}
 	if err != nil {
 		return "", err
 	}
 
-	s.mu.Lock()
-	s.defaultAccountID = id
-	s.mu.Unlock()
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
 
 	return id, nil
+}
+
+// AccountExists reports whether accountID identifies an existing account.
+// Malformed identifiers are treated as absent instead of being sent to
+// PostgreSQL as invalid UUID input.
+func (s *Store) AccountExists(accountID string) (bool, error) {
+	accountID = strings.TrimSpace(accountID)
+	if !accountIDRe.MatchString(accountID) {
+		return false, nil
+	}
+
+	ctx, cancel := s.ctx()
+	defer cancel()
+
+	var exists bool
+	err := s.db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM accounts
+			WHERE id = $1
+		)
+	`, accountID).Scan(&exists)
+	return exists, err
 }
 
 /* ----------------------------- Profiles ----------------------------- */

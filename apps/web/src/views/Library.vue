@@ -5,6 +5,8 @@ import {
   getLibrary,
   getContinue,
   getSettings,
+  getAPIErrorStatus,
+  logout as logoutSession,
   type ContinueItem,
   type LibraryItem,
   type SettingsPayload,
@@ -12,6 +14,8 @@ import {
 import StoryCard from '../components/StoryCard.vue'
 import LibraryHeader from '../components/LibraryHeader.vue'
 import { haptic } from '../lib/haptics'
+import { authState } from '../lib/session'
+import { navigationDidFail, runLockTransition } from '../lib/session-transitions'
 
 type Item = LibraryItem
 type RecentCard = ContinueItem & { story: Item }
@@ -29,6 +33,10 @@ const headerRef = ref<HeaderExpose | null>(null)
 const items = ref<Item[]>([])
 const recentRaw = ref<ContinueItem[]>([])
 const loading = ref(true)
+const loadError = ref('')
+const locking = ref(false)
+const lockError = ref('')
+const sessionLeaving = ref(false)
 
 // Search query
 const q = ref('')
@@ -86,6 +94,7 @@ let qTimer: number | null = null
 watch(
   () => q.value,
   (v) => {
+    if (locking.value) return
     if (qTimer) window.clearTimeout(qTimer)
     qTimer = window.setTimeout(() => {
       const trimmed = v.trim()
@@ -218,12 +227,56 @@ function onKey(e: KeyboardEvent) {
   }
 }
 
-async function logout() {
+function clearAccountState(clearQuery: boolean) {
+  sessionLeaving.value = true
+  if (qTimer) {
+    window.clearTimeout(qTimer)
+    qTimer = null
+  }
   infoSlug.value = null
-  q.value = ''
+  if (clearQuery) q.value = ''
   items.value = []
   recentRaw.value = []
-  await router.replace('/unlock')
+  settings.value = null
+  settingsLoaded.value = false
+}
+
+async function moveToUnlockAfterConfirmedSignOut() {
+  clearAccountState(false)
+  authState.confirmLocked()
+
+  try {
+    const result = await router.replace({ path: '/unlock', query: { next: '/library' } })
+    if (navigationDidFail(result)) {
+      lockError.value = 'The session ended, but the passcode screen could not be opened. Reload to continue.'
+    }
+  } catch {
+    lockError.value = 'The session ended, but the passcode screen could not be opened. Reload to continue.'
+  }
+}
+
+async function logout() {
+  if (locking.value) return
+
+  locking.value = true
+  lockError.value = ''
+
+  try {
+    const result = await runLockTransition({
+      requestLogout: logoutSession,
+      clearAccountState: () => clearAccountState(true),
+      markLocked: authState.confirmLocked,
+      navigateToUnlock: () => router.replace('/unlock'),
+    })
+
+    if (result === 'navigation-failed') {
+      lockError.value = 'Panda Pages is locked, but the passcode screen could not be opened. Reload to continue.'
+    }
+  } catch {
+    lockError.value = 'Could not lock Panda Pages. Check the connection and try again.'
+  } finally {
+    locking.value = false
+  }
 }
 
 /* ---------------- "Top" button visibility ---------------- */
@@ -239,24 +292,33 @@ function onScroll() {
 async function loadSettings() {
   settingsLoaded.value = false
   try {
-    settings.value = await getSettings()
-  } catch {
+    const result = await getSettings()
+    if (!sessionLeaving.value) settings.value = result
+  } catch (error) {
+    if (getAPIErrorStatus(error) === 401) {
+      await moveToUnlockAfterConfirmedSignOut()
+      return
+    }
     settings.value = null
   } finally {
-    settingsLoaded.value = true
+    if (!sessionLeaving.value) settingsLoaded.value = true
   }
 }
 
 async function load() {
   loading.value = true
+  loadError.value = ''
   try {
     const [cont, data] = await Promise.all([getContinue(4), getLibrary()])
+    if (sessionLeaving.value) return
     recentRaw.value = Array.isArray(cont?.items) ? cont.items : []
     items.value = Array.isArray(data?.items) ? data.items : []
-  } catch {
-    recentRaw.value = []
-    items.value = []
-    await router.replace('/unlock')
+  } catch (error) {
+    if (getAPIErrorStatus(error) === 401) {
+      await moveToUnlockAfterConfirmedSignOut()
+      return
+    }
+    loadError.value = 'Could not load the library. Check the connection and try again.'
   } finally {
     loading.value = false
   }
@@ -283,6 +345,7 @@ onBeforeUnmount(() => {
     <LibraryHeader
       ref="headerRef"
       :loading="loading"
+      :locking="locking"
       :q="q"
       :resultsLabel="resultsLabel"
       :resume="headerResume"
@@ -300,7 +363,26 @@ onBeforeUnmount(() => {
     />
 
     <main class="max-w-6xl mx-auto px-4 md:px-8 py-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))]">
-      <div v-if="loading" class="space-y-4">
+      <div
+        v-if="lockError"
+        class="mb-5 rounded-2xl border border-red-300/30 bg-red-300/10 p-4 text-sm text-red-100"
+        role="alert"
+      >
+        {{ lockError }}
+      </div>
+
+      <div
+        v-if="loadError"
+        class="rounded-2xl border border-amber-200/30 bg-amber-200/10 p-5 text-sm"
+        role="alert"
+      >
+        <p>{{ loadError }}</p>
+        <button type="button" class="mt-3 rounded-xl bg-white px-4 py-2 font-medium text-[#0B1724]" @click="load">
+          Try again
+        </button>
+      </div>
+
+      <div v-else-if="loading" class="space-y-4">
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           <div v-for="i in 6" :key="i" class="rounded-2xl border border-white/10 bg-white/5 p-5">
             <div class="flex items-start gap-4">
@@ -398,8 +480,10 @@ onBeforeUnmount(() => {
                  hover:bg-white/10 active:scale-[0.995] transition"
           @pointerdown="haptic('select')"
           @click="logout"
+          :disabled="locking"
+          :class="locking ? 'opacity-50 cursor-not-allowed' : ''"
         >
-          🔒 Lock
+          🔒 {{ locking ? 'Locking…' : 'Lock' }}
         </button>
       </div>
     </main>

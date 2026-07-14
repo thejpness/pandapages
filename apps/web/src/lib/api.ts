@@ -41,6 +41,14 @@ export type APIError = Error & {
   body?: APIErrorBody
 }
 
+export function getAPIErrorStatus(error: unknown): number | undefined {
+  if (typeof error !== 'object' || error === null || !(error instanceof Error)) {
+    return undefined
+  }
+  const status = (error as APIError).status
+  return typeof status === 'number' ? status : undefined
+}
+
 function getErrorDetails(body: APIErrorBody): {
   code?: string
   message?: string
@@ -119,17 +127,29 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 /* ----------------------------- Auth ----------------------------- */
 
 export async function unlock(passcode: string) {
-  await request<{ ok: boolean }>('/api/v1/auth/unlock', {
+  const result = await request<unknown>('/api/v1/auth/unlock', {
     method: 'POST',
     body: JSON.stringify({ passcode }),
   })
+  if (!isRecord(result) || result.ok !== true) {
+    throw new Error('Invalid unlock response')
+  }
 }
 
 export async function authStatus(): Promise<{ unlocked: boolean }> {
-  try {
-    return await request<{ unlocked: boolean }>('/api/v1/auth/status')
-  } catch {
-    return { unlocked: false }
+  const result = await request<unknown>('/api/v1/auth/status')
+  if (!isRecord(result) || typeof result.unlocked !== 'boolean') {
+    throw new Error('Invalid authentication status response')
+  }
+  return { unlocked: result.unlocked }
+}
+
+export async function logout(): Promise<void> {
+  const result = await request<unknown>('/api/v1/auth/logout', {
+    method: 'POST',
+  })
+  if (!isRecord(result) || result.ok !== true) {
+    throw new Error('Invalid logout response')
   }
 }
 

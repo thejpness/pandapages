@@ -15,6 +15,7 @@ import (
 	"pandapages/api/internal/db"
 	"pandapages/api/internal/httpadmin"
 	"pandapages/api/internal/httpapi"
+	"pandapages/api/internal/session"
 )
 
 const (
@@ -26,6 +27,49 @@ const (
 	shutdownTimeout   = 10 * time.Second
 	maxHeaderBytes    = 1 << 20 // 1 MiB
 )
+
+type runtimeConfig struct {
+	databaseURL   string
+	passcode      string
+	adminKey      string
+	cookieSecure  bool
+	logRequests   bool
+	sessionSigner *session.Manager
+}
+
+func loadRuntimeConfig(getenv func(string) string) (runtimeConfig, error) {
+	passcode := getenv("PP_PASSCODE")
+	if !validPasscode(passcode) {
+		return runtimeConfig{}, fmt.Errorf("PP_PASSCODE must be exactly six ASCII decimal digits")
+	}
+
+	cookieSecure := getenv("PP_COOKIE_SECURE") == "true"
+	sessionSigner, err := session.New(getenv("PP_SESSION_SECRET"), cookieSecure)
+	if err != nil {
+		return runtimeConfig{}, fmt.Errorf("PP_SESSION_SECRET is invalid: %w", err)
+	}
+
+	return runtimeConfig{
+		databaseURL:   getenv("DATABASE_URL"),
+		passcode:      passcode,
+		adminKey:      strings.TrimSpace(getenv("PP_ADMIN_KEY")),
+		cookieSecure:  cookieSecure,
+		logRequests:   getenv("PP_LOG_LEVEL") == "debug",
+		sessionSigner: sessionSigner,
+	}, nil
+}
+
+func validPasscode(passcode string) bool {
+	if len(passcode) != 6 {
+		return false
+	}
+	for index := range passcode {
+		if passcode[index] < '0' || passcode[index] > '9' {
+			return false
+		}
+	}
+	return true
+}
 
 func newServer(handler http.Handler) *http.Server {
 	return &http.Server{
@@ -40,26 +84,24 @@ func newServer(handler http.Handler) *http.Server {
 }
 
 func run() error {
-	store := db.MustOpen(os.Getenv("DATABASE_URL"))
-	defer store.Close()
-
-	pass := strings.TrimSpace(os.Getenv("PP_PASSCODE"))
-	if pass == "" {
-		return fmt.Errorf("PP_PASSCODE is required")
+	cfg, err := loadRuntimeConfig(os.Getenv)
+	if err != nil {
+		return err
 	}
 
-	adminKey := strings.TrimSpace(os.Getenv("PP_ADMIN_KEY"))
+	store := db.MustOpen(cfg.databaseURL)
+	defer store.Close()
 
 	public := httpapi.New(httpapi.Config{
-		Passcode:     pass,
-		CookieSecure: os.Getenv("PP_COOKIE_SECURE") == "true",
-		LogRequests:  os.Getenv("PP_LOG_LEVEL") == "debug",
+		Passcode:    cfg.passcode,
+		LogRequests: cfg.logRequests,
+		Sessions:    cfg.sessionSigner,
 	}, store)
 
 	admin := httpadmin.New(httpadmin.Config{
-		AdminKey:     adminKey,
-		CookieSecure: os.Getenv("PP_COOKIE_SECURE") == "true",
-		LogRequests:  os.Getenv("PP_LOG_LEVEL") == "debug",
+		AdminKey:    cfg.adminKey,
+		LogRequests: cfg.logRequests,
+		Sessions:    cfg.sessionSigner,
 	}, store)
 
 	root := http.NewServeMux()
