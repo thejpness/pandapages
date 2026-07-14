@@ -181,7 +181,11 @@ The host deployment environment uses three distinct values:
 - `MIGRATION_DATABASE_URL`: `pandapages_migrator` credential, visible only to
   the one-shot migration container as `GOOSE_DBSTRING`;
 - `APP_DATABASE_URL`: `pandapages_app` credential, visible only to the API
-  container as `DATABASE_URL`.
+  container as `DATABASE_URL`;
+- `PGAPPNAME=pandapages-api`: fixed, non-secret API connection metadata. The
+  production and development Compose definitions set it only on the API so
+  the cutover verifier can distinguish that workload from an unrelated
+  `psql` client. A database URL must not override it.
 
 The backup service uses `PP_BACKUP_DATABASE_USER=pandapages_backup` through a
 local container Unix socket. If the reviewed HBA policy requires password
@@ -234,14 +238,77 @@ Retain the old configuration until the observation period is complete.
     rollback and is absent from resolved API/migration environments.
 11. Run the one-shot migration service. Only after it succeeds, recreate the
     API container; do not recreate PostgreSQL or its volume.
-12. Verify `/healthz`, unlock, library/read/progress operations, authenticated
-    admin list, UTF-8 preview/publish in an approved non-production fixture,
-    logs, and API database identity/attributes without printing credentials.
+12. Verify library/read/progress operations, the authenticated admin list, and
+    UTF-8 preview/publish with an approved non-production fixture. Then run the
+    repository-owned API role verifier below. Treat either application smoke
+    failure or verifier failure as a failed cutover and follow rollback.
 13. Run one approved encrypted backup and disposable restore verification with
     the backup role. Confirm remote completion, checksums, cleanup, and status.
 14. Confirm the legacy superuser is absent from active API, migration, and
     backup processes. Observe for at least seven days and through one daily
     backup plus one weekly restore rehearsal before disabling its LOGIN.
+
+### Durable API database-role verification
+
+Run this immediately after the recreated API passes its application and admin
+smoke tests. Resolve the two current container IDs from the reviewed Compose
+project; do not copy an address from `docker inspect` or pass one to SQL.
+
+```bash
+api_container=$(docker compose ps -q api)
+postgres_container=$(docker compose ps -q postgres)
+scripts/postgresql-api-role-verify.sh \
+  --api-container "$api_container" \
+  --postgres-container "$postgres_container" \
+  --database pandapages \
+  --admin-user <ADMIN_LOGIN>
+```
+
+The verifier fails closed unless all of the following are true:
+
+- the named API and PostgreSQL containers are running and share exactly one
+  Docker network;
+- the API health endpoint succeeds;
+- an unlock request, built inside the API container without returning its
+  passcode to the host, establishes protected session cookies, and an
+  immediate authenticated library request exercises an always-querying
+  database path even when the unlock account lookup is cached;
+- PostgreSQL reports a recent client backend from that API container address
+  using database `pandapages`, role `pandapages_app`, and application name
+  `pandapages-api`;
+- no connection from that API source uses `pandapages`, `pandapages_owner`,
+  `pandapages_migrator`, `pandapages_backup`, or another unexpected identity.
+
+Expected success ends with `api_role_verification=passed`. Output contains
+only non-secret named conditions; it does not print a client address, database
+URL, passcode, cookie, or password. The protected probe directory, including
+request, response, and cookie material, is removed on both success and failure.
+
+This is strong operational attribution to the current container, shared
+network source, workload name, database, role, and a controlled request. It is
+not cryptographic attestation of the container image, proof that every API
+query has been exercised, or a substitute for the remaining application and
+admin smoke tests. An operator with Docker-root access can intentionally alter
+container or network identity, so access to that host remains privileged.
+
+A failed verifier is a rollback condition. Preserve its named failure without
+secrets, restore the previous API database configuration, recreate only the
+API, and confirm service recovery. Do not accept a cluster-wide count of
+`pandapages_app` sessions: an unrelated manual `psql` connection can satisfy
+that weaker test.
+
+On 13 July 2026, the API cutover itself succeeded, but a temporary rollout
+helper placed a psql literal-variable expression inside `psql --command`.
+That command is sent directly for server parsing, so the colon expression was
+not interpolated and PostgreSQL rejected the helper SQL. Rollback completed
+successfully; no database or application defect was identified. The durable
+verifier uses fixed SQL from stdin and compares validated Docker metadata
+outside SQL, removing that evaluation boundary entirely.
+
+After this correction is merged and push-to-main CI is green, restart the
+controlled production rollout from the beginning. Repeat every preflight,
+role, migration, application, backup, restore, cleanup, and timer gate; do not
+resume from the stopped cutover step.
 
 Do not drop the legacy role during rollout. After the observation period,
 verify it owns no non-extension application objects, preserve a separately

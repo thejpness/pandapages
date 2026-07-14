@@ -154,6 +154,7 @@ jobs:
             scripts/postgresql-backup-retention.sh \
             scripts/postgresql-readonly-audit.sh \
             scripts/postgresql-roles.sh \
+            scripts/postgresql-api-role-verify.sh \
             scripts/postgresql-restore-rehearsal.sh \
             scripts/tests/postgresql-api-role-smoke.sh \
             scripts/tests/postgresql-backup-integration.sh \
@@ -167,6 +168,7 @@ jobs:
           scripts/postgresql-backup-retention.sh --help >/dev/null
           scripts/postgresql-readonly-audit.sh --help >/dev/null
           scripts/postgresql-roles.sh --help >/dev/null
+          scripts/postgresql-api-role-verify.sh --help >/dev/null
           scripts/postgresql-restore-rehearsal.sh --help >/dev/null
 
       - name: Build API and migration images for generated role tests
