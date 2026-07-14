@@ -9,6 +9,7 @@ restore_verify_script="$repo_root/scripts/postgresql-backup-restore-verify.sh"
 retention_script="$repo_root/scripts/postgresql-backup-retention.sh"
 health_script="$repo_root/scripts/postgresql-backup-healthcheck.sh"
 notify_script="$repo_root/scripts/postgresql-backup-notify.sh"
+tmpfiles_config="$repo_root/deploy/tmpfiles.d/pandapages-postgresql-backup.conf"
 
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/pandapages-backup-unit.XXXXXX")
 cleanup() {
@@ -311,7 +312,7 @@ run_backup() {
   env "${base_environment[@]}" "PP_BACKUP_TEST_NOW_UTC=$timestamp" "$@" "$backup_script"
 }
 
-printf '1..14\n'
+printf '1..15\n'
 
 reset_remote
 if ! run_backup 20260713T031700Z >"$test_root/success.out" 2>"$test_root/success.err"; then
@@ -468,3 +469,41 @@ grep -qx 'RuntimeDirectory=pandapages-postgresql-backup' "$restore_unit" ||
 grep -q '^ReadWritePaths=.* /run/pandapages-postgresql-backup$' "$restore_unit" ||
   fail "systemd host-visible temporary directory contract"
 pass "restore keeps PrivateTmp while Docker bind sources use the managed runtime directory"
+
+expected_tmpfiles_rule='d /var/log/pandapages-postgresql-backup 0700 root root -'
+[[ $(<"$tmpfiles_config") == "$expected_tmpfiles_rule" ]] ||
+  fail "systemd operations log directory contract"
+
+service_units=(
+  "$repo_root/deploy/systemd/pandapages-postgresql-backup.service"
+  "$repo_root/deploy/systemd/pandapages-postgresql-restore-verify.service"
+  "$repo_root/deploy/systemd/pandapages-postgresql-backup-healthcheck.service"
+  "$repo_root/deploy/systemd/pandapages-postgresql-backup-notify@.service"
+)
+for service_unit in "${service_units[@]}"; do
+  grep -qx 'LogsDirectory=pandapages-postgresql-backup' "$service_unit" ||
+    fail "systemd operations log directory contract"
+  grep -qx 'LogsDirectoryMode=0700' "$service_unit" ||
+    fail "systemd operations log directory contract"
+  grep -qx 'StandardOutput=append:/var/log/pandapages-postgresql-backup/operations.log' \
+    "$service_unit" || fail "systemd operations log directory contract"
+  grep -qx 'StandardError=append:/var/log/pandapages-postgresql-backup/operations.log' \
+    "$service_unit" || fail "systemd operations log directory contract"
+done
+
+tmpfiles_model_root="$test_root/tmpfiles-root"
+mkdir -p "$tmpfiles_model_root"
+read -r rule_type rule_path rule_mode rule_user rule_group rule_age rule_extra \
+  <"$tmpfiles_config"
+[[ "$rule_type" == d && "$rule_path" == /var/log/pandapages-postgresql-backup ]] ||
+  fail "systemd operations log directory contract"
+[[ "$rule_mode" == 0700 && "$rule_user" == root && "$rule_group" == root ]] ||
+  fail "systemd operations log directory contract"
+[[ "$rule_age" == - && -z ${rule_extra:-} ]] ||
+  fail "systemd operations log directory contract"
+install -d -m "$rule_mode" "$tmpfiles_model_root$rule_path"
+modelled_log_directory="$tmpfiles_model_root/var/log/pandapages-postgresql-backup"
+[[ -d "$modelled_log_directory" ]] || fail "systemd operations log directory contract"
+[[ $(stat -c '%a' "$modelled_log_directory") == 700 ]] ||
+  fail "systemd operations log directory contract"
+pass "tmpfiles creates the root-only directory required by every append log target"
