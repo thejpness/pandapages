@@ -29,6 +29,13 @@ type authTestStore struct {
 	existsCalls      int
 	libraryCalls     int
 	libraryAccount   string
+	progressPutCalls int
+	progressAccount  string
+	progressSlug     string
+	progressVersion  int
+	progressLocator  json.RawMessage
+	progressPercent  float64
+	progressPutErr   error
 }
 
 func (s *authTestStore) EnsureDefaultAccount() (string, error) {
@@ -68,8 +75,14 @@ func (*authTestStore) ProgressGet(string, string) (model.ProgressState, error) {
 	return model.ProgressState{}, nil
 }
 
-func (*authTestStore) ProgressPut(string, string, int, json.RawMessage, float64) error {
-	return nil
+func (s *authTestStore) ProgressPut(accountID, slug string, version int, locator json.RawMessage, percent float64) error {
+	s.progressPutCalls++
+	s.progressAccount = accountID
+	s.progressSlug = slug
+	s.progressVersion = version
+	s.progressLocator = append(json.RawMessage(nil), locator...)
+	s.progressPercent = percent
+	return s.progressPutErr
 }
 
 func (*authTestStore) ContinueRecent(string, int) ([]model.ContinueItem, error) {

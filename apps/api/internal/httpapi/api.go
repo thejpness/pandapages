@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
@@ -261,6 +262,10 @@ func New(cfg Config, store Store) http.Handler {
 				writeErr(w, http.StatusBadRequest, "version", "version must be > 0")
 				return
 			}
+			if !validProgressLocator(body.Locator) {
+				writeErr(w, http.StatusBadRequest, "locator", "locator must be a JSON object")
+				return
+			}
 			if body.Percent < 0 {
 				body.Percent = 0
 			}
@@ -370,6 +375,16 @@ func New(cfg Config, store Store) http.Handler {
 	}
 
 	return h
+}
+
+func validProgressLocator(locator json.RawMessage) bool {
+	raw := bytes.TrimSpace(locator)
+	if len(raw) == 0 {
+		return false
+	}
+
+	var object map[string]json.RawMessage
+	return json.Unmarshal(raw, &object) == nil && object != nil
 }
 
 /* -------------------- helpers & middleware -------------------- */

@@ -9,6 +9,7 @@ import {
   getAPIErrorStatus,
   isJsonObject,
   type JsonObject,
+  type ProgressState,
   type StorySegment,
 } from '../lib/api'
 import { loadPrefs, savePrefs, type ReaderPrefs } from '../lib/prefs'
@@ -16,6 +17,12 @@ import { haptic } from '../lib/haptics'
 import { authState } from '../lib/session'
 import { safeNextPath } from '../lib/session-navigation'
 import { navigationDidFail } from '../lib/session-transitions'
+import {
+  createProgressSaveCoordinator,
+  type ProgressSaveCoordinator,
+  type ProgressSaveState,
+  type ProgressSnapshot,
+} from '../lib/progress-save-coordinator'
 
 type Page = {
   index: number
@@ -105,7 +112,7 @@ function extractHeadingTextFromHTML(renderedHtml: string): string {
 
 const route = useRoute()
 const router = useRouter()
-const slug = String(route.params.slug)
+let slug = String(route.params.slug)
 
 const title = ref('')
 const author = ref('')
@@ -158,8 +165,15 @@ const chapters = computed<Chapter[]>(() => {
 const pagedRef = ref<HTMLElement | null>(null)
 const currentPage = ref(0)
 
-const saving = ref(false)
 const percent = ref(0)
+const progressSaveState = ref<ProgressSaveState>({
+  status: 'idle',
+  desired: null,
+  confirmed: null,
+  error: null,
+})
+const leaveAfterSaveFailure = ref(false)
+const navigatingToLibrary = ref(false)
 
 const prefs = ref<ReaderPrefs>(loadPrefs())
 watch(prefs, (p) => savePrefs(p), { deep: true })
@@ -172,8 +186,28 @@ const resumeToast = ref<{ mode: 'scroll' | 'paged'; y?: number; page?: number; p
 const themeBg = computed(() => (prefs.value.theme === 'warm' ? '#0F1413' : '#0B1724'))
 const themeText = computed(() => 'rgba(255,255,255,0.92)')
 
-let saveTimer: number | null = null
-let lastSaved = { y: 0, percent: 0, page: 0 }
+let progressCoordinator: ProgressSaveCoordinator | null = null
+let unsubscribeProgress: (() => void) | null = null
+let storyGeneration = 0
+let handlingProgressSessionLoss = false
+
+const saveStatusText = computed(() => {
+  switch (progressSaveState.value.status) {
+    case 'dirty':
+      return 'Unsaved'
+    case 'saving':
+      return 'Saving…'
+    case 'saved':
+      return 'Saved'
+    case 'error':
+      return 'Save failed'
+    default:
+      return ''
+  }
+})
+const progressSaveActive = computed(
+  () => progressSaveState.value.status === 'saving'
+)
 
 function updatePercent() {
   if (prefs.value.mode === 'paged') {
@@ -185,50 +219,108 @@ function updatePercent() {
   }
 }
 
-async function flushSave() {
-  if (resumeToast.value) return
-
+function captureProgressSnapshot(storySlug = slug): ProgressSnapshot | null {
   if (prefs.value.mode === 'paged') {
     const n = pages.value.length
     const p = n <= 1 ? 0 : clamp01(currentPage.value / (n - 1))
     const page = pages.value[currentPage.value]
-    if (!page) return
-
-    if (Math.abs(currentPage.value - lastSaved.page) < 1 && Math.abs(p - lastSaved.percent) < 0.01) return
-
-    saving.value = true
-    try {
-      await saveProgress(
-        slug,
-        version.value,
-        { mode: 'paged', page: currentPage.value, startOrdinal: page.startOrdinal, endOrdinal: page.endOrdinal },
-        p
-      )
-      lastSaved = { ...lastSaved, page: currentPage.value, percent: p }
-    } finally {
-      saving.value = false
+    if (!page) return null
+    return {
+      slug: storySlug,
+      version: version.value,
+      locator: {
+        mode: 'paged',
+        page: currentPage.value,
+        startOrdinal: page.startOrdinal,
+        endOrdinal: page.endOrdinal,
+      },
+      percent: p,
     }
-    return
   }
 
   const y = window.scrollY || 0
   const p = calcPercentScroll()
-  if (Math.abs(y - lastSaved.y) < 24 && Math.abs(p - lastSaved.percent) < 0.01) return
-
-  saving.value = true
-  try {
-    await saveProgress(slug, version.value, { mode: 'scroll', scrollY: y }, p)
-    lastSaved = { y, percent: p, page: lastSaved.page }
-  } finally {
-    saving.value = false
+  return {
+    slug: storySlug,
+    version: version.value,
+    locator: { mode: 'scroll', scrollY: y },
+    percent: p,
   }
 }
 
 function scheduleSave() {
   if (resumeToast.value) return
   updatePercent()
-  if (saveTimer) window.clearTimeout(saveTimer)
-  saveTimer = window.setTimeout(() => void flushSave(), 450)
+  const snapshot = captureProgressSnapshot()
+  if (snapshot) progressCoordinator?.update(snapshot)
+}
+
+function disposeProgressCoordinator() {
+  unsubscribeProgress?.()
+  unsubscribeProgress = null
+  progressCoordinator?.dispose()
+  progressCoordinator = null
+}
+
+async function moveToUnlockAfterProgressSessionLoss(
+  generation: number,
+  storySlug: string
+) {
+  if (handlingProgressSessionLoss || generation !== storyGeneration) return
+  handlingProgressSessionLoss = true
+  authState.confirmLocked()
+  leaveAfterSaveFailure.value = false
+
+  const next = safeNextPath(`/read/${encodeURIComponent(storySlug)}`)
+  try {
+    const result = await router.replace({ path: '/unlock', query: { next } })
+    if (navigationDidFail(result) && generation === storyGeneration) {
+      loadError.value =
+        'The session ended, but the passcode screen could not be opened. Reload to continue.'
+    }
+  } catch {
+    if (generation === storyGeneration) {
+      loadError.value =
+        'The session ended, but the passcode screen could not be opened. Reload to continue.'
+    }
+  }
+}
+
+function createProgressCoordinator(generation: number, storySlug: string) {
+  disposeProgressCoordinator()
+  const coordinator = createProgressSaveCoordinator({
+    persist: (snapshot, options) =>
+      saveProgress(
+        snapshot.slug,
+        snapshot.version,
+        snapshot.locator,
+        snapshot.percent,
+        options
+      ),
+    debounceMs: 450,
+    setTimer: (callback, delayMs) => window.setTimeout(callback, delayMs),
+    clearTimer: (handle) => window.clearTimeout(handle),
+  })
+  progressCoordinator = coordinator
+  unsubscribeProgress = coordinator.subscribe((state) => {
+    if (generation !== storyGeneration) return
+    progressSaveState.value = state
+    if (
+      state.status === 'error' &&
+      getAPIErrorStatus(state.error) === 401
+    ) {
+      void moveToUnlockAfterProgressSessionLoss(generation, storySlug)
+    }
+  })
+  return coordinator
+}
+
+async function retryProgressSave() {
+  try {
+    await progressCoordinator?.retry()
+  } catch {
+    // The coordinator keeps the latest snapshot and exposes the error state.
+  }
 }
 
 function doResume() {
@@ -260,17 +352,21 @@ async function startOver() {
   if (prefs.value.mode === 'paged') {
     currentPage.value = 0
     percent.value = 0
-    lastSaved = { ...lastSaved, page: 0, percent: 0 }
     const el = pagedRef.value
     el?.scrollTo({ left: 0, behavior: 'auto' })
-    await saveProgress(slug, version.value, { mode: 'paged', page: 0 }, 0)
-    return
+  } else {
+    scrollToY(0)
+    percent.value = 0
   }
 
-  scrollToY(0)
-  percent.value = 0
-  lastSaved = { y: 0, percent: 0, page: lastSaved.page }
-  await saveProgress(slug, version.value, { mode: 'scroll', scrollY: 0 }, 0)
+  const snapshot = captureProgressSnapshot()
+  if (!snapshot || !progressCoordinator) return
+  progressCoordinator.update(snapshot, { force: true, debounce: false })
+  try {
+    await progressCoordinator.flush()
+  } catch {
+    // The normal save-error state remains visible and retryable.
+  }
 }
 
 function findAgain() {
@@ -282,7 +378,31 @@ function dismissResume() {
   resumeToast.value = null
 }
 
-function goLibrary() {
+async function goLibrary() {
+  if (navigatingToLibrary.value) return
+
+  leaveAfterSaveFailure.value = false
+  const coordinator = progressCoordinator
+  const snapshot = resumeToast.value ? null : captureProgressSnapshot()
+  if (coordinator && snapshot) {
+    coordinator.update(snapshot, { debounce: false })
+  }
+
+  navigatingToLibrary.value = true
+  try {
+    await coordinator?.flush()
+    await router.push('/library')
+  } catch (error) {
+    if (getAPIErrorStatus(error) !== 401) {
+      leaveAfterSaveFailure.value = true
+    }
+  } finally {
+    navigatingToLibrary.value = false
+  }
+}
+
+function leaveReaderAnyway() {
+  leaveAfterSaveFailure.value = false
   void router.push('/library')
 }
 
@@ -325,12 +445,15 @@ function setMode(mode: 'scroll' | 'paged') {
   if (mode === 'paged') {
     currentPage.value = 0
     percent.value = 0
-    lastSaved.page = 0
     void nextTick(() => {
       pagedRef.value?.scrollTo({ left: 0, behavior: 'auto' })
+      scheduleSave()
     })
   } else {
-    void nextTick(() => scrollToY(0))
+    void nextTick(() => {
+      scrollToY(0)
+      scheduleSave()
+    })
   }
 }
 
@@ -349,11 +472,38 @@ function onPagedScroll() {
   scheduleSave()
 }
 
-async function checkResumeOffer() {
+type ProgressLoadResult = {
+  loaded: boolean
+  progress: ProgressState | null
+}
+
+function progressSnapshotFromServer(
+  progress: ProgressState | null,
+  storySlug: string
+): ProgressSnapshot | null {
+  if (!progress || progress.version !== version.value) return null
+  const locator = asLocator(progress.locator)
+  if (!Object.keys(locator).length) return null
+  return {
+    slug: storySlug,
+    version: progress.version,
+    locator,
+    percent: clamp01(progress.percent),
+  }
+}
+
+async function checkResumeOffer(
+  generation: number,
+  storySlug: string
+): Promise<ProgressLoadResult> {
   try {
-    const p = await getProgress(slug)
-    if (!p || !p.locator) return
-    if (p.version !== version.value) return
+    const p = await getProgress(storySlug)
+    if (generation !== storyGeneration) {
+      return { loaded: false, progress: null }
+    }
+    if (!p || !p.locator || p.version !== version.value) {
+      return { loaded: true, progress: p ?? null }
+    }
 
     const loc = asLocator(p.locator)
     const mode = loc.mode === 'paged' ? 'paged' : 'scroll'
@@ -374,36 +524,46 @@ async function checkResumeOffer() {
           percent: savedPercent,
         }
       }
-      return
+      return { loaded: true, progress: p }
     }
 
     const scrollY = typeof loc.scrollY === 'number' ? loc.scrollY : 0
-    if (!Number.isFinite(scrollY) || scrollY <= 64) return
+    if (!Number.isFinite(scrollY) || scrollY <= 64) {
+      return { loaded: true, progress: p }
+    }
 
     resumeToast.value = {
       mode: 'scroll',
       y: scrollY,
       percent: clamp01(p.percent),
     }
-  } catch {
-    // ignore
+    return { loaded: true, progress: p }
+  } catch (error) {
+    if (getAPIErrorStatus(error) === 401) {
+      void moveToUnlockAfterProgressSessionLoss(generation, storySlug)
+    }
+    return { loaded: false, progress: null }
   }
 }
 
 async function load() {
   if (storyLoading.value) return
+  const generation = storyGeneration
+  const storySlug = slug
   storyLoading.value = true
   loadError.value = ''
 
   try {
-    const s = await getStory(slug)
+    const s = await getStory(storySlug)
+    if (generation !== storyGeneration) return
     title.value = s.title
     author.value = s.author || ''
     html.value = s.renderedHtml
     version.value = s.version
 
     if (prefs.value.mode === 'paged') {
-      const seg = await getStorySegments(slug)
+      const seg = await getStorySegments(storySlug)
+      if (generation !== storyGeneration) return
       segments.value = Array.isArray(seg.segments) ? seg.segments : []
       currentPage.value = 0
     } else {
@@ -411,50 +571,98 @@ async function load() {
     }
 
     await nextTick()
-    await checkResumeOffer()
+    if (generation !== storyGeneration) return
+    const progressResult = await checkResumeOffer(generation, storySlug)
+    if (generation !== storyGeneration) return
+    if (handlingProgressSessionLoss) return
     updatePercent()
+    const coordinator = createProgressCoordinator(generation, storySlug)
+    const confirmed = progressSnapshotFromServer(
+      progressResult.progress,
+      storySlug
+    )
+    const current = captureProgressSnapshot(storySlug)
+    if (confirmed) {
+      coordinator.initialize(confirmed)
+    } else if (progressResult.loaded) {
+      coordinator.initialize(current)
+    } else {
+      coordinator.initialize(null, current)
+    }
   } catch (error) {
+    if (generation !== storyGeneration) return
     if (getAPIErrorStatus(error) === 401) {
       title.value = ''
       author.value = ''
       html.value = ''
       segments.value = null
-      authState.confirmLocked()
-      const next = safeNextPath(`/read/${encodeURIComponent(slug)}`)
-      try {
-        const result = await router.replace({ path: '/unlock', query: { next } })
-        if (navigationDidFail(result)) {
-          loadError.value = 'The session ended, but the passcode screen could not be opened. Reload to continue.'
-        }
-      } catch {
-        loadError.value = 'The session ended, but the passcode screen could not be opened. Reload to continue.'
-      }
+      await moveToUnlockAfterProgressSessionLoss(generation, storySlug)
       return
     }
 
     loadError.value = 'Could not load this story. Try again.'
   } finally {
-    storyLoading.value = false
+    if (generation === storyGeneration) storyLoading.value = false
   }
 }
 
 function onPageHide() {
-  void flushSave()
+  if (handlingProgressSessionLoss || resumeToast.value) return
+  const snapshot = captureProgressSnapshot()
+  if (snapshot) {
+    progressCoordinator?.update(snapshot, { debounce: false })
+  }
+  void progressCoordinator?.bestEffortKeepaliveFlush().catch(() => {
+    // Browsers may terminate before a keepalive response is observed.
+  })
+}
+
+function onVisibilityChange() {
+  if (document.visibilityState === 'hidden') onPageHide()
 }
 
 onMounted(() => {
   void load()
   window.addEventListener('scroll', scheduleSave, { passive: true })
   window.addEventListener('pagehide', onPageHide)
-  document.addEventListener('visibilitychange', onPageHide)
+  document.addEventListener('visibilitychange', onVisibilityChange)
 })
 
 onBeforeUnmount(() => {
+  onPageHide()
   window.removeEventListener('scroll', scheduleSave)
   window.removeEventListener('pagehide', onPageHide)
-  document.removeEventListener('visibilitychange', onPageHide)
-  if (saveTimer) window.clearTimeout(saveTimer)
+  document.removeEventListener('visibilitychange', onVisibilityChange)
+  disposeProgressCoordinator()
 })
+
+watch(
+  () => String(route.params.slug),
+  (nextSlug) => {
+    if (nextSlug === slug) return
+    onPageHide()
+    disposeProgressCoordinator()
+    storyGeneration += 1
+    slug = nextSlug
+    handlingProgressSessionLoss = false
+    storyLoading.value = false
+    loadError.value = ''
+    title.value = ''
+    author.value = ''
+    html.value = ''
+    segments.value = null
+    currentPage.value = 0
+    resumeToast.value = null
+    leaveAfterSaveFailure.value = false
+    progressSaveState.value = {
+      status: 'idle',
+      desired: null,
+      confirmed: null,
+      error: null,
+    }
+    void load()
+  }
+)
 </script>
 
 <template>
@@ -469,11 +677,12 @@ onBeforeUnmount(() => {
         class="max-w-5xl mx-auto px-4 py-3 pt-[calc(0.75rem+env(safe-area-inset-top))] flex items-center justify-between gap-3"
       >
         <button
-          class="text-sm opacity-85 hover:opacity-100"
+          class="text-sm opacity-85 hover:opacity-100 disabled:opacity-50"
+          :disabled="navigatingToLibrary"
           @pointerdown="haptic('select')"
           @click="goLibrary"
         >
-          ← Library
+          {{ navigatingToLibrary ? 'Saving…' : '← Library' }}
         </button>
 
         <div class="flex items-center gap-3">
@@ -482,7 +691,22 @@ onBeforeUnmount(() => {
             <span v-else>{{ Math.round(percent * 100) }}%</span>
           </div>
 
-          <div class="text-xs opacity-70 w-16 text-right">{{ saving ? 'Saving…' : ' ' }}</div>
+          <div
+            class="flex min-w-20 items-center justify-end gap-2 text-xs opacity-80"
+          >
+            <span role="status" aria-live="polite" aria-atomic="true">
+              {{ saveStatusText }}
+            </span>
+            <button
+              v-if="progressSaveState.status === 'error'"
+              type="button"
+              class="rounded-md border border-white/20 px-2 py-1 font-medium opacity-100"
+              :disabled="progressSaveActive"
+              @click="retryProgressSave"
+            >
+              Retry
+            </button>
+          </div>
 
           <button
             v-if="prefs.mode === 'paged' && chapters.length"
@@ -503,6 +727,31 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </header>
+
+    <aside
+      v-if="leaveAfterSaveFailure"
+      class="mx-auto mt-3 flex max-w-3xl items-center justify-between gap-3 rounded-xl border border-amber-200/30 bg-amber-200/10 px-4 py-3 text-sm"
+      role="alert"
+    >
+      <p>Progress could not be saved.</p>
+      <div class="flex shrink-0 gap-2">
+        <button
+          type="button"
+          class="rounded-lg bg-white px-3 py-2 font-medium text-[#0B1724] disabled:opacity-60"
+          :disabled="navigatingToLibrary || progressSaveState.status === 'saving'"
+          @click="goLibrary"
+        >
+          Retry
+        </button>
+        <button
+          type="button"
+          class="rounded-lg border border-white/20 px-3 py-2"
+          @click="leaveReaderAnyway"
+        >
+          Leave anyway
+        </button>
+      </div>
+    </aside>
 
     <!-- Chapter drawer -->
     <div v-if="showChapters" class="fixed inset-0 z-30" @click.self="closeChapters">
