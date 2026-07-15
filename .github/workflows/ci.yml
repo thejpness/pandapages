@@ -56,6 +56,10 @@ jobs:
         working-directory: .
         run: scripts/tests/account-store-integration.sh
 
+      - name: Test progress persistence
+        working-directory: .
+        run: scripts/tests/progress-store-integration.sh
+
       - name: Build production API
         env:
           CGO_ENABLED: "0"
@@ -165,6 +169,7 @@ jobs:
             scripts/tests/postgresql-api-role-session-contract.sh \
             scripts/tests/postgresql-backup-integration.sh \
             scripts/tests/postgresql-backup-unit.sh \
+            scripts/tests/progress-store-integration.sh \
             scripts/tests/postgresql-roles-contract.sh \
             scripts/tests/postgresql-roles-integration.sh
           scripts/postgresql-backup.sh --help >/dev/null

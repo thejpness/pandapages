@@ -280,14 +280,23 @@ export async function getProgress(slug: string): Promise<ProgressState> {
   return request<ProgressState>(`/api/v1/progress/${encodeURIComponent(slug)}`)
 }
 
-export async function saveProgress(slug: string, version: number, locator: JsonValue, percent: number) {
-  try {
-    await request<{ ok: boolean }>(`/api/v1/progress/${encodeURIComponent(slug)}`, {
+export async function saveProgress(
+  slug: string,
+  version: number,
+  locator: JsonValue,
+  percent: number,
+  options: { keepalive?: boolean } = {}
+): Promise<void> {
+  const result = await request<unknown>(
+    `/api/v1/progress/${encodeURIComponent(slug)}`,
+    {
       method: 'PUT',
       body: JSON.stringify({ version, locator, percent }),
-    })
-  } catch {
-    // ignore in v1
+      keepalive: options.keepalive,
+    }
+  )
+  if (!isRecord(result) || result.ok !== true) {
+    throw new Error('Invalid progress-save response')
   }
 }
 
