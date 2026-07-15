@@ -1,12 +1,18 @@
 # PostgreSQL least-privilege roles
 
-Status: proposed repository configuration; not deployed
+Status: production least-privilege cutover and backup/restore rollout completed;
+observation active since 14 July 2026 at 17:10:41 UTC. Repository verifier
+support for signed sessions is not deployed because the signed-session
+application remains a future change.
 
 This runbook separates Panda Pages database ownership, migrations, application
-runtime, logical backup, and exceptional administration. Applying it is a
-production database change and requires a separately approved change window.
-This pull request does not connect to production, rotate credentials, apply
-the policy, recreate containers, or deploy anything.
+runtime, logical backup, and exceptional administration. The role model,
+automated encrypted production backups, and disposable restore verification
+are deployed and working. The observation period remains active. This pull
+request does not contact or change production; it only adds repository support
+for explicitly verifying either the legacy or signed application session
+contract. Signed mode is not the current production mode and this change does
+not authorise or require a production rerun, restart, deployment, or rollout.
 
 ## Proven repository requirements
 
@@ -28,12 +34,14 @@ the bundled `pgcrypto` extension and use `digest()` while seeding. PostgreSQL
 being a superuser. No extension requires permanent migration-role
 superuser access.
 
-The existing bootstrap login `pandapages` is created by the official image and
-currently has superuser privileges. The storage audit also found application
-objects owned by that login and normal PostgreSQL defaults inherited through
-`PUBLIC`. The target policy removes that login from application, migration,
-and backup execution. It remains temporarily available only for controlled
-operator work and rollback until the observation period ends.
+Historically, before the completed cutover, the bootstrap login `pandapages`
+was created by the official image with superuser privileges. The storage audit
+also found application objects owned by that login and normal PostgreSQL
+defaults inherited through `PUBLIC`. The completed policy removed that login
+from application, migration, and backup execution. It remains enabled solely
+for rollback during the active observation period. Disabling it remains
+deferred until the observation gate and its required backup/restore evidence
+have completed.
 
 Authoritative PostgreSQL 18 references: [predefined roles](https://www.postgresql.org/docs/18/predefined-roles.html), [role membership options](https://www.postgresql.org/docs/18/sql-grant.html), [creator-specific default privileges](https://www.postgresql.org/docs/18/sql-alterdefaultprivileges.html), and the [trusted `pgcrypto` extension](https://www.postgresql.org/docs/18/pgcrypto.html).
 
@@ -45,7 +53,7 @@ Authoritative PostgreSQL 18 references: [predefined roles](https://www.postgresq
 | `pandapages_migrator` | Yes | 2 | May `SET ROLE pandapages_owner`; no inheritance or admin option. | Goose login only. |
 | `pandapages_app` | Yes | 20 | none | Go API runtime only. The API pool is capped at 10 connections. |
 | `pandapages_backup` | Yes | 2 | none | Public-schema logical dump and password-free globals inventory. |
-| `pandapages` | Yes, temporarily | operator-controlled | none required | Legacy image-bootstrap superuser retained only for exceptional administration and rollback. |
+| `pandapages` | Yes, observation period only | operator-controlled | none required | Legacy image-bootstrap superuser retained solely for rollback while the observation gate is active. |
 
 All four policy roles are `NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT
 NOREPLICATION NOBYPASSRLS`. The owner is `NOLOGIN`. The migration membership
@@ -205,10 +213,14 @@ only that role's password from an approved interactive administrative session,
 update only its consumer, recreate that consumer, and verify it before removing
 the previous value from the protected source.
 
-## Production rollout (not authorised by this PR)
+## Completed production rollout and active observation
 
-Use a maintenance window even though the ACL operation is transactional.
-Retain the old configuration until the observation period is complete.
+The least-privilege role cutover, encrypted backup rollout, and disposable
+restore verification are complete and working. The observation period began
+on 14 July 2026 at 17:10:41 UTC and must continue undisturbed. Steps 1–13 below
+are retained as the reviewed record of the completed rollout sequence; step 14
+describes the active observation gate. They are not instructions to repeat the
+rollout because repository verifier capability changes.
 
 1. Confirm a recent encrypted backup and successful disposable restore, disk
    headroom, current image/volume identity, and an approved rollback operator.
@@ -250,9 +262,11 @@ Retain the old configuration until the observation period is complete.
 
 ### Durable API database-role verification
 
-Run this immediately after the recreated API passes its application and admin
-smoke tests. Resolve the two current container IDs from the reviewed Compose
-project; do not copy an address from `docker inspect` or pass one to SQL.
+This verifier was used after the recreated API passed its application and
+admin smoke tests. PR #14 does not require another production run. For a
+separately approved verification of the currently deployed legacy application,
+resolve the two current container IDs from the reviewed Compose project; do
+not copy an address from `docker inspect` or pass one to SQL.
 
 ```bash
 api_container=$(docker compose ps -q api)
@@ -265,9 +279,19 @@ scripts/postgresql-api-role-verify.sh \
   --admin-user <ADMIN_LOGIN>
 ```
 
-`legacy` is the current production-compatible contract and the verifier's
-backward-compatible default. Current repository and operational invocations
-still select it explicitly. It requires the deployed `pp_unlocked=1` and
+Run the verifier from a complete repository checkout. If approved operator
+tooling is copied elsewhere, deploy both
+`scripts/postgresql-api-role-verify.sh` and
+`scripts/lib/postgresql-api-role-session-cookie.awk`, preserve their relative
+directory structure, and preserve appropriate executable and read permissions.
+The verifier deliberately fails closed when the adjacent AWK contract file is
+unavailable. Do not paste or reconstruct the AWK logic inline during a
+production change.
+
+`legacy` is the current production contract and the verifier's
+backward-compatible default. All tracked repository and operational
+invocations select it explicitly. Current production must continue to use
+`--session-contract legacy`; it requires the deployed `pp_unlocked=1` and
 nonempty `pp_aid` cookies and rejects a signed-only response.
 
 The verifier also supports an explicit `--session-contract signed` mode for
@@ -277,10 +301,15 @@ empty legacy cookie deletion headers. Selection is deliberately not
 auto-detected: a verifier run must prove the contract intended for the API
 version under review.
 
+The verifier does not inspect or reimplement the signed token's HMAC format.
+The successful protected library request is the proof that the running API
+accepted the session cookie returned by unlock.
+
 Adding both modes to repository tooling does not change production. No rollout
-is part of this change. A future signed-session application rollout must invoke
-the verifier with `--session-contract signed` after the API cutover; do not
-claim signed-session verification while the legacy application is deployed.
+or restart is part of this change. A future separately approved deployment of
+PR #13 or its successor must invoke the verifier with
+`--session-contract signed` after the API cutover; do not claim signed-session
+verification while the legacy application is deployed.
 
 The verifier fails closed unless all of the following are true:
 
@@ -315,20 +344,31 @@ API, and confirm service recovery. Do not accept a cluster-wide count of
 `pandapages_app` sessions: an unrelated manual `psql` connection can satisfy
 that weaker test.
 
-On 13 July 2026, the API cutover itself succeeded, but a temporary rollout
-helper placed a psql literal-variable expression inside `psql --command`.
-That command is sent directly for server parsing, so the colon expression was
-not interpolated and PostgreSQL rejected the helper SQL. Rollback completed
-successfully; no database or application defect was identified. The durable
-verifier uses fixed SQL from stdin and compares validated Docker metadata
-outside SQL, removing that evaluation boundary entirely.
+During the earlier rollout attempt on 13 July 2026, the API cutover portion
+succeeded, but a temporary rollout helper placed a psql literal-variable
+expression inside `psql --command`. That command is sent directly for server
+parsing, so the colon expression was not interpolated and PostgreSQL rejected
+the helper SQL. Rollback completed successfully; no database or application
+defect was identified. The durable verifier uses fixed SQL from stdin and
+compares validated Docker metadata outside SQL, removing that evaluation
+boundary entirely. The later production cutover and backup/restore rollout
+completed successfully before the current observation period began.
 
-After this correction is merged and push-to-main CI is green, restart the
-controlled production rollout from the beginning. Repeat every preflight,
-role, migration, application, backup, restore, cleanup, and timer gate; do not
-resume from the stopped cutover step.
+Merging this verifier-capability change does not require a production rollout
+or restart. Continue the existing observation period unchanged. Current
+production remains on the legacy application session contract and must be
+verified with `--session-contract legacy`.
 
-Do not drop the legacy role during rollout. After the observation period,
+A future separately approved deployment of PR #13 or its successor must use
+`--session-contract signed` after the API cutover. That future application
+deployment must follow its own preflight, browser-update, smoke-test, and
+rollback procedure. It must not restart or repeat the already-completed
+PostgreSQL role and backup/restore rollout without a separate operational
+reason.
+
+The legacy bootstrap login remains enabled solely for rollback during the
+active observation period. Disabling it remains deferred until the observation
+gate and its required backup/restore evidence have completed. At that point,
 verify it owns no non-extension application objects, preserve a separately
 controlled administrative path, and use `ALTER ROLE <LEGACY_ADMIN> NOLOGIN`
 only under a separately reviewed change. Role deletion is outside this policy.
