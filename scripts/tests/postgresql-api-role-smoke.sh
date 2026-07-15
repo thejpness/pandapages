@@ -131,6 +131,7 @@ verify_arguments=(
   --api-container "$api_container"
   --postgres-container "$source_container"
   --database "$database"
+  --session-contract legacy
   --admin-user "$admin_user"
   --application-role "$application_role"
   --application-name "$expected_application_name"
@@ -189,6 +190,7 @@ if ! "$verifier" "${verify_arguments[@]}" >"$test_root/warm-cache.out" 2>"$test_
   exit 1
 fi
 grep -q '^api_role_verification=passed$' "$test_root/warm-cache.out"
+grep -q '^api_session_contract=legacy$' "$test_root/warm-cache.out"
 assert_no_generated_credentials "$test_root/warm-cache.out"
 assert_no_generated_credentials "$test_root/warm-cache.err"
 assert_probe_cleanup
@@ -204,6 +206,7 @@ if ! "$verifier" "${verify_arguments[@]}" --max-activity-age-seconds 3 \
   exit 1
 fi
 grep -q '^api_role_verification=passed$' "$test_root/cached-unlock.out"
+grep -q '^api_session_contract=legacy$' "$test_root/cached-unlock.out"
 assert_no_generated_credentials "$test_root/cached-unlock.out"
 assert_no_generated_credentials "$test_root/cached-unlock.err"
 assert_probe_cleanup

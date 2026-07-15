@@ -3,6 +3,9 @@
 set -euo pipefail
 umask 077
 
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+readonly session_cookie_contract="$script_dir/lib/postgresql-api-role-session-cookie.awk"
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -10,6 +13,7 @@ Usage:
     --api-container NAME \
     --postgres-container NAME \
     --database NAME \
+    [--session-contract legacy|signed] \
     [--admin-user ROLE] \
     [--application-role ROLE] \
     [--application-name NAME] \
@@ -24,11 +28,16 @@ session through the unlock endpoint, completes an authenticated library read,
 and has a recent PostgreSQL connection on its unique shared Docker network
 using only the expected application role, database, and application name.
 
+Session contract selection is explicit when supplied. Auto-detection is not
+performed. The legacy compatibility default preserves the currently deployed
+pp_unlocked and pp_aid cookie contract; signed mode requires pp_session.
+
 The verifier accepts no database URL, password, cookie, client address, or
 other secret. It discovers the API address from Docker metadata and never
 places that address or another caller-controlled value into SQL.
 
 Defaults:
+  --session-contract             legacy
   --admin-user                   pandapages
   --application-role            pandapages_app
   --application-name            pandapages-api
@@ -78,6 +87,7 @@ owner_role=pandapages_owner
 migration_role=pandapages_migrator
 backup_role=pandapages_backup
 max_activity_age_seconds=30
+session_contract=legacy
 
 while (($# > 0)); do
   case "$1" in
@@ -91,6 +101,19 @@ while (($# > 0)); do
       ;;
     --database)
       database=${2:-}
+      shift 2
+      ;;
+    --session-contract)
+      (($# >= 2)) || die '--session-contract requires an argument'
+      [[ -n ${2:-} ]] || die '--session-contract requires a nonempty argument'
+      case "$2" in
+        legacy|signed)
+          session_contract=$2
+          ;;
+        *)
+          die '--session-contract must be exactly legacy or signed'
+          ;;
+      esac
       shift 2
       ;;
     --admin-user)
@@ -139,6 +162,7 @@ done
 [[ -n "$api_container" ]] || die '--api-container is required'
 [[ -n "$postgres_container" ]] || die '--postgres-container is required'
 [[ -n "$database" ]] || die '--database is required'
+[[ -r "$session_cookie_contract" ]] || die 'session cookie contract rules are unavailable'
 
 for container in "$api_container" "$postgres_container"; do
   [[ "$container" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || die 'invalid container name'
@@ -226,25 +250,32 @@ done
 # always queries PostgreSQL. Secrets stay in one protected temporary directory
 # and never enter a host or child-process argument.
 probe_status=0
-docker exec "$api_container" sh -eu -c '
+docker exec -i \
+  -e "PP_VERIFY_SESSION_CONTRACT=$session_contract" \
+  "$api_container" sh -eu -c '
   umask 077
   probe_dir=$(mktemp -d /tmp/pandapages-api-role-verify.XXXXXX)
-  case "$probe_dir" in
-    /tmp/pandapages-api-role-verify.*) ;;
-    *) exit 20 ;;
-  esac
   cleanup() {
     rm -rf -- "$probe_dir"
   }
   trap cleanup EXIT HUP INT TERM
+  case "$probe_dir" in
+    /tmp/pandapages-api-role-verify.*) ;;
+    *) exit 20 ;;
+  esac
 
   test -n "${PP_PASSCODE:-}"
+  test "$PP_VERIFY_SESSION_CONTRACT" = legacy || test "$PP_VERIFY_SESSION_CONTRACT" = signed
   unlock_request="$probe_dir/unlock-request.json"
   unlock_headers="$probe_dir/unlock-headers"
   unlock_response="$probe_dir/unlock-response.json"
+  session_cookie_rules="$probe_dir/session-cookie.awk"
   cookie_file="$probe_dir/cookies"
   library_request="$probe_dir/library-request.http"
   library_response="$probe_dir/library-response.http"
+
+  cat >"$session_cookie_rules"
+  test -s "$session_cookie_rules"
 
   awk '\''BEGIN {
     value = ENVIRON["PP_PASSCODE"]
@@ -265,18 +296,8 @@ docker exec "$api_container" sh -eu -c '
     http://127.0.0.1:8080/api/v1/auth/unlock
   grep -Eq '\''"ok"[[:space:]]*:[[:space:]]*true'\'' "$unlock_response"
 
-  awk '\''
-    tolower($1) == "set-cookie:" {
-      cookie = $2
-      sub(/;.*/, "", cookie)
-      if (cookie ~ /^pp_unlocked=/) unlocked = cookie
-      if (cookie ~ /^pp_aid=/) account = cookie
-    }
-    END {
-      if (unlocked == "" || account == "") exit 1
-      printf "%s; %s", unlocked, account
-    }
-  '\'' "$unlock_headers" >"$cookie_file"
+  awk -v session_contract="$PP_VERIFY_SESSION_CONTRACT" \
+    -f "$session_cookie_rules" "$unlock_headers" >"$cookie_file"
 
   {
     printf "GET /api/v1/library HTTP/1.1\r\n"
@@ -291,7 +312,7 @@ docker exec "$api_container" sh -eu -c '
     <"$library_request" >"$library_response"
   grep -Eq '\''^HTTP/1\.[01] 200 '\'' "$library_response"
   grep -Eq '\''"items"[[:space:]]*:'\'' "$library_response"
-' >/dev/null 2>&1 || probe_status=$?
+' <"$session_cookie_contract" >/dev/null 2>&1 || probe_status=$?
 ((probe_status == 0)) || die 'API database-backed unlock and library probe failed'
 
 # This SQL is intentionally fixed. Caller-controlled role, database, network,
@@ -376,4 +397,5 @@ printf 'api_database_role=%s\n' "$application_role"
 printf 'api_database_name=%s\n' "$database"
 printf 'api_database_application_name=%s\n' "$application_name"
 printf 'api_database_source=unique-shared-network\n'
+printf 'api_session_contract=%s\n' "$session_contract"
 printf 'api_role_verification=passed\n'

@@ -150,6 +150,7 @@ if "$verifier" \
   --api-container generated-api \
   --postgres-container generated-postgres \
   --database generated_database \
+  --session-contract legacy \
   --api-address 'malformed;SELECT-current_user' \
   >"$test_root/address.out" 2>"$test_root/address.err"; then
   printf 'API role verifier accepted caller-provided client-address input\n' >&2

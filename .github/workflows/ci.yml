@@ -157,6 +157,7 @@ jobs:
             scripts/postgresql-api-role-verify.sh \
             scripts/postgresql-restore-rehearsal.sh \
             scripts/tests/postgresql-api-role-smoke.sh \
+            scripts/tests/postgresql-api-role-session-contract.sh \
             scripts/tests/postgresql-backup-integration.sh \
             scripts/tests/postgresql-backup-unit.sh \
             scripts/tests/postgresql-roles-contract.sh \
@@ -170,6 +171,10 @@ jobs:
           scripts/postgresql-roles.sh --help >/dev/null
           scripts/postgresql-api-role-verify.sh --help >/dev/null
           scripts/postgresql-restore-rehearsal.sh --help >/dev/null
+
+      - name: Test API role verifier session contracts
+        shell: bash
+        run: scripts/tests/postgresql-api-role-session-contract.sh
 
       - name: Build API and migration images for generated role tests
         run: |
