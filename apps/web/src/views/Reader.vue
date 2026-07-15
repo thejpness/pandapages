@@ -432,7 +432,7 @@ async function load() {
       return
     }
 
-    loadError.value = 'Could not load this story. Check the connection and try again.'
+    loadError.value = 'Could not load this story. Try again.'
   } finally {
     storyLoading.value = false
   }

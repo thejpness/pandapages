@@ -273,7 +273,7 @@ async function logout() {
       lockError.value = 'Panda Pages is locked, but the passcode screen could not be opened. Reload to continue.'
     }
   } catch {
-    lockError.value = 'Could not lock Panda Pages. Check the connection and try again.'
+    lockError.value = 'Could not lock Panda Pages. Try again.'
   } finally {
     locking.value = false
   }
@@ -318,7 +318,7 @@ async function load() {
       await moveToUnlockAfterConfirmedSignOut()
       return
     }
-    loadError.value = 'Could not load the library. Check the connection and try again.'
+    loadError.value = 'Could not load the library. Try again.'
   } finally {
     loading.value = false
   }

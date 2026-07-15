@@ -80,7 +80,7 @@ async function submit() {
         if (!busy.value) code.value = ''
       }, 480)
     } else {
-      setError('Could not unlock Panda Pages. Check the connection and try again.')
+      setError('Could not unlock Panda Pages. Try again.')
     }
     busy.value = false
     return

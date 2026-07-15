@@ -52,6 +52,10 @@ jobs:
       - name: Run Go vet
         run: go vet ./...
 
+      - name: Test concurrent default-account initialization
+        working-directory: .
+        run: scripts/tests/account-store-integration.sh
+
       - name: Build production API
         env:
           CGO_ENABLED: "0"
@@ -111,7 +115,7 @@ jobs:
       POSTGRES_PASSWORD: ci-only-admin-password-not-for-production
       PP_ADMIN_IPS: 192.0.2.1/32
       PP_ADMIN_KEY: ci-only-admin-key-not-for-production-00000000
-      PP_PASSCODE: ci-only-passcode-not-for-production
+      PP_PASSCODE: "123456"
       PP_SESSION_SECRET: ci-only-session-secret-not-for-production-00000000
     steps:
       - name: Check out repository with history
@@ -156,6 +160,7 @@ jobs:
             scripts/postgresql-roles.sh \
             scripts/postgresql-api-role-verify.sh \
             scripts/postgresql-restore-rehearsal.sh \
+            scripts/tests/account-store-integration.sh \
             scripts/tests/postgresql-api-role-smoke.sh \
             scripts/tests/postgresql-api-role-session-contract.sh \
             scripts/tests/postgresql-backup-integration.sh \
