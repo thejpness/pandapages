@@ -261,8 +261,26 @@ scripts/postgresql-api-role-verify.sh \
   --api-container "$api_container" \
   --postgres-container "$postgres_container" \
   --database pandapages \
+  --session-contract legacy \
   --admin-user <ADMIN_LOGIN>
 ```
+
+`legacy` is the current production-compatible contract and the verifier's
+backward-compatible default. Current repository and operational invocations
+still select it explicitly. It requires the deployed `pp_unlocked=1` and
+nonempty `pp_aid` cookies and rejects a signed-only response.
+
+The verifier also supports an explicit `--session-contract signed` mode for
+the future PR #13 application contract. Signed mode requires exactly one
+active `pp_session`, rejects active legacy authentication cookies, and permits
+empty legacy cookie deletion headers. Selection is deliberately not
+auto-detected: a verifier run must prove the contract intended for the API
+version under review.
+
+Adding both modes to repository tooling does not change production. No rollout
+is part of this change. A future signed-session application rollout must invoke
+the verifier with `--session-contract signed` after the API cutover; do not
+claim signed-session verification while the legacy application is deployed.
 
 The verifier fails closed unless all of the following are true:
 
