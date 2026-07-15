@@ -26,7 +26,7 @@ async function retry() {
     } else if (state === 'locked') {
       result = await router.replace({ path: '/unlock', query: { next } })
     } else {
-      retryError.value = 'Panda Pages still cannot verify the session. Check the connection and try again.'
+      retryError.value = 'Panda Pages still cannot verify the session. The server or database may be temporarily unavailable.'
       return
     }
     if (navigationDidFail(result)) {
@@ -43,9 +43,9 @@ async function retry() {
 <template>
   <main class="grid min-h-dvh place-items-center bg-[#0B1724] px-4 text-white">
     <section class="w-full max-w-md rounded-3xl border border-white/10 bg-white/5 p-6">
-      <h1 class="text-xl font-semibold">Panda Pages cannot verify the session</h1>
+      <h1 class="text-xl font-semibold">Panda Pages could not verify the session</h1>
       <p class="mt-3 text-sm text-white/75">
-        The app could not reach the server. Your session has not been treated as signed out.
+        The server or database may be temporarily unavailable. Your session has not been treated as signed out.
       </p>
       <p v-if="retryError" class="mt-3 text-sm text-red-300" role="alert">
         {{ retryError }}
