@@ -18,7 +18,13 @@ import { authState } from '../lib/session'
 import { safeNextPath } from '../lib/session-navigation'
 import { navigationDidFail } from '../lib/session-transitions'
 import {
+  createProgressBaselineController,
+  type ProgressBaselineController,
+  type ProgressBaselineState,
+} from '../lib/progress-baseline-controller'
+import {
   createProgressSaveCoordinator,
+  progressSnapshotsDiffer,
   type ProgressSaveCoordinator,
   type ProgressSaveState,
   type ProgressSnapshot,
@@ -172,6 +178,12 @@ const progressSaveState = ref<ProgressSaveState>({
   confirmed: null,
   error: null,
 })
+const progressBaselineState = ref<ProgressBaselineState<ProgressState>>({
+  status: 'loading',
+  value: null,
+  error: null,
+  attempt: 0,
+})
 const leaveAfterSaveFailure = ref(false)
 const navigatingToLibrary = ref(false)
 
@@ -188,10 +200,15 @@ const themeText = computed(() => 'rgba(255,255,255,0.92)')
 
 let progressCoordinator: ProgressSaveCoordinator | null = null
 let unsubscribeProgress: (() => void) | null = null
+let progressBaselineController: ProgressBaselineController<ProgressState> | null = null
+let unsubscribeProgressBaseline: (() => void) | null = null
+let progressBaselineOrigin: ProgressSnapshot | null = null
+let movedWhileProgressUnavailable = false
 let storyGeneration = 0
 let handlingProgressSessionLoss = false
 
 const saveStatusText = computed(() => {
+  if (progressBaselineState.value.status !== 'ready') return ''
   switch (progressSaveState.value.status) {
     case 'dirty':
       return 'Unsaved'
@@ -207,6 +224,23 @@ const saveStatusText = computed(() => {
 })
 const progressSaveActive = computed(
   () => progressSaveState.value.status === 'saving'
+)
+const progressBaselineChecking = computed(
+  () =>
+    progressBaselineState.value.status === 'loading' &&
+    progressBaselineState.value.attempt > 1
+)
+const progressStatusText = computed(() => {
+  if (progressBaselineChecking.value) return 'Checking progress…'
+  if (progressBaselineState.value.status === 'unavailable') {
+    return 'Progress unavailable'
+  }
+  return saveStatusText.value
+})
+const libraryButtonText = computed(() =>
+  navigatingToLibrary.value && progressBaselineState.value.status === 'ready'
+    ? 'Saving…'
+    : '← Library'
 )
 
 function updatePercent() {
@@ -249,9 +283,15 @@ function captureProgressSnapshot(storySlug = slug): ProgressSnapshot | null {
 }
 
 function scheduleSave() {
-  if (resumeToast.value) return
   updatePercent()
   const snapshot = captureProgressSnapshot()
+  if (progressBaselineState.value.status !== 'ready') {
+    if (progressSnapshotsDiffer(snapshot, progressBaselineOrigin)) {
+      movedWhileProgressUnavailable = true
+    }
+    return
+  }
+  if (resumeToast.value) return
   if (snapshot) progressCoordinator?.update(snapshot)
 }
 
@@ -260,6 +300,13 @@ function disposeProgressCoordinator() {
   unsubscribeProgress = null
   progressCoordinator?.dispose()
   progressCoordinator = null
+}
+
+function disposeProgressBaselineController() {
+  unsubscribeProgressBaseline?.()
+  unsubscribeProgressBaseline = null
+  progressBaselineController?.dispose()
+  progressBaselineController = null
 }
 
 async function moveToUnlockAfterProgressSessionLoss(
@@ -360,6 +407,10 @@ async function startOver() {
   }
 
   const snapshot = captureProgressSnapshot()
+  if (progressBaselineState.value.status !== 'ready') {
+    movedWhileProgressUnavailable = true
+    return
+  }
   if (!snapshot || !progressCoordinator) return
   progressCoordinator.update(snapshot, { force: true, debounce: false })
   try {
@@ -382,6 +433,18 @@ async function goLibrary() {
   if (navigatingToLibrary.value) return
 
   leaveAfterSaveFailure.value = false
+  if (progressBaselineState.value.status !== 'ready') {
+    navigatingToLibrary.value = true
+    try {
+      await router.push('/library')
+    } catch {
+      loadError.value = 'The Library could not be opened. Try again.'
+    } finally {
+      navigatingToLibrary.value = false
+    }
+    return
+  }
+
   const coordinator = progressCoordinator
   const snapshot = resumeToast.value ? null : captureProgressSnapshot()
   if (coordinator && snapshot) {
@@ -472,11 +535,6 @@ function onPagedScroll() {
   scheduleSave()
 }
 
-type ProgressLoadResult = {
-  loaded: boolean
-  progress: ProgressState | null
-}
-
 function progressSnapshotFromServer(
   progress: ProgressState | null,
   storySlug: string
@@ -492,58 +550,117 @@ function progressSnapshotFromServer(
   }
 }
 
-async function checkResumeOffer(
+function showResumeOffer(progress: ProgressState | null) {
+  resumeToast.value = null
+  if (!progress?.locator || progress.version !== version.value) return
+
+  const loc = asLocator(progress.locator)
+  const mode = loc.mode === 'paged' ? 'paged' : 'scroll'
+
+  if (mode === 'paged' && prefs.value.mode === 'paged' && pages.value.length) {
+    const page = typeof loc.page === 'number' ? loc.page : 0
+    const count = pages.value.length
+    const safePage = Math.max(
+      0,
+      Math.min(count - 1, Number.isFinite(page) ? page : 0),
+    )
+    const savedPercent = clamp01(progress.percent)
+
+    if (safePage > 0 || savedPercent > 0.02) {
+      resumeToast.value = {
+        mode: 'paged',
+        page: safePage,
+        percent: savedPercent,
+      }
+    }
+    return
+  }
+
+  const scrollY = typeof loc.scrollY === 'number' ? loc.scrollY : 0
+  if (!Number.isFinite(scrollY) || scrollY <= 64) return
+
+  resumeToast.value = {
+    mode: 'scroll',
+    y: scrollY,
+    percent: clamp01(progress.percent),
+  }
+}
+
+function initializeProgressFromBaseline(
+  progress: ProgressState | null,
+  attempt: number,
   generation: number,
   storySlug: string
-): Promise<ProgressLoadResult> {
-  try {
-    const p = await getProgress(storySlug)
-    if (generation !== storyGeneration) {
-      return { loaded: false, progress: null }
-    }
-    if (!p || !p.locator || p.version !== version.value) {
-      return { loaded: true, progress: p ?? null }
-    }
+): void {
+  if (
+    generation !== storyGeneration ||
+    handlingProgressSessionLoss ||
+    progressCoordinator
+  ) {
+    return
+  }
 
-    const loc = asLocator(p.locator)
-    const mode = loc.mode === 'paged' ? 'paged' : 'scroll'
+  const isRetry = attempt > 1
+  if (!isRetry || !movedWhileProgressUnavailable) {
+    showResumeOffer(progress)
+  } else {
+    resumeToast.value = null
+  }
 
-    if (mode === 'paged' && prefs.value.mode === 'paged' && pages.value.length) {
-      const page = typeof loc.page === 'number' ? loc.page : 0
-      const count = pages.value.length
-      const safePage = Math.max(
-        0,
-        Math.min(count - 1, Number.isFinite(page) ? page : 0),
+  updatePercent()
+  const current = captureProgressSnapshot(storySlug)
+  const confirmed = progressSnapshotFromServer(progress, storySlug)
+  const coordinator = createProgressCoordinator(generation, storySlug)
+
+  if (confirmed) {
+    coordinator.initialize(confirmed)
+  } else if (isRetry && movedWhileProgressUnavailable && !progress?.locator) {
+    coordinator.initialize(null)
+  } else {
+    coordinator.initialize(current)
+  }
+
+  if (isRetry && movedWhileProgressUnavailable && current) {
+    coordinator.update(current)
+  }
+  movedWhileProgressUnavailable = false
+}
+
+function beginProgressBaselineLoad(generation: number, storySlug: string) {
+  disposeProgressBaselineController()
+  progressBaselineOrigin = captureProgressSnapshot(storySlug)
+  movedWhileProgressUnavailable = false
+
+  const controller = createProgressBaselineController({
+    load: () => getProgress(storySlug),
+  })
+  progressBaselineController = controller
+  unsubscribeProgressBaseline = controller.subscribe((state) => {
+    if (generation !== storyGeneration) return
+    progressBaselineState.value = state
+
+    if (state.status === 'ready') {
+      initializeProgressFromBaseline(
+        state.value,
+        state.attempt,
+        generation,
+        storySlug
       )
-      const savedPercent = clamp01(p.percent)
-
-      if (safePage > 0 || savedPercent > 0.02) {
-        resumeToast.value = {
-          mode: 'paged',
-          page: safePage,
-          percent: savedPercent,
-        }
-      }
-      return { loaded: true, progress: p }
+      return
     }
 
-    const scrollY = typeof loc.scrollY === 'number' ? loc.scrollY : 0
-    if (!Number.isFinite(scrollY) || scrollY <= 64) {
-      return { loaded: true, progress: p }
-    }
-
-    resumeToast.value = {
-      mode: 'scroll',
-      y: scrollY,
-      percent: clamp01(p.percent),
-    }
-    return { loaded: true, progress: p }
-  } catch (error) {
-    if (getAPIErrorStatus(error) === 401) {
+    if (
+      state.status === 'unavailable' &&
+      getAPIErrorStatus(state.error) === 401
+    ) {
       void moveToUnlockAfterProgressSessionLoss(generation, storySlug)
     }
-    return { loaded: false, progress: null }
-  }
+  })
+  void controller.load()
+}
+
+function retryProgressBaseline() {
+  void progressBaselineController?.retry()
 }
 
 async function load() {
@@ -572,23 +689,8 @@ async function load() {
 
     await nextTick()
     if (generation !== storyGeneration) return
-    const progressResult = await checkResumeOffer(generation, storySlug)
-    if (generation !== storyGeneration) return
-    if (handlingProgressSessionLoss) return
     updatePercent()
-    const coordinator = createProgressCoordinator(generation, storySlug)
-    const confirmed = progressSnapshotFromServer(
-      progressResult.progress,
-      storySlug
-    )
-    const current = captureProgressSnapshot(storySlug)
-    if (confirmed) {
-      coordinator.initialize(confirmed)
-    } else if (progressResult.loaded) {
-      coordinator.initialize(current)
-    } else {
-      coordinator.initialize(null, current)
-    }
+    beginProgressBaselineLoad(generation, storySlug)
   } catch (error) {
     if (generation !== storyGeneration) return
     if (getAPIErrorStatus(error) === 401) {
@@ -607,7 +709,13 @@ async function load() {
 }
 
 function onPageHide() {
-  if (handlingProgressSessionLoss || resumeToast.value) return
+  if (
+    progressBaselineState.value.status !== 'ready' ||
+    handlingProgressSessionLoss ||
+    resumeToast.value
+  ) {
+    return
+  }
   const snapshot = captureProgressSnapshot()
   if (snapshot) {
     progressCoordinator?.update(snapshot, { debounce: false })
@@ -633,6 +741,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('scroll', scheduleSave)
   window.removeEventListener('pagehide', onPageHide)
   document.removeEventListener('visibilitychange', onVisibilityChange)
+  disposeProgressBaselineController()
   disposeProgressCoordinator()
 })
 
@@ -641,6 +750,7 @@ watch(
   (nextSlug) => {
     if (nextSlug === slug) return
     onPageHide()
+    disposeProgressBaselineController()
     disposeProgressCoordinator()
     storyGeneration += 1
     slug = nextSlug
@@ -654,6 +764,14 @@ watch(
     currentPage.value = 0
     resumeToast.value = null
     leaveAfterSaveFailure.value = false
+    progressBaselineOrigin = null
+    movedWhileProgressUnavailable = false
+    progressBaselineState.value = {
+      status: 'loading',
+      value: null,
+      error: null,
+      attempt: 0,
+    }
     progressSaveState.value = {
       status: 'idle',
       desired: null,
@@ -682,7 +800,7 @@ watch(
           @pointerdown="haptic('select')"
           @click="goLibrary"
         >
-          {{ navigatingToLibrary ? 'Saving…' : '← Library' }}
+          {{ libraryButtonText }}
         </button>
 
         <div class="flex items-center gap-3">
@@ -695,10 +813,19 @@ watch(
             class="flex min-w-20 items-center justify-end gap-2 text-xs opacity-80"
           >
             <span role="status" aria-live="polite" aria-atomic="true">
-              {{ saveStatusText }}
+              {{ progressStatusText }}
             </span>
             <button
-              v-if="progressSaveState.status === 'error'"
+              v-if="progressBaselineState.status === 'unavailable' || progressBaselineChecking"
+              type="button"
+              class="rounded-md border border-white/20 px-2 py-1 font-medium opacity-100"
+              :disabled="progressBaselineChecking"
+              @click="retryProgressBaseline"
+            >
+              Retry
+            </button>
+            <button
+              v-else-if="progressBaselineState.status === 'ready' && progressSaveState.status === 'error'"
               type="button"
               class="rounded-md border border-white/20 px-2 py-1 font-medium opacity-100"
               :disabled="progressSaveActive"
@@ -729,7 +856,7 @@ watch(
     </header>
 
     <aside
-      v-if="leaveAfterSaveFailure"
+      v-if="progressBaselineState.status === 'ready' && leaveAfterSaveFailure"
       class="mx-auto mt-3 flex max-w-3xl items-center justify-between gap-3 rounded-xl border border-amber-200/30 bg-amber-200/10 px-4 py-3 text-sm"
       role="alert"
     >
