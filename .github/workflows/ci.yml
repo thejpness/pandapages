@@ -169,9 +169,11 @@ jobs:
             scripts/tests/postgresql-api-role-session-contract.sh \
             scripts/tests/postgresql-backup-integration.sh \
             scripts/tests/postgresql-backup-unit.sh \
+            scripts/tests/postgresql-fixtures-integration.sh \
             scripts/tests/progress-store-integration.sh \
             scripts/tests/postgresql-roles-contract.sh \
-            scripts/tests/postgresql-roles-integration.sh
+            scripts/tests/postgresql-roles-integration.sh \
+            scripts/dev/seed-test-data.sh
           scripts/postgresql-backup.sh --help >/dev/null
           scripts/postgresql-backup-healthcheck.sh --help >/dev/null
           scripts/postgresql-backup-notify.sh --help >/dev/null
@@ -181,15 +183,20 @@ jobs:
           scripts/postgresql-roles.sh --help >/dev/null
           scripts/postgresql-api-role-verify.sh --help >/dev/null
           scripts/postgresql-restore-rehearsal.sh --help >/dev/null
+          scripts/dev/seed-test-data.sh --help >/dev/null
 
       - name: Test API role verifier session contracts
         shell: bash
         run: scripts/tests/postgresql-api-role-session-contract.sh
 
-      - name: Build API and migration images for generated role tests
+      - name: Build API and migration images for generated database tests
         run: |
           docker build --target prod --build-arg API_MAIN=./cmd/api --tag pandapages-api:role-test apps/api
           docker build --target migrate --tag pandapages-migrate:role-test apps/api
+
+      - name: Test production-clean migrations and explicit fixtures
+        shell: bash
+        run: scripts/tests/postgresql-fixtures-integration.sh
 
       - name: Test PostgreSQL roles and backup automation with generated data
         shell: bash

@@ -29,9 +29,10 @@ alter the `public` schema objects. Current application SQL uses these tables:
 
 Other migrated tables remain backed up but are not used by current Go runtime
 SQL. UUID defaults require only `public.gen_random_uuid()`. Migrations create
-the bundled `pgcrypto` extension and use `digest()` while seeding. PostgreSQL
-18 marks `pgcrypto` as trusted, so a database owner can install it without
-being a superuser. No extension requires permanent migration-role
+the bundled `pgcrypto` extension; historical migration `00008` used `digest()`
+while installing test data, and forward migration `00013` removes that data.
+PostgreSQL 18 marks `pgcrypto` as trusted, so a database owner can install it
+without being a superuser. No extension requires permanent migration-role
 superuser access.
 
 Historically, before the completed cutover, the bootstrap login `pandapages`
@@ -121,6 +122,14 @@ allowlist in `deploy/postgresql-roles/apply.sql` and `verify.sql` in the same
 change. When runtime code needs a new function, add one named `EXECUTE` grant
 and a negative/positive permission test. Never compensate with `GRANT ALL`,
 `pg_read_all_data`, owner membership, or API ownership.
+
+Migration `00008_seed_test_data.sql` is immutable applied history. Current
+Goose runs continue through `00013_remove_historical_test_fixtures.sql`, so the
+final production migration state contains no historical test stories,
+child/prompt profiles, progress, or generation jobs. Local and disposable
+fixtures are installed only through the fail-closed command described in
+`docs/development/test-fixtures.md`; neither production Compose nor the
+migration container invokes it.
 
 ## Repository tooling
 
