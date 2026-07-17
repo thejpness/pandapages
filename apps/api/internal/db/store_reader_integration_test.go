@@ -238,6 +238,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 	}
 	progressSegment := story.Segments[3]
 	locator := locatorForReaderSegment(progressSegment, 0.35)
+	draftLocator := locatorForStoredReaderSegment(t, adminDB, secondDraft.StoryVersionID, 2, 0.6)
 
 	t.Run("progress validates the exact selected version identity", func(t *testing.T) {
 		empty, err := store.ProgressGet(readerAccountA, readerSlug)
@@ -274,6 +275,138 @@ func TestReaderStoreIntegration(t *testing.T) {
 		}
 		if err := store.ProgressPut(readerAccountC, readerSlug, story.Version, locator, 0.2); !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("cross-account error = %v, want sql.ErrNoRows", err)
+		}
+	})
+
+	t.Run("draft and previously published versions cannot replace current progress", func(t *testing.T) {
+		if err := store.ProgressPut(readerAccountA, readerSlug, secondDraft.Version, draftLocator, 0.81); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("draft version ProgressPut error = %v, want sql.ErrNoRows", err)
+		}
+		got, err := store.ProgressGet(readerAccountA, readerSlug)
+		if err != nil {
+			t.Fatalf("ProgressGet after draft rejection: %v", err)
+		}
+		assertProgressState(t, got, firstDraft.Version, locator, 0.42)
+
+		if err := store.AdminPublish(readerAccountA, readerSlug, secondDraft.StoryVersionID); err != nil {
+			t.Fatalf("publish second Reader version: %v", err)
+		}
+		if err := store.ProgressPut(readerAccountA, readerSlug, firstDraft.Version, locator, 0.82); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("previous version ProgressPut error = %v, want sql.ErrNoRows", err)
+		}
+		got, err = store.ProgressGet(readerAccountA, readerSlug)
+		if err != nil {
+			t.Fatalf("ProgressGet after previous-version rejection: %v", err)
+		}
+		assertProgressState(t, got, firstDraft.Version, locator, 0.42)
+
+		if err := store.ProgressPut(readerAccountA, readerSlug, secondDraft.Version, draftLocator, 0.83); err != nil {
+			t.Fatalf("current second-version ProgressPut: %v", err)
+		}
+		got, err = store.ProgressGet(readerAccountA, readerSlug)
+		if err != nil {
+			t.Fatalf("ProgressGet second version: %v", err)
+		}
+		assertProgressState(t, got, secondDraft.Version, draftLocator, 0.83)
+
+		if err := store.AdminPublish(readerAccountA, readerSlug, firstDraft.StoryVersionID); err != nil {
+			t.Fatalf("restore first publication: %v", err)
+		}
+	})
+
+	t.Run("publication update serialises with progress validation", func(t *testing.T) {
+		if _, err := adminDB.Exec(`DELETE FROM reading_progress WHERE story_id = $1`, firstDraft.StoryID); err != nil {
+			t.Fatalf("clear progress before lock test: %v", err)
+		}
+		if err := store.AdminPublish(readerAccountA, readerSlug, firstDraft.StoryVersionID); err != nil {
+			t.Fatalf("publish first version before lock test: %v", err)
+		}
+
+		publicationTx, err := adminDB.Begin()
+		if err != nil {
+			t.Fatalf("begin publication transaction: %v", err)
+		}
+		publicationFinished := false
+		defer func() {
+			if !publicationFinished {
+				_ = publicationTx.Rollback()
+			}
+		}()
+
+		var publicationPID int
+		if err := publicationTx.QueryRow(`SELECT pg_backend_pid()`).Scan(&publicationPID); err != nil {
+			t.Fatalf("read publication backend PID: %v", err)
+		}
+		if _, err := publicationTx.Exec(`
+			UPDATE stories
+			SET published_version_id = $1, updated_at = now()
+			WHERE id = $2
+		`, secondDraft.StoryVersionID, firstDraft.StoryID); err != nil {
+			t.Fatalf("hold uncommitted publication update: %v", err)
+		}
+
+		const progressApplicationName = "reader_progress_publication_lock_test"
+		lockingStore := newReaderIntegrationStoreWithApplicationName(t, databaseURL, progressApplicationName)
+		progressResult := make(chan error, 1)
+		go func() {
+			progressResult <- lockingStore.ProgressPut(readerAccountA, readerSlug, firstDraft.Version, locator, 0.91)
+		}()
+
+		lockDeadline := time.Now().Add(5 * time.Second)
+		lockObserved := false
+		for time.Now().Before(lockDeadline) {
+			select {
+			case err := <-progressResult:
+				t.Fatalf("ProgressPut returned before publication committed: %v", err)
+			default:
+			}
+
+			if err := adminDB.QueryRow(`
+				SELECT EXISTS (
+					SELECT 1
+					FROM pg_stat_activity
+					WHERE application_name = $1
+					  AND state = 'active'
+					  AND wait_event_type = 'Lock'
+					  AND $2 = ANY(pg_blocking_pids(pid))
+					  AND query LIKE '%FOR SHARE OF story%'
+				)
+			`, progressApplicationName, publicationPID).Scan(&lockObserved); err != nil {
+				t.Fatalf("inspect blocked progress transaction: %v", err)
+			}
+			if lockObserved {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if !lockObserved {
+			t.Fatal("ProgressPut did not wait on the publication story-row lock")
+		}
+
+		if err := publicationTx.Commit(); err != nil {
+			t.Fatalf("commit publication transaction: %v", err)
+		}
+		publicationFinished = true
+
+		select {
+		case err := <-progressResult:
+			if !errors.Is(err, sql.ErrNoRows) {
+				t.Fatalf("ProgressPut after publication commit = %v, want sql.ErrNoRows", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("ProgressPut remained blocked after publication commit")
+		}
+
+		var staleProgressCount int
+		if err := adminDB.QueryRow(`SELECT count(*) FROM reading_progress WHERE story_id = $1`, firstDraft.StoryID).Scan(&staleProgressCount); err != nil {
+			t.Fatalf("count progress after publication race: %v", err)
+		}
+		if staleProgressCount != 0 {
+			t.Fatalf("stale progress rows = %d, want 0", staleProgressCount)
+		}
+
+		if err := store.AdminPublish(readerAccountA, readerSlug, firstDraft.StoryVersionID); err != nil {
+			t.Fatalf("restore first publication after lock test: %v", err)
 		}
 	})
 
@@ -331,9 +464,50 @@ func TestReaderStoreIntegration(t *testing.T) {
 			t.Fatalf("valid progress response = %d %s", validResponse.Code, validResponse.Body.String())
 		}
 		getResponse := serveReaderRequest(t, handler, cookie, http.MethodGet, "/api/v1/progress/"+readerSlug, "")
-		if getResponse.Code != http.StatusOK || !strings.Contains(getResponse.Body.String(), `"schema":2`) {
-			t.Fatalf("progress GET = %d %s", getResponse.Code, getResponse.Body.String())
+		assertHTTPProgressState(t, getResponse, firstDraft.Version, locator, 0.73)
+
+		draftResponse := serveReaderRequest(
+			t,
+			handler,
+			cookie,
+			http.MethodPut,
+			"/api/v1/progress/"+readerSlug,
+			progressBody(t, secondDraft.Version, draftLocator, 0.81),
+		)
+		assertHTTPProgressNotFound(t, draftResponse)
+		assertHTTPProgressState(
+			t,
+			serveReaderRequest(t, handler, cookie, http.MethodGet, "/api/v1/progress/"+readerSlug, ""),
+			firstDraft.Version,
+			locator,
+			0.73,
+		)
+
+		if err := store.AdminPublish(readerAccountA, readerSlug, secondDraft.StoryVersionID); err != nil {
+			t.Fatalf("publish second version for HTTP progress: %v", err)
 		}
+		staleResponse := serveReaderRequest(t, handler, cookie, http.MethodPut, "/api/v1/progress/"+readerSlug, progressBody(t, firstDraft.Version, locator, 0.82))
+		assertHTTPProgressNotFound(t, staleResponse)
+		assertHTTPProgressState(
+			t,
+			serveReaderRequest(t, handler, cookie, http.MethodGet, "/api/v1/progress/"+readerSlug, ""),
+			firstDraft.Version,
+			locator,
+			0.73,
+		)
+
+		currentSecondBody := progressBody(t, secondDraft.Version, draftLocator, 0.83)
+		currentSecondResponse := serveReaderRequest(t, handler, cookie, http.MethodPut, "/api/v1/progress/"+readerSlug, currentSecondBody)
+		if currentSecondResponse.Code != http.StatusOK || strings.TrimSpace(currentSecondResponse.Body.String()) != `{"ok":true}` {
+			t.Fatalf("current second-version progress = %d %s", currentSecondResponse.Code, currentSecondResponse.Body.String())
+		}
+		assertHTTPProgressState(
+			t,
+			serveReaderRequest(t, handler, cookie, http.MethodGet, "/api/v1/progress/"+readerSlug, ""),
+			secondDraft.Version,
+			draftLocator,
+			0.83,
+		)
 
 		invalidBodies := []string{
 			`{"version":1,"locator":{"mode":"scroll","scrollY":10},"percent":0.1}`,
@@ -345,12 +519,15 @@ func TestReaderStoreIntegration(t *testing.T) {
 				t.Fatalf("malformed progress status = %d; body = %s", response.Code, response.Body.String())
 			}
 		}
-		mismatch := locator
+		mismatch := draftLocator
 		mismatch.Segment.Key = strings.Repeat("e", 64)
-		response := serveReaderRequest(t, handler, cookie, http.MethodPut, "/api/v1/progress/"+readerSlug, progressBody(t, story.Version, mismatch, 0.9))
+		response := serveReaderRequest(t, handler, cookie, http.MethodPut, "/api/v1/progress/"+readerSlug, progressBody(t, secondDraft.Version, mismatch, 0.9))
 		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"code":"locator_mismatch"`) {
 			t.Fatalf("locator mismatch = %d %s", response.Code, response.Body.String())
 		}
+		assertHTTPProgressNotFound(t, serveReaderRequest(
+			t, handler, cookie, http.MethodPut, "/api/v1/progress/"+readerSlug, progressBody(t, 99, draftLocator, 0.9),
+		))
 
 		if _, err := adminDB.Exec(`ALTER TABLE reading_progress RENAME TO reading_progress_unavailable`); err != nil {
 			t.Fatalf("make progress storage unavailable: %v", err)
@@ -361,7 +538,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 				_, _ = adminDB.Exec(`ALTER TABLE reading_progress_unavailable RENAME TO reading_progress`)
 			}
 		}()
-		failureResponse := serveReaderRequest(t, handler, cookie, http.MethodPut, "/api/v1/progress/"+readerSlug, validBody)
+		failureResponse := serveReaderRequest(t, handler, cookie, http.MethodPut, "/api/v1/progress/"+readerSlug, currentSecondBody)
 		if failureResponse.Code != http.StatusInternalServerError || strings.Contains(failureResponse.Body.String(), `"ok":true`) {
 			t.Fatalf("database failure returned false success: %d %s", failureResponse.Code, failureResponse.Body.String())
 		}
@@ -391,6 +568,18 @@ func newReaderIntegrationStore(t *testing.T, databaseURL string) *Store {
 	return &Store{db: database, queryTimeout: 10 * time.Second, defaultProfileByAccount: map[string]string{}}
 }
 
+func newReaderIntegrationStoreWithApplicationName(t *testing.T, databaseURL, applicationName string) *Store {
+	t.Helper()
+	separator := "?"
+	if strings.Contains(databaseURL, "?") {
+		separator = "&"
+	}
+	store := newReaderIntegrationStore(t, databaseURL+separator+"application_name="+applicationName)
+	store.db.SetMaxOpenConns(1)
+	store.db.SetMaxIdleConns(1)
+	return store
+}
+
 func assertReaderVersionShape(t *testing.T, story model.ReaderStory, version, segments int) {
 	t.Helper()
 	if story.Version != version || len(story.Segments) != segments {
@@ -417,6 +606,71 @@ func locatorForReaderSegment(segment model.ReaderSegment, offset float64) reader
 		locator.Chapter = &readercontract.LocatorChapter{Key: *segment.ChapterKey, Occurrence: *segment.ChapterOccurrence}
 	}
 	return locator
+}
+
+func locatorForStoredReaderSegment(t *testing.T, database *sql.DB, versionID string, ordinal int, offset float64) readercontract.Locator {
+	t.Helper()
+	var (
+		key               string
+		occurrence        int
+		chapterKey        sql.NullString
+		chapterOccurrence sql.NullInt64
+	)
+	if err := database.QueryRow(`
+		SELECT content_key, content_occurrence, chapter_key, chapter_occurrence
+		FROM story_segments
+		WHERE story_version_id = $1
+		  AND ordinal = $2
+	`, versionID, ordinal).Scan(&key, &occurrence, &chapterKey, &chapterOccurrence); err != nil {
+		t.Fatalf("load stored Reader segment identity: %v", err)
+	}
+
+	locator := readercontract.Locator{
+		Schema: 2,
+		Segment: readercontract.LocatorSegment{
+			Key:        key,
+			Occurrence: occurrence,
+			Ordinal:    ordinal,
+			Offset:     offset,
+		},
+	}
+	if chapterKey.Valid {
+		if !chapterOccurrence.Valid {
+			t.Fatal("stored Reader segment has partial chapter identity")
+		}
+		locator.Chapter = &readercontract.LocatorChapter{
+			Key:        chapterKey.String,
+			Occurrence: int(chapterOccurrence.Int64),
+		}
+	}
+	return locator
+}
+
+func assertHTTPProgressState(t *testing.T, response *httptest.ResponseRecorder, version int, locator readercontract.Locator, percent float64) {
+	t.Helper()
+	if response.Code != http.StatusOK {
+		t.Fatalf("progress GET = %d %s", response.Code, response.Body.String())
+	}
+	var state model.ProgressResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &state); err != nil {
+		t.Fatalf("decode progress GET: %v", err)
+	}
+	assertProgressState(t, state, version, locator, percent)
+}
+
+func assertHTTPProgressNotFound(t *testing.T, response *httptest.ResponseRecorder) {
+	t.Helper()
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("progress PUT = %d, want 404; body = %s", response.Code, response.Body.String())
+	}
+	var body struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || body.Error.Code != "not_found" {
+		t.Fatalf("progress not-found body = %s", response.Body.String())
+	}
 }
 
 func serveReaderRequest(t *testing.T, handler http.Handler, cookie *http.Cookie, method, path, body string) *httptest.ResponseRecorder {
