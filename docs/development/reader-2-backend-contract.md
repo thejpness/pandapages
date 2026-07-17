@@ -90,17 +90,24 @@ required and must match the stored segment. Unknown fields are rejected.
 
 Go validates the typed model before storage. `ProgressPut` also verifies in
 one transaction that the account owns a published story, the requested version
-belongs to it, and ordinal/key/content occurrence/chapter identity all describe
-one real segment. PostgreSQL's
-`reading_progress_reader_locator_v2_check` is defence in depth. Percentage is
+is exactly its current `published_version_id`, and
+ordinal/key/content occurrence/chapter identity all describe one real segment.
+The current story/version selection holds a story-row `FOR SHARE` lock through
+locator validation, progress persistence, and commit. `AdminPublish` updates
+that same row, so publication changes serialise with progress writes. Draft and
+previously published versions are not currently readable and return 404 rather
+than `locator_mismatch`. PostgreSQL provides the
+`reading_progress_reader_locator_v2_check` defence in depth. Percentage is
 rejected outside 0–1 rather than clamped on PUT.
 
 `GET /api/v1/progress/{slug}` returns `{"progress":null}` for a known published
 story with no progress. A missing or unpublished story remains 404. A saved
-value is wrapped under `progress` and contains a typed Locator v2. PUT returns
-`{"ok":true}` only after PostgreSQL commits. A structurally invalid locator is
-400; a well-formed locator that does not match the selected version uses the
-stable safe code `locator_mismatch`.
+value is wrapped under `progress` and contains a typed Locator v2. After a later
+publication, GET may still return progress for the older version so future
+version-mapping UX can inspect it, but no new PUT may target that older version.
+PUT returns `{"ok":true}` only after PostgreSQL commits. A structurally invalid
+locator is 400; a well-formed locator that does not match a segment within the
+current published version uses the stable safe code `locator_mismatch`.
 
 ## Coherent Reader endpoint
 

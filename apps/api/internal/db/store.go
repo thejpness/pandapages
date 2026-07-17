@@ -491,12 +491,14 @@ func (s *Store) ProgressPut(accountID, slug string, version int, locator readerc
 		SELECT story.id, version.id
 		FROM stories AS story
 		JOIN story_versions AS version
-		  ON version.story_id = story.id
+		  ON version.id = story.published_version_id
+		 AND version.story_id = story.id
 		 AND version.version = $3
 		WHERE story.account_id = $1
 		  AND story.slug = $2
 		  AND story.is_published = true
 		  AND story.published_version_id IS NOT NULL
+		FOR SHARE OF story
 	`, accountID, slug, version).Scan(&storyID, &versionID); err != nil {
 		return err
 	}
