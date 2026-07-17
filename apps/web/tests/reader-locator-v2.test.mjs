@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { loadTypeScript } from './helpers/typescript-module.mjs'
 
@@ -77,17 +76,18 @@ test('locator creation clamps offsets and carries server chapter identity', asyn
   assert.equal(module.createReaderLocatorV2(segment(), -2).segment.offset, 0)
 })
 
-test('anchor lookup prefers key and occurrence, with ordinal only as fallback', async () => {
+
+test('anchor lookup rejects an identity and ordinal mismatch, with ordinal fallback only when identity is absent', async () => {
   const module = await locatorModule()
   const segments = [
     segment({ ordinal: 1 }),
     segment({ ordinal: 2, contentKey: keyB }),
   ]
-  const identityWins = {
+  const identityMismatch = {
     schema: 2,
     segment: { key: keyB, occurrence: 1, ordinal: 1, offset: 0 },
   }
-  assert.equal(module.findReaderSegment(segments, identityWins).ordinal, 2)
+  assert.equal(module.findReaderSegment(segments, identityMismatch), null)
 
   const ordinalFallback = {
     schema: 2,
@@ -178,19 +178,20 @@ test('programmatic mode restore settles its final scroll before capture resumes'
   assert.equal(beginningWrites, 1)
 })
 
-test('mode cutover does not manufacture a beginning locator without an anchor', async () => {
-  const reader = await readFile(
-    new URL('../src/views/Reader.vue', import.meta.url),
-    'utf8',
+test('mode cutover preserves an anchor without manufacturing reader movement', async () => {
+  const { module } = await loadTypeScript(
+    '../src/lib/reader-mode-transition.ts',
+    import.meta.url,
   )
-  const modeChange = reader.slice(
-    reader.indexOf("async function setMode(mode: 'scroll' | 'paged')"),
-    reader.indexOf("function setTheme(theme: 'night' | 'warm')"),
-  )
-  assert.match(modeChange, /const anchor = captureProgressSnapshot\(\)\?\.locator \?\? null/)
-  assert.doesNotMatch(modeChange, /createReaderLocatorV2/)
-  assert.match(modeChange, /settleProgrammaticReaderRestore/)
-  assert.match(modeChange, /suppressProgressCapture = true/)
-  assert.match(modeChange, /if \(!anchor \|\| resumeToast\.value\) return/)
-  assert.equal((modeChange.match(/progressCoordinator\?\.update\(snapshot\)/g) ?? []).length, 1)
+  assert.deepEqual(module.planReaderModeTransition(null), {
+    anchor: null,
+  })
+
+  const locator = {
+    schema: 2,
+    segment: { key: keyA, occurrence: 1, ordinal: 1, offset: 0.4 },
+  }
+  assert.deepEqual(module.planReaderModeTransition(locator), {
+    anchor: locator,
+  })
 })

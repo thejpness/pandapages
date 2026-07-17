@@ -145,7 +145,9 @@ export function findReaderSegment(
       segment.contentKey === locator.segment.key &&
       segment.contentOccurrence === locator.segment.occurrence,
   )
-  if (byIdentity) return byIdentity
+  if (byIdentity) {
+    return byIdentity.ordinal === locator.segment.ordinal ? byIdentity : null
+  }
   return (
     segments.find((segment) => segment.ordinal === locator.segment.ordinal) ??
     null

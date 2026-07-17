@@ -143,8 +143,7 @@ existing baseline and serial save coordinator guarantees remain in force:
 unknown progress is never treated as empty, only one PUT is in flight, the
 latest desired value wins, and Saved follows server confirmation only.
 
-Reader preferences remain `pp_reader_prefs_v1`; they are display preferences,
-not Reader 1 progress, and are deliberately outside this migration.
+Reader preferences are now the validated `pp_reader_prefs_v2` display schema. The beta-only v1 key is not migrated. Scroll architecture, accessibility, and browser coverage are documented in `reader-2-scroll-foundation.md`; none of those frontend changes alter migration 00014 or Locator v2.
 
 ## Rollout and rollback
 

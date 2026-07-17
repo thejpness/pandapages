@@ -10,3 +10,8 @@ apps/api/tmp/
 # local tooling / exports
 export_*.sh
 pandapages-*.txt
+
+# local browser-test artifacts
+apps/web/test-results/
+apps/web/playwright-report/
+apps/web/blob-report/
