@@ -1,11 +1,11 @@
-import type { JsonObject } from './api'
+import type { ReaderLocatorV2 } from './reader-locator-v2'
 
 export type ProgressSaveStatus = 'idle' | 'dirty' | 'saving' | 'saved' | 'error'
 
 export type ProgressSnapshot = {
   slug: string
   version: number
-  locator: JsonObject
+  locator: ReaderLocatorV2
   percent: number
 }
 
@@ -54,7 +54,7 @@ type DrainWaiter = {
   reject: (error: unknown) => void
 }
 
-const scrollTolerancePx = 24
+const offsetTolerance = 0.01
 const percentTolerance = 0.01
 
 function cloneSnapshot(snapshot: ProgressSnapshot | null): ProgressSnapshot | null {
@@ -62,17 +62,9 @@ function cloneSnapshot(snapshot: ProgressSnapshot | null): ProgressSnapshot | nu
   return {
     slug: snapshot.slug,
     version: snapshot.version,
-    locator: JSON.parse(JSON.stringify(snapshot.locator)) as JsonObject,
+    locator: JSON.parse(JSON.stringify(snapshot.locator)) as ReaderLocatorV2,
     percent: snapshot.percent,
   }
-}
-
-function locatorMode(snapshot: ProgressSnapshot): unknown {
-  return snapshot.locator.mode
-}
-
-function numberValue(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
 function exactlyEqual(left: ProgressSnapshot | null, right: ProgressSnapshot | null): boolean {
@@ -98,29 +90,28 @@ export function progressSnapshotsDiffer(
     return true
   }
 
-  const desiredMode = locatorMode(desired)
-  const confirmedMode = locatorMode(confirmed)
-  if (desiredMode !== confirmedMode) return true
-
-  if (desiredMode === 'scroll') {
-    const desiredY = numberValue(desired.locator.scrollY)
-    const confirmedY = numberValue(confirmed.locator.scrollY)
-    if (desiredY === null || confirmedY === null) {
-      return !exactlyEqual(desired, confirmed)
-    }
-    return Math.abs(desiredY - confirmedY) >= scrollTolerancePx
+  const desiredSegment = desired.locator.segment
+  const confirmedSegment = confirmed.locator.segment
+  if (
+    desiredSegment.key !== confirmedSegment.key ||
+    desiredSegment.occurrence !== confirmedSegment.occurrence ||
+    desiredSegment.ordinal !== confirmedSegment.ordinal
+  ) {
+    return true
   }
-
-  if (desiredMode === 'paged') {
-    const desiredPage = numberValue(desired.locator.page)
-    const confirmedPage = numberValue(confirmed.locator.page)
-    if (desiredPage === null || confirmedPage === null) {
-      return !exactlyEqual(desired, confirmed)
-    }
-    return desiredPage !== confirmedPage
+  const desiredChapter = desired.locator.chapter
+  const confirmedChapter = confirmed.locator.chapter
+  if (
+    Boolean(desiredChapter) !== Boolean(confirmedChapter) ||
+    desiredChapter?.key !== confirmedChapter?.key ||
+    desiredChapter?.occurrence !== confirmedChapter?.occurrence
+  ) {
+    return true
   }
-
-  return !exactlyEqual(desired, confirmed)
+  return (
+    Math.abs(desiredSegment.offset - confirmedSegment.offset) >=
+    offsetTolerance
+  )
 }
 
 export function createProgressSaveCoordinator(

@@ -1,22 +1,15 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
-import { transformWithOxc } from 'vite'
-
-const apiSourceURL = new URL('../src/lib/api.ts', import.meta.url)
+import { loadTypeScript } from './helpers/typescript-module.mjs'
 
 async function loadAPI() {
-  const source = await readFile(apiSourceURL, 'utf8')
-  const testableSource = source.replaceAll('import.meta.env.VITE_API_BASE', "''")
-  const transformed = await transformWithOxc(testableSource, 'api.ts')
-  const moduleURL =
-    'data:text/javascript;base64,' +
-    Buffer.from(transformed.code).toString('base64') +
-    '#' +
-    Date.now() +
-    Math.random()
-
-  return { api: await import(moduleURL), source }
+  const { module, source } = await loadTypeScript(
+    '../src/lib/api.ts',
+    import.meta.url,
+    (value) => value.replaceAll('import.meta.env.VITE_API_BASE', "''"),
+  )
+  return { api: module, source }
 }
 
 function jsonResponse(body) {

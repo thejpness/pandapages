@@ -1,3 +1,11 @@
+import {
+  isReaderContentKey,
+  parseReaderLocatorV2,
+  type ReaderLocatorV2,
+  type ReaderSegmentKind,
+  type ReaderStorySegment,
+} from './reader-locator-v2'
+
 const rawBase = (import.meta.env.VITE_API_BASE || '').trim()
 
 // Normalise base:
@@ -168,43 +176,139 @@ export async function getLibrary(): Promise<{ items: LibraryItem[] }> {
 
 /* ----------------------------- Story ---------------------------- */
 
-export type StoryPayload = {
+export type ReaderStoryPayload = {
   slug: string
   title: string
   author: string | null
+  language: string
   version: number
-  renderedHtml: string
+  segments: ReaderStorySegment[]
 }
 
-export async function getStory(slug: string): Promise<StoryPayload> {
-  return request<StoryPayload>(`/api/v1/story/${encodeURIComponent(slug)}`)
+function hasExactKeys(
+  record: Record<string, unknown>,
+  required: readonly string[],
+): boolean {
+  const allowed = new Set(required)
+  return (
+    required.every((key) => Object.hasOwn(record, key)) &&
+    Object.keys(record).every((key) => allowed.has(key))
+  )
 }
 
-export type StorySegment = {
-  ordinal: number
-  locator: unknown
-  renderedHtml: string
+function isPositiveInteger(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) >= 1
 }
 
-export type StorySegmentsPayload = {
-  slug: string
-  version: number
-  segments: StorySegment[]
+function parseReaderSegment(value: unknown): ReaderStorySegment {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      'ordinal',
+      'kind',
+      'headingLevel',
+      'contentKey',
+      'contentOccurrence',
+      'chapterKey',
+      'chapterOccurrence',
+      'renderedHtml',
+      'wordCount',
+    ]) ||
+    !isPositiveInteger(value.ordinal) ||
+    !['heading', 'paragraph', 'other'].includes(String(value.kind)) ||
+    !isReaderContentKey(value.contentKey) ||
+    !isPositiveInteger(value.contentOccurrence) ||
+    typeof value.renderedHtml !== 'string' ||
+    !Number.isInteger(value.wordCount) ||
+    Number(value.wordCount) < 0
+  ) {
+    throw new Error('Invalid Reader segment response')
+  }
+
+  const kind = value.kind as ReaderSegmentKind
+  if (
+    (kind === 'heading' &&
+      (!Number.isInteger(value.headingLevel) ||
+        Number(value.headingLevel) < 1 ||
+        Number(value.headingLevel) > 6)) ||
+    (kind !== 'heading' && value.headingLevel !== null)
+  ) {
+    throw new Error('Invalid Reader segment heading level')
+  }
+
+  const hasChapter = value.chapterKey !== null || value.chapterOccurrence !== null
+  if (
+    hasChapter &&
+    (!isReaderContentKey(value.chapterKey) ||
+      !isPositiveInteger(value.chapterOccurrence))
+  ) {
+    throw new Error('Invalid Reader segment chapter identity')
+  }
+
+  return {
+    ordinal: value.ordinal,
+    kind,
+    headingLevel: kind === 'heading' ? Number(value.headingLevel) : null,
+    contentKey: value.contentKey,
+    contentOccurrence: value.contentOccurrence,
+    chapterKey: hasChapter ? String(value.chapterKey) : null,
+    chapterOccurrence: hasChapter ? Number(value.chapterOccurrence) : null,
+    renderedHtml: value.renderedHtml,
+    wordCount: Number(value.wordCount),
+  }
 }
 
-export async function getStorySegments(slug: string): Promise<StorySegmentsPayload> {
-  return request<StorySegmentsPayload>(`/api/v1/story/${encodeURIComponent(slug)}/segments`)
+export function parseReaderStoryPayload(value: unknown): ReaderStoryPayload {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      'slug',
+      'title',
+      'author',
+      'language',
+      'version',
+      'segments',
+    ]) ||
+    typeof value.slug !== 'string' ||
+    value.slug.length === 0 ||
+    typeof value.title !== 'string' ||
+    (value.author !== null && typeof value.author !== 'string') ||
+    typeof value.language !== 'string' ||
+    !isPositiveInteger(value.version) ||
+    !Array.isArray(value.segments)
+  ) {
+    throw new Error('Invalid Reader response')
+  }
+
+  const segments = value.segments.map(parseReaderSegment)
+  for (let index = 1; index < segments.length; index += 1) {
+    if (segments[index].ordinal <= segments[index - 1].ordinal) {
+      throw new Error('Reader segments are not in strict ordinal order')
+    }
+  }
+
+  return {
+    slug: value.slug,
+    title: value.title,
+    author: value.author,
+    language: value.language,
+    version: value.version,
+    segments,
+  }
+}
+
+export async function getReaderStory(slug: string): Promise<ReaderStoryPayload> {
+  const data = await request<unknown>(
+    `/api/v1/reader/${encodeURIComponent(slug)}`,
+  )
+  return parseReaderStoryPayload(data)
 }
 
 /* ----------------------------- Admin ---------------------------- */
 
 export type AdminPreviewRequest = { markdown: string }
 
-export type AdminPreviewSegment = {
-  ordinal: number
-  locator: unknown
-  renderedHtml: string
-}
+export type AdminPreviewSegment = ReaderStorySegment
 
 export type AdminPreviewResponse = {
   renderedHtml: string
@@ -272,18 +376,50 @@ export async function adminListStories(): Promise<AdminStoriesListResponse> {
 
 export type ProgressState = {
   version: number
-  locator: unknown
+  locator: ReaderLocatorV2
   percent: number
 }
 
-export async function getProgress(slug: string): Promise<ProgressState> {
-  return request<ProgressState>(`/api/v1/progress/${encodeURIComponent(slug)}`)
+export type ProgressResponse = {
+  progress: ProgressState | null
+}
+
+export function parseProgressResponse(value: unknown): ProgressResponse {
+  if (!isRecord(value) || !hasExactKeys(value, ['progress'])) {
+    throw new Error('Invalid progress response')
+  }
+  if (value.progress === null) return { progress: null }
+  if (
+    !isRecord(value.progress) ||
+    !hasExactKeys(value.progress, ['version', 'locator', 'percent']) ||
+    !isPositiveInteger(value.progress.version) ||
+    typeof value.progress.percent !== 'number' ||
+    !Number.isFinite(value.progress.percent) ||
+    value.progress.percent < 0 ||
+    value.progress.percent > 1
+  ) {
+    throw new Error('Invalid progress response')
+  }
+  return {
+    progress: {
+      version: value.progress.version,
+      locator: parseReaderLocatorV2(value.progress.locator),
+      percent: value.progress.percent,
+    },
+  }
+}
+
+export async function getProgress(slug: string): Promise<ProgressResponse> {
+  const data = await request<unknown>(
+    `/api/v1/progress/${encodeURIComponent(slug)}`,
+  )
+  return parseProgressResponse(data)
 }
 
 export async function saveProgress(
   slug: string,
   version: number,
-  locator: JsonValue,
+  locator: ReaderLocatorV2,
   percent: number,
   options: { keepalive?: boolean } = {}
 ): Promise<void> {

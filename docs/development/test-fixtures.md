@@ -80,8 +80,9 @@ The fixture contains one published UTF-8 story, two chapters, six ordered
 segments, fixed test-only UUIDs, a test work/contributor, a child/prompt pair,
 and one test generation job. The segments mirror ingestion's top-level block
 model: H1, opening paragraph, Chapter One H2, its paragraph, Chapter Two H2,
-and its paragraph are six independent rows with heading- or paragraph-only
-locators. It does not include progress by default.
+and its paragraph are six independent rows with deterministic Reader 2
+content keys, occurrences, kinds, heading levels, and H2 chapter propagation.
+It does not include progress by default.
 
 Add the Default-profile progress row only for a test that needs it:
 
@@ -112,7 +113,7 @@ The seed command accepts no database URL or password. It:
 - targets either the single running development PostgreSQL container labelled
   `com.pandapages.test-seed-target=local-development`, or an explicitly named
   disposable integration container with the dedicated test label;
-- requires the target to be running with migration `00013` applied;
+- requires the target to be running with migration `00014` applied;
 - uses container-local `psql`, prints no database credential, performs no
   network request, and creates no temporary credential file.
 
@@ -138,9 +139,18 @@ PostgreSQL resources and proves:
 - seed refusal cases fail closed;
 - explicit six-block seed shape, optional progress, rerun, removal, and
   recreation are safe;
-- the signed-session API reads the UTF-8 story and segments;
+- migration `00014` resets beta progress and removes the obsolete segment
+  locator while preserving the explicit fixture boundary;
+- the signed-session coherent Reader endpoint reads all six UTF-8 segments;
+- optional progress is a valid strict Reader Locator v2;
 - every generated container, network, volume, credential, and artifact is
   removed.
 
 The suite runs in the protected `Configuration` CI job. It uses only generated
 non-production data and local Docker resources.
+
+`scripts/tests/reader-store-integration.sh`, in the protected `Backend` job,
+separately proves SQL/Go key parity, migration 13→14 and Down/Up behaviour,
+direct locator constraints, coherent reads during republish, account isolation,
+strict progress validation, removed Reader 1 endpoints, and no false HTTP
+success after a database write failure.

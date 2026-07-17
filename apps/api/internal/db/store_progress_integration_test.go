@@ -2,7 +2,6 @@ package db
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"math"
 	"os"
@@ -12,13 +11,36 @@ import (
 	"time"
 
 	"pandapages/api/internal/model"
+	"pandapages/api/internal/readercontract"
 )
 
 const (
 	progressIntegrationURLVar   = "PP_PROGRESS_STORE_TEST_DATABASE_URL"
 	progressIntegrationGuardVar = "PP_PROGRESS_STORE_TEST_DISPOSABLE"
 	progressIntegrationDBName   = "pandapages_progress_store_test"
+	progressKeyA                = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	progressKeyB                = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	progressChapterKey          = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 )
+
+func progressLocator(key string, occurrence, ordinal int, offset float64, chapter bool) readercontract.Locator {
+	locator := readercontract.Locator{
+		Schema: 2,
+		Segment: readercontract.LocatorSegment{
+			Key:        key,
+			Occurrence: occurrence,
+			Ordinal:    ordinal,
+			Offset:     offset,
+		},
+	}
+	if chapter {
+		locator.Chapter = &readercontract.LocatorChapter{
+			Key:        progressChapterKey,
+			Occurrence: 1,
+		}
+	}
+	return locator
+}
 
 func TestProgressStoreIntegration(t *testing.T) {
 	if os.Getenv(progressIntegrationGuardVar) != "1" {
@@ -63,7 +85,7 @@ func TestProgressStoreIntegration(t *testing.T) {
 		t.Fatalf("insert progress accounts: %v", err)
 	}
 	if _, err := adminDB.Exec(
-		`INSERT INTO stories (id, account_id, slug, title) VALUES ($1, $2, $3, 'Account A Story')`,
+		`INSERT INTO stories (id, account_id, slug, title, is_published) VALUES ($1, $2, $3, 'Account A Story', true)`,
 		storyA,
 		accountA,
 		slug,
@@ -77,6 +99,18 @@ func TestProgressStoreIntegration(t *testing.T) {
 	); err != nil {
 		t.Fatalf("insert account A version: %v", err)
 	}
+	if _, err := adminDB.Exec(`
+		INSERT INTO story_segments (
+			story_version_id, ordinal, segment_kind, heading_level,
+			content_key, content_occurrence, chapter_key, chapter_occurrence,
+			markdown, rendered_html, word_count
+		) VALUES
+			($1, 1, 'paragraph', NULL, $2, 1, NULL, NULL, 'Opening', '<p>Opening</p>', 1),
+			($1, 2, 'heading', 2, $3, 1, $3, 1, '## Chapter', '<h2>Chapter</h2>', 1),
+			($1, 3, 'paragraph', NULL, $4, 1, $3, 1, 'Inside', '<p>Inside</p>', 1)
+	`, versionA, progressKeyA, progressChapterKey, progressKeyB); err != nil {
+		t.Fatalf("insert account A segments: %v", err)
+	}
 	if _, err := adminDB.Exec(
 		`UPDATE stories SET published_version_id = $2 WHERE id = $1`,
 		storyA,
@@ -85,70 +119,91 @@ func TestProgressStoreIntegration(t *testing.T) {
 		t.Fatalf("publish account A story: %v", err)
 	}
 
-	t.Run("first put creates and get returns progress", func(t *testing.T) {
-		locator := json.RawMessage(`{"mode":"scroll","scrollY":120}`)
-		if err := store.ProgressPut(accountA, slug, 1, locator, 0.25); err != nil {
+	t.Run("known empty progress is distinct from a missing story", func(t *testing.T) {
+		got, err := store.ProgressGet(accountA, slug)
+		if err != nil {
+			t.Fatalf("ProgressGet empty: %v", err)
+		}
+		if got.Progress != nil {
+			t.Fatalf("empty progress = %#v, want nil", got.Progress)
+		}
+		if _, err := store.ProgressGet(accountA, "missing-story"); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("missing ProgressGet error = %v, want sql.ErrNoRows", err)
+		}
+	})
+
+	t.Run("valid typed put creates and updates progress", func(t *testing.T) {
+		first := progressLocator(progressKeyA, 1, 1, 0.25, false)
+		if err := store.ProgressPut(accountA, slug, 1, first, 0.25); err != nil {
 			t.Fatalf("ProgressPut first: %v", err)
 		}
-
 		got, err := store.ProgressGet(accountA, slug)
 		if err != nil {
 			t.Fatalf("ProgressGet first: %v", err)
 		}
-		assertProgressState(t, got, 1, locator, 0.25)
+		assertProgressState(t, got, 1, first, 0.25)
+
+		later := progressLocator(progressKeyB, 1, 3, 0.5, true)
+		if err := store.ProgressPut(accountA, slug, 1, later, 0.75); err != nil {
+			t.Fatalf("ProgressPut update: %v", err)
+		}
+		got, err = store.ProgressGet(accountA, slug)
+		if err != nil {
+			t.Fatalf("ProgressGet update: %v", err)
+		}
+		assertProgressState(t, got, 1, later, 0.75)
 
 		var rows int
 		if err := adminDB.QueryRow(`SELECT count(*) FROM reading_progress`).Scan(&rows); err != nil {
-			t.Fatalf("count first progress row: %v", err)
+			t.Fatalf("count progress rows: %v", err)
 		}
 		if rows != 1 {
 			t.Fatalf("progress rows = %d, want 1", rows)
 		}
 	})
 
-	t.Run("later put updates the existing row", func(t *testing.T) {
-		locator := json.RawMessage(`{"mode":"scroll","scrollY":640}`)
-		if err := store.ProgressPut(accountA, slug, 1, locator, 0.75); err != nil {
-			t.Fatalf("ProgressPut update: %v", err)
+	t.Run("identity mismatches are rejected without changing confirmed progress", func(t *testing.T) {
+		confirmed := progressLocator(progressKeyB, 1, 3, 0.5, true)
+		tests := []struct {
+			name   string
+			mutate func(*readercontract.Locator)
+		}{
+			{name: "key", mutate: func(locator *readercontract.Locator) { locator.Segment.Key = progressKeyA }},
+			{name: "occurrence", mutate: func(locator *readercontract.Locator) { locator.Segment.Occurrence = 2 }},
+			{name: "ordinal", mutate: func(locator *readercontract.Locator) { locator.Segment.Ordinal = 99 }},
+			{name: "chapter absent", mutate: func(locator *readercontract.Locator) { locator.Chapter = nil }},
+			{name: "chapter key", mutate: func(locator *readercontract.Locator) { locator.Chapter.Key = progressKeyA }},
+			{name: "chapter occurrence", mutate: func(locator *readercontract.Locator) { locator.Chapter.Occurrence = 2 }},
 		}
-		got, err := store.ProgressGet(accountA, slug)
-		if err != nil {
-			t.Fatalf("ProgressGet update: %v", err)
-		}
-		assertProgressState(t, got, 1, locator, 0.75)
-
-		var rows int
-		if err := adminDB.QueryRow(`SELECT count(*) FROM reading_progress`).Scan(&rows); err != nil {
-			t.Fatalf("count updated progress rows: %v", err)
-		}
-		if rows != 1 {
-			t.Fatalf("updated progress rows = %d, want 1", rows)
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				candidate := confirmed
+				chapter := *confirmed.Chapter
+				candidate.Chapter = &chapter
+				test.mutate(&candidate)
+				if err := store.ProgressPut(accountA, slug, 1, candidate, 0.9); !errors.Is(err, readercontract.ErrLocatorMismatch) {
+					t.Fatalf("ProgressPut error = %v, want locator mismatch", err)
+				}
+				got, err := store.ProgressGet(accountA, slug)
+				if err != nil {
+					t.Fatalf("ProgressGet after mismatch: %v", err)
+				}
+				assertProgressState(t, got, 1, confirmed, 0.75)
+			})
 		}
 	})
 
-	t.Run("percentage remains clamped", func(t *testing.T) {
-		locator := json.RawMessage(`{"mode":"scroll","scrollY":900}`)
-		if err := store.ProgressPut(accountA, slug, 1, locator, 4); err != nil {
-			t.Fatalf("ProgressPut upper clamp: %v", err)
+	t.Run("percentage is rejected rather than clamped", func(t *testing.T) {
+		locator := progressLocator(progressKeyA, 1, 1, 0, false)
+		for _, invalid := range []float64{-0.01, 1.01, math.Inf(1), math.NaN()} {
+			if err := store.ProgressPut(accountA, slug, 1, locator, invalid); err == nil {
+				t.Fatalf("ProgressPut accepted invalid percent %v", invalid)
+			}
 		}
-		got, err := store.ProgressGet(accountA, slug)
-		if err != nil {
-			t.Fatalf("ProgressGet upper clamp: %v", err)
-		}
-		assertProgressState(t, got, 1, locator, 1)
-
-		if err := store.ProgressPut(accountA, slug, 1, locator, -4); err != nil {
-			t.Fatalf("ProgressPut lower clamp: %v", err)
-		}
-		got, err = store.ProgressGet(accountA, slug)
-		if err != nil {
-			t.Fatalf("ProgressGet lower clamp: %v", err)
-		}
-		assertProgressState(t, got, 1, locator, 0)
 	})
 
 	t.Run("missing story and version return sql ErrNoRows", func(t *testing.T) {
-		locator := json.RawMessage(`{"mode":"scroll","scrollY":1}`)
+		locator := progressLocator(progressKeyA, 1, 1, 0, false)
 		if err := store.ProgressPut(accountA, "missing-story", 1, locator, 0.1); !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("missing-story error = %v, want sql.ErrNoRows", err)
 		}
@@ -158,7 +213,7 @@ func TestProgressStoreIntegration(t *testing.T) {
 	})
 
 	t.Run("another account cannot access the first account story", func(t *testing.T) {
-		locator := json.RawMessage(`{"mode":"scroll","scrollY":50}`)
+		locator := progressLocator(progressKeyA, 1, 1, 0, false)
 		if _, err := store.ProgressGet(accountB, slug); !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("cross-account ProgressGet error = %v, want sql.ErrNoRows", err)
 		}
@@ -173,7 +228,7 @@ func TestProgressStoreIntegration(t *testing.T) {
 			versionB = "bbbbbbbb-1000-4000-8000-000000000001"
 		)
 		if _, err := adminDB.Exec(
-			`INSERT INTO stories (id, account_id, slug, title) VALUES ($1, $2, $3, 'Account B Story')`,
+			`INSERT INTO stories (id, account_id, slug, title, is_published) VALUES ($1, $2, $3, 'Account B Story', true)`,
 			storyB,
 			accountB,
 			slug,
@@ -187,16 +242,20 @@ func TestProgressStoreIntegration(t *testing.T) {
 		); err != nil {
 			t.Fatalf("insert account B version: %v", err)
 		}
-		if _, err := adminDB.Exec(
-			`UPDATE stories SET published_version_id = $2 WHERE id = $1`,
-			storyB,
-			versionB,
-		); err != nil {
+		if _, err := adminDB.Exec(`
+			INSERT INTO story_segments (
+				story_version_id, ordinal, segment_kind, content_key,
+				content_occurrence, markdown, rendered_html, word_count
+			) VALUES ($1, 1, 'paragraph', $2, 1, 'Other', '<p>Other</p>', 1)
+		`, versionB, progressKeyB); err != nil {
+			t.Fatalf("insert account B segment: %v", err)
+		}
+		if _, err := adminDB.Exec(`UPDATE stories SET published_version_id = $2 WHERE id = $1`, storyB, versionB); err != nil {
 			t.Fatalf("publish account B story: %v", err)
 		}
 
-		locatorA := json.RawMessage(`{"mode":"scroll","scrollY":910}`)
-		locatorB := json.RawMessage(`{"mode":"paged","page":3}`)
+		locatorA := progressLocator(progressKeyA, 1, 1, 0.9, false)
+		locatorB := progressLocator(progressKeyB, 1, 1, 0.4, false)
 		if err := store.ProgressPut(accountA, slug, 1, locatorA, 0.91); err != nil {
 			t.Fatalf("ProgressPut account A independent: %v", err)
 		}
@@ -214,14 +273,6 @@ func TestProgressStoreIntegration(t *testing.T) {
 		}
 		assertProgressState(t, gotA, 1, locatorA, 0.91)
 		assertProgressState(t, gotB, 1, locatorB, 0.4)
-
-		var rows int
-		if err := adminDB.QueryRow(`SELECT count(*) FROM reading_progress`).Scan(&rows); err != nil {
-			t.Fatalf("count independent progress rows: %v", err)
-		}
-		if rows != 2 {
-			t.Fatalf("independent progress rows = %d, want 2", rows)
-		}
 	})
 }
 
@@ -249,7 +300,7 @@ func newProgressIntegrationStore(t *testing.T, databaseURL string) *Store {
 func setupProgressIntegrationSchema(t *testing.T, database *sql.DB) {
 	t.Helper()
 	statements := []string{
-		`DROP TABLE IF EXISTS reading_progress, story_versions, stories, profiles, accounts CASCADE`,
+		`DROP TABLE IF EXISTS reading_progress, story_segments, story_versions, stories, profiles, accounts CASCADE`,
 		`CREATE EXTENSION IF NOT EXISTS pgcrypto`,
 		`CREATE TABLE accounts (
 			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -268,6 +319,7 @@ func setupProgressIntegrationSchema(t *testing.T, database *sql.DB) {
 			account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
 			slug text NOT NULL,
 			title text NOT NULL,
+			is_published boolean NOT NULL DEFAULT false,
 			published_version_id uuid,
 			UNIQUE (account_id, slug)
 		)`,
@@ -281,6 +333,22 @@ func setupProgressIntegrationSchema(t *testing.T, database *sql.DB) {
 		`ALTER TABLE stories
 			ADD CONSTRAINT stories_published_version_progress_test_fkey
 			FOREIGN KEY (published_version_id) REFERENCES story_versions(id) ON DELETE SET NULL`,
+		`CREATE TABLE story_segments (
+			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+			story_version_id uuid NOT NULL REFERENCES story_versions(id) ON DELETE CASCADE,
+			ordinal integer NOT NULL,
+			segment_kind text NOT NULL,
+			heading_level integer,
+			content_key text NOT NULL,
+			content_occurrence integer NOT NULL,
+			chapter_key text,
+			chapter_occurrence integer,
+			markdown text NOT NULL,
+			rendered_html text NOT NULL,
+			word_count integer NOT NULL,
+			UNIQUE (story_version_id, ordinal),
+			UNIQUE (story_version_id, content_key, content_occurrence)
+		)`,
 		`CREATE TABLE reading_progress (
 			profile_id uuid NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
 			story_id uuid NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
@@ -300,27 +368,22 @@ func setupProgressIntegrationSchema(t *testing.T, database *sql.DB) {
 
 func assertProgressState(
 	t *testing.T,
-	state model.ProgressState,
+	response model.ProgressResponse,
 	wantVersion int,
-	wantLocator json.RawMessage,
+	wantLocator readercontract.Locator,
 	wantPercent float64,
 ) {
 	t.Helper()
-	var gotLocator any
-	if err := json.Unmarshal(state.Locator, &gotLocator); err != nil {
-		t.Fatalf("decode stored locator: %v", err)
+	if response.Progress == nil {
+		t.Fatal("progress = nil, want stored state")
 	}
-	var expectedLocator any
-	if err := json.Unmarshal(wantLocator, &expectedLocator); err != nil {
-		t.Fatalf("decode expected locator: %v", err)
+	if response.Progress.Version != wantVersion {
+		t.Fatalf("version = %d, want %d", response.Progress.Version, wantVersion)
 	}
-	if state.Version != wantVersion {
-		t.Fatalf("version = %d, want %d", state.Version, wantVersion)
+	if !reflect.DeepEqual(response.Progress.Locator, wantLocator) {
+		t.Fatalf("locator = %#v, want %#v", response.Progress.Locator, wantLocator)
 	}
-	if !reflect.DeepEqual(gotLocator, expectedLocator) {
-		t.Fatalf("locator = %#v, want %#v", gotLocator, expectedLocator)
-	}
-	if math.Abs(state.Percent-wantPercent) > 0.0001 {
-		t.Fatalf("percent = %v, want %v", state.Percent, wantPercent)
+	if math.Abs(response.Progress.Percent-wantPercent) > 0.0001 {
+		t.Fatalf("percent = %v, want %v", response.Progress.Percent, wantPercent)
 	}
 }

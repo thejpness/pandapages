@@ -1,7 +1,5 @@
 package model
 
-import "encoding/json"
-
 type AdminPreviewRequest struct {
 	Markdown string `json:"markdown"`
 }
@@ -31,7 +29,13 @@ type AdminDraftUpsertResponse struct {
 }
 
 type AdminSegment struct {
-	Ordinal      int             `json:"ordinal"`
-	Locator      json.RawMessage `json:"locator"`
-	RenderedHTML string          `json:"renderedHtml"`
+	Ordinal           int     `json:"ordinal"`
+	Kind              string  `json:"kind"`
+	HeadingLevel      *int    `json:"headingLevel"`
+	ContentKey        string  `json:"contentKey"`
+	ContentOccurrence int     `json:"contentOccurrence"`
+	ChapterKey        *string `json:"chapterKey"`
+	ChapterOccurrence *int    `json:"chapterOccurrence"`
+	RenderedHTML      string  `json:"renderedHtml"`
+	WordCount         int     `json:"wordCount"`
 }

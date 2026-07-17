@@ -1,21 +1,10 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
-import { transformWithOxc } from 'vite'
+import { loadTypeScript as loadModule } from './helpers/typescript-module.mjs'
 
-async function loadTypeScript(relativePath, transform = (source) => source) {
-  const sourceURL = new URL(relativePath, import.meta.url)
-  const source = await readFile(sourceURL, 'utf8')
-  const transformed = await transformWithOxc(transform(source), sourceURL.pathname)
-  const moduleURL =
-    'data:text/javascript;base64,' +
-    Buffer.from(transformed.code).toString('base64') +
-    '#' +
-    Date.now() +
-    Math.random()
-
-  return { module: await import(moduleURL), source }
-}
+const loadTypeScript = (relativePath, transform) =>
+  loadModule(relativePath, import.meta.url, transform)
 
 function deferred() {
   let resolve
@@ -55,7 +44,15 @@ function scrollSnapshot(scrollY, percent = scrollY / 1000, overrides = {}) {
   return {
     slug: 'test-story',
     version: 1,
-    locator: { mode: 'scroll', scrollY },
+    locator: {
+      schema: 2,
+      segment: {
+        key: 'a'.repeat(64),
+        occurrence: 1,
+        ordinal: 1,
+        offset: Math.max(0, Math.min(1, scrollY / 10000)),
+      },
+    },
     percent,
     ...overrides,
   }
@@ -65,7 +62,15 @@ function pagedSnapshot(page, percent = page / 10) {
   return {
     slug: 'test-story',
     version: 1,
-    locator: { mode: 'paged', page },
+    locator: {
+      schema: 2,
+      segment: {
+        key: 'b'.repeat(64),
+        occurrence: 1,
+        ordinal: page + 1,
+        offset: 0,
+      },
+    },
     percent,
   }
 }
@@ -324,7 +329,7 @@ test('saveProgress rejects malformed success and preserves keepalive credentials
     })
   }
   await assert.rejects(
-    api.saveProgress('story', 1, { mode: 'scroll', scrollY: 10 }, 0.1, {
+    api.saveProgress('story', 1, scrollSnapshot(10).locator, 0.1, {
       keepalive: true,
     }),
     /Invalid progress-save response/
@@ -341,7 +346,7 @@ test('saveProgress rejects malformed success and preserves keepalive credentials
   await api.saveProgress(
     'story',
     1,
-    { mode: 'scroll', scrollY: 10 },
+    scrollSnapshot(10).locator,
     0.1
   )
 })
@@ -360,7 +365,7 @@ test('saveProgress propagates transport and server failures', async (t) => {
     throw new TypeError('network unavailable')
   }
   await assert.rejects(
-    api.saveProgress('story', 1, { mode: 'scroll', scrollY: 10 }, 0.1),
+    api.saveProgress('story', 1, scrollSnapshot(10).locator, 0.1),
     /network unavailable/
   )
 
@@ -375,7 +380,7 @@ test('saveProgress propagates transport and server failures', async (t) => {
       }
     )
   await assert.rejects(
-    api.saveProgress('story', 1, { mode: 'scroll', scrollY: 10 }, 0.1),
+    api.saveProgress('story', 1, scrollSnapshot(10).locator, 0.1),
     (error) => error.status === 500
   )
 })

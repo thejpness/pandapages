@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"bytes"
 	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
@@ -14,6 +13,7 @@ import (
 
 	"pandapages/api/internal/httpauth"
 	"pandapages/api/internal/model"
+	"pandapages/api/internal/readercontract"
 	"pandapages/api/internal/session"
 )
 
@@ -29,11 +29,10 @@ type Store interface {
 	AccountExists(accountID string) (bool, error)
 
 	Library(accountID string) ([]model.StoryItem, error)
-	StoryLatest(accountID, slug string) (model.StoryPayload, error)
-	StorySegments(accountID, slug string) (model.StorySegmentsPayload, error)
+	ReaderStory(accountID, slug string) (model.ReaderStory, error)
 
-	ProgressGet(accountID, slug string) (model.ProgressState, error)
-	ProgressPut(accountID, slug string, version int, locator json.RawMessage, percent float64) error
+	ProgressGet(accountID, slug string) (model.ProgressResponse, error)
+	ProgressPut(accountID, slug string, version int, locator readercontract.Locator, percent float64) error
 
 	ContinueRecent(accountID string, limit int) ([]model.ContinueItem, error)
 
@@ -167,55 +166,30 @@ func New(cfg Config, store Store) http.Handler {
 		writeJSON(w, http.StatusOK, map[string]any{"items": items})
 	}))
 
-	// Story (+ segments)
-	mux.HandleFunc("/api/v1/story/", withUnlock(func(w http.ResponseWriter, r *http.Request, accountID string) {
+	// Reader 2: one coherent published-version payload.
+	mux.HandleFunc("/api/v1/reader/", withUnlock(func(w http.ResponseWriter, r *http.Request, accountID string) {
 		if r.Method != http.MethodGet {
 			methodNotAllowed(w, []string{http.MethodGet})
 			return
 		}
 
-		path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/story/"), "/")
-		if path == "" {
-			writeErr(w, http.StatusBadRequest, "slug", "missing slug")
-			return
-		}
-
-		parts := strings.Split(path, "/")
-		slug := parts[0]
+		slug := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/reader/"), "/")
 		if slug == "" {
 			writeErr(w, http.StatusBadRequest, "slug", "missing slug")
 			return
 		}
-
-		// /api/v1/story/{slug}/segments
-		if len(parts) == 2 && parts[1] == "segments" {
-			p, err := store.StorySegments(accountID, slug)
-			if errors.Is(err, sql.ErrNoRows) {
-				writeErr(w, http.StatusNotFound, "not_found", "story not found")
-				return
-			}
-			if err != nil {
-				writeErr(w, http.StatusInternalServerError, "db", "segments query failed")
-				return
-			}
-			noStore(w)
-			writeJSON(w, http.StatusOK, p)
+		if strings.Contains(slug, "/") {
+			writeErr(w, http.StatusNotFound, "not_found", "reader story not found")
 			return
 		}
 
-		// /api/v1/story/{slug}
-		if len(parts) != 1 {
-			writeErr(w, http.StatusBadRequest, "path", "invalid story path")
-			return
-		}
-
-		p, err := store.StoryLatest(accountID, slug)
+		p, err := store.ReaderStory(accountID, slug)
 		if errors.Is(err, sql.ErrNoRows) {
 			writeErr(w, http.StatusNotFound, "not_found", "story not found")
 			return
 		}
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, "db", "story query failed")
+			writeErr(w, http.StatusInternalServerError, "db", "reader query failed")
 			return
 		}
 
@@ -235,8 +209,7 @@ func New(cfg Config, store Store) http.Handler {
 		case http.MethodGet:
 			st, err := store.ProgressGet(accountID, slug)
 			if errors.Is(err, sql.ErrNoRows) {
-				noStore(w)
-				writeJSON(w, http.StatusOK, model.ProgressState{Version: 0, Locator: nil, Percent: 0})
+				writeErr(w, http.StatusNotFound, "not_found", "story not found")
 				return
 			}
 			if err != nil {
@@ -250,9 +223,9 @@ func New(cfg Config, store Store) http.Handler {
 
 		case http.MethodPut:
 			var body struct {
-				Version int             `json:"version"`
-				Locator json.RawMessage `json:"locator"`
-				Percent float64         `json:"percent"`
+				Version int                     `json:"version"`
+				Locator *readercontract.Locator `json:"locator"`
+				Percent *float64                `json:"percent"`
 			}
 			if err := decodeJSON(w, r, &body); err != nil {
 				writeDecodeError(w, err)
@@ -262,20 +235,30 @@ func New(cfg Config, store Store) http.Handler {
 				writeErr(w, http.StatusBadRequest, "version", "version must be > 0")
 				return
 			}
-			if !validProgressLocator(body.Locator) {
-				writeErr(w, http.StatusBadRequest, "locator", "locator must be a JSON object")
+			if body.Locator == nil {
+				writeErr(w, http.StatusBadRequest, "locator_invalid", "locator is required")
 				return
 			}
-			if body.Percent < 0 {
-				body.Percent = 0
+			if err := body.Locator.Validate(); err != nil {
+				writeErr(w, http.StatusBadRequest, "locator_invalid", "invalid Reader locator")
+				return
 			}
-			if body.Percent > 1 {
-				body.Percent = 1
+			if body.Percent == nil {
+				writeErr(w, http.StatusBadRequest, "percent", "percent is required")
+				return
+			}
+			if *body.Percent < 0 || *body.Percent > 1 {
+				writeErr(w, http.StatusBadRequest, "percent", "percent must be between 0 and 1")
+				return
 			}
 
-			err := store.ProgressPut(accountID, slug, body.Version, body.Locator, body.Percent)
+			err := store.ProgressPut(accountID, slug, body.Version, *body.Locator, *body.Percent)
 			if errors.Is(err, sql.ErrNoRows) {
 				writeErr(w, http.StatusNotFound, "not_found", "story/version not found")
+				return
+			}
+			if errors.Is(err, readercontract.ErrLocatorMismatch) {
+				writeErr(w, http.StatusBadRequest, "locator_mismatch", "locator does not match the selected story version")
 				return
 			}
 			if err != nil {
@@ -375,16 +358,6 @@ func New(cfg Config, store Store) http.Handler {
 	}
 
 	return h
-}
-
-func validProgressLocator(locator json.RawMessage) bool {
-	raw := bytes.TrimSpace(locator)
-	if len(raw) == 0 {
-		return false
-	}
-
-	var object map[string]json.RawMessage
-	return json.Unmarshal(raw, &object) == nil && object != nil
 }
 
 /* -------------------- helpers & middleware -------------------- */

@@ -4,27 +4,53 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"pandapages/api/internal/model"
+	"pandapages/api/internal/readercontract"
 )
 
-func TestProgressPutValidatesLocatorBeforeStore(t *testing.T) {
-	manager := testSessionManager(t, false, func() time.Time { return testSessionTime })
+const progressTestKey = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-	for _, test := range []struct {
-		name string
-		body string
+func validProgressBody(percent float64) string {
+	return fmt.Sprintf(
+		`{"version":2,"locator":{"schema":2,"segment":{"key":"%s","occurrence":1,"ordinal":4,"offset":0.35},"chapter":{"key":"%s","occurrence":1}},"percent":%v}`,
+		progressTestKey,
+		progressTestKey,
+		percent,
+	)
+}
+
+func TestProgressPutStrictlyValidatesLocatorV2BeforeStore(t *testing.T) {
+	manager := testSessionManager(t, false, func() time.Time { return testSessionTime })
+	tests := []struct {
+		name     string
+		body     string
+		wantCode string
 	}{
-		{name: "missing", body: `{"version":1,"percent":0.2}`},
-		{name: "null", body: `{"version":1,"locator":null,"percent":0.2}`},
-		{name: "string", body: `{"version":1,"locator":"scroll","percent":0.2}`},
-		{name: "array", body: `{"version":1,"locator":[],"percent":0.2}`},
-		{name: "number", body: `{"version":1,"locator":4,"percent":0.2}`},
-	} {
+		{name: "missing locator", body: `{"version":1,"percent":0.2}`, wantCode: "locator_invalid"},
+		{name: "null locator", body: `{"version":1,"locator":null,"percent":0.2}`, wantCode: "locator_invalid"},
+		{name: "Reader 1 locator", body: `{"version":1,"locator":{"mode":"scroll","scrollY":2},"percent":0.2}`, wantCode: "bad_json"},
+		{name: "wrong schema", body: strings.Replace(validProgressBody(0.2), `"schema":2`, `"schema":1`, 1), wantCode: "locator_invalid"},
+		{name: "uppercase key", body: strings.Replace(validProgressBody(0.2), progressTestKey, strings.ToUpper(progressTestKey), 1), wantCode: "locator_invalid"},
+		{name: "zero occurrence", body: strings.Replace(validProgressBody(0.2), `"occurrence":1`, `"occurrence":0`, 1), wantCode: "locator_invalid"},
+		{name: "zero ordinal", body: strings.Replace(validProgressBody(0.2), `"ordinal":4`, `"ordinal":0`, 1), wantCode: "locator_invalid"},
+		{name: "offset above one", body: strings.Replace(validProgressBody(0.2), `"offset":0.35`, `"offset":1.01`, 1), wantCode: "locator_invalid"},
+		{name: "partial chapter", body: strings.Replace(validProgressBody(0.2), `,"occurrence":1}}`, `}}`, 1), wantCode: "locator_invalid"},
+		{name: "unknown top-level locator field", body: strings.Replace(validProgressBody(0.2), `"schema":2`, `"schema":2,"mode":"scroll"`, 1), wantCode: "bad_json"},
+		{name: "unknown segment field", body: strings.Replace(validProgressBody(0.2), `"offset":0.35`, `"offset":0.35,"page":2`, 1), wantCode: "bad_json"},
+		{name: "missing percent", body: strings.Replace(validProgressBody(0.2), `,"percent":0.2`, "", 1), wantCode: "percent"},
+		{name: "percent below zero", body: validProgressBody(-0.1), wantCode: "percent"},
+		{name: "percent above one", body: validProgressBody(1.1), wantCode: "percent"},
+	}
+
+	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			store := &authTestStore{accountExists: true}
 			request := sessionRequest(t, manager, http.MethodPut, "/api/v1/progress/test-story")
@@ -49,30 +75,32 @@ func TestProgressPutValidatesLocatorBeforeStore(t *testing.T) {
 			if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 				t.Fatalf("decode response: %v", err)
 			}
-			if payload.Error.Code != "locator" {
-				t.Fatalf("error code = %q, want locator", payload.Error.Code)
+			if payload.Error.Code != test.wantCode {
+				t.Fatalf("error code = %q, want %q; body = %s", payload.Error.Code, test.wantCode, response.Body.String())
 			}
 		})
 	}
 }
 
-func TestProgressPutResponseFollowsStoreResult(t *testing.T) {
+func TestProgressPutResponseFollowsTypedStoreResult(t *testing.T) {
 	manager := testSessionManager(t, false, func() time.Time { return testSessionTime })
 
 	for _, test := range []struct {
 		name       string
 		storeErr   error
 		wantStatus int
+		wantCode   string
 		wantOK     bool
 	}{
 		{name: "success", wantStatus: http.StatusOK, wantOK: true},
-		{name: "not found", storeErr: sql.ErrNoRows, wantStatus: http.StatusNotFound},
-		{name: "database failure", storeErr: errors.New("database unavailable"), wantStatus: http.StatusInternalServerError},
+		{name: "not found", storeErr: sql.ErrNoRows, wantStatus: http.StatusNotFound, wantCode: "not_found"},
+		{name: "locator mismatch", storeErr: readercontract.ErrLocatorMismatch, wantStatus: http.StatusBadRequest, wantCode: "locator_mismatch"},
+		{name: "database failure", storeErr: errors.New("private database detail"), wantStatus: http.StatusInternalServerError, wantCode: "db"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store := &authTestStore{accountExists: true, progressPutErr: test.storeErr}
-			body := `{"version":2,"locator":{"mode":"scroll","scrollY":128},"percent":1.5}`
 			request := sessionRequest(t, manager, http.MethodPut, "/api/v1/progress/test-story")
+			body := validProgressBody(0.5)
 			request.Body = io.NopCloser(strings.NewReader(body))
 			request.ContentLength = int64(len(body))
 			request.Header.Set("Content-Type", "application/json")
@@ -89,9 +117,10 @@ func TestProgressPutResponseFollowsStoreResult(t *testing.T) {
 			if store.progressAccount != testAccountID || store.progressSlug != "test-story" || store.progressVersion != 2 {
 				t.Fatalf("progress scope = %q/%q/%d", store.progressAccount, store.progressSlug, store.progressVersion)
 			}
-			if store.progressPercent != 1 {
-				t.Fatalf("clamped percent = %v, want 1", store.progressPercent)
+			if store.progressPercent != 0.5 || store.progressLocator.Schema != 2 || store.progressLocator.Segment.Ordinal != 4 {
+				t.Fatalf("typed progress = %#v at %v", store.progressLocator, store.progressPercent)
 			}
+
 			var payload map[string]any
 			if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 				t.Fatalf("decode response: %v", err)
@@ -99,18 +128,60 @@ func TestProgressPutResponseFollowsStoreResult(t *testing.T) {
 			if got, _ := payload["ok"].(bool); got != test.wantOK {
 				t.Fatalf("ok = %v, want %t; body = %s", got, test.wantOK, response.Body.String())
 			}
+			if test.wantCode != "" {
+				errorBody := payload["error"].(map[string]any)
+				if errorBody["code"] != test.wantCode {
+					t.Fatalf("error code = %#v, want %q", errorBody["code"], test.wantCode)
+				}
+			}
+			if strings.Contains(response.Body.String(), "private database detail") {
+				t.Fatal("raw database error leaked into response")
+			}
 		})
 	}
+}
+
+func TestProgressGetDistinguishesMissingStoryFromKnownEmptyProgress(t *testing.T) {
+	manager := testSessionManager(t, false, func() time.Time { return testSessionTime })
+
+	t.Run("known empty", func(t *testing.T) {
+		store := &authTestStore{
+			accountExists:    true,
+			progressGetState: model.ProgressResponse{Progress: nil},
+		}
+		response := httptest.NewRecorder()
+		testHandler(t, store, manager).ServeHTTP(
+			response,
+			sessionRequest(t, manager, http.MethodGet, "/api/v1/progress/test-story"),
+		)
+		if response.Code != http.StatusOK || strings.TrimSpace(response.Body.String()) != `{"progress":null}` {
+			t.Fatalf("response = %d %s", response.Code, response.Body.String())
+		}
+		if response.Header().Get("Cache-Control") != "no-store" {
+			t.Fatal("progress response is cacheable")
+		}
+	})
+
+	t.Run("missing story", func(t *testing.T) {
+		store := &authTestStore{accountExists: true, progressGetErr: sql.ErrNoRows}
+		response := httptest.NewRecorder()
+		testHandler(t, store, manager).ServeHTTP(
+			response,
+			sessionRequest(t, manager, http.MethodGet, "/api/v1/progress/missing"),
+		)
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("status = %d, want 404; body = %s", response.Code, response.Body.String())
+		}
+	})
 }
 
 func TestProgressPutRequiresVerifiedSession(t *testing.T) {
 	manager := testSessionManager(t, false, func() time.Time { return testSessionTime })
 	store := &authTestStore{accountExists: true}
-	body := `{"version":1,"locator":{"mode":"scroll","scrollY":128},"percent":0.2}`
 	request := httptest.NewRequest(
 		http.MethodPut,
 		"/api/v1/progress/test-story",
-		strings.NewReader(body),
+		strings.NewReader(validProgressBody(0.2)),
 	)
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()

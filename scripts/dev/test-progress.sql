@@ -27,7 +27,7 @@ SELECT
   profile.id,
   story.id,
   version.id,
-  '{"type":"para","n":2}'::jsonb,
+  '{"schema":2,"segment":{"key":"aae1f4bebb97b03ea9d0cfd5431675a250ab6a14be567445b1bb250874574e19","occurrence":1,"ordinal":4,"offset":0.35},"chapter":{"key":"6f744b440fbf4fa52da46bebf4fd3e5f2de7a1c2fb11f7e9ac2794ccd1956c4e","occurrence":1}}'::jsonb,
   0.6
 FROM stories AS story
 JOIN story_versions AS version

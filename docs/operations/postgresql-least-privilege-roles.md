@@ -124,12 +124,17 @@ and a negative/positive permission test. Never compensate with `GRANT ALL`,
 `pg_read_all_data`, owner membership, or API ownership.
 
 Migration `00008_seed_test_data.sql` is immutable applied history. Current
-Goose runs continue through `00013_remove_historical_test_fixtures.sql`, so the
-final production migration state contains no historical test stories,
-child/prompt profiles, progress, or generation jobs. Local and disposable
+repository Goose runs continue through `00014_reader_2_contract.sql`.
+Migration `00013` leaves no positively identified historical test stories,
+child/prompt profiles, progress, or generation jobs; migration `00014` then
+performs the approved complete beta progress reset and installs the Reader 2
+segment/locator contract. Local and disposable
 fixtures are installed only through the fail-closed command described in
 `docs/development/test-fixtures.md`; neither production Compose nor the
-migration container invokes it.
+migration container invokes it. This repository change does not deploy either
+migration; a future 00014 rollout must update API and web together and accept
+the irreversible progress-reset limitation documented in
+`docs/development/reader-2-backend-contract.md`.
 
 ## Repository tooling
 

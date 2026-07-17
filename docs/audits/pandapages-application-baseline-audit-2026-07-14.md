@@ -6,6 +6,13 @@
 > `docs/development/test-fixtures.md`. Migration `00008` remains unchanged as
 > applied history; a fully migrated database no longer retains its fixtures.
 
+> Follow-up, 17 July 2026: Reader 2 backend work supersedes the audited Reader
+> contract with migration `00014_reader_2_contract.sql`, one coherent
+> `GET /api/v1/reader/{slug}` payload, server-owned segment/chapter identities,
+> and strict Locator v2 progress. The beta cutover deliberately resets all
+> reading progress and removes the two Reader 1 story endpoints. The dated
+> findings below remain historical evidence rather than being rewritten.
+
 ## 1. Executive summary
 
 Panda Pages is currently a private, passcode-gated story library for one household. Its demonstrated primary journey is: unlock with one shared six-digit passcode, browse an account-scoped published library, read server-rendered stories in scroll mode, and persist progress against an implicitly selected default reader profile. A separately restricted administrator can import or paste Markdown, preview it, create versioned drafts, publish a selected version, and list account-owned stories.

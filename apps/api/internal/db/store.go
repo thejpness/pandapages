@@ -4,12 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"math"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"pandapages/api/internal/model"
+	"pandapages/api/internal/readercontract"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -289,142 +292,261 @@ func (s *Store) Library(accountID string) ([]model.StoryItem, error) {
 	return items, nil
 }
 
-/* ----------------------------- Story ----------------------------- */
+/* ----------------------------- Reader ----------------------------- */
 
-func (s *Store) StoryLatest(accountID, slug string) (model.StoryPayload, error) {
+func (s *Store) ReaderStory(accountID, slug string) (model.ReaderStory, error) {
 	ctx, cancel := s.ctx()
 	defer cancel()
 
-	var p model.StoryPayload
-	var author sql.NullString
-
-	err := s.db.QueryRowContext(ctx, `
-		SELECT st.slug, st.title, NULLIF(BTRIM(st.author), ''), v.version, v.rendered_html
-		FROM stories st
-		JOIN story_versions v ON v.id = st.published_version_id
-		WHERE st.account_id = $1
-		  AND st.slug = $2
-		  AND st.published_version_id IS NOT NULL
-	`, accountID, slug).Scan(&p.Slug, &p.Title, &author, &p.Version, &p.RenderedHTML)
-	if err != nil {
-		return p, err
-	}
-
-	p.Author = strPtr(author)
-	return p, nil
-}
-
-func (s *Store) StorySegments(accountID, slug string) (model.StorySegmentsPayload, error) {
-	ctx, cancel := s.ctx()
-	defer cancel()
-
-	// Get published version + version number (scoped)
-	var versionID string
-	var version int
-	err := s.db.QueryRowContext(ctx, `
-		SELECT sv.id, sv.version
-		FROM stories st
-		JOIN story_versions sv ON sv.id = st.published_version_id
-		WHERE st.account_id = $1
-		  AND st.slug = $2
-		  AND st.published_version_id IS NOT NULL
-	`, accountID, slug).Scan(&versionID, &version)
-	if err != nil {
-		return model.StorySegmentsPayload{}, err
-	}
-
+	// One SQL statement gives all rows one PostgreSQL statement snapshot. A
+	// publication change cannot mix metadata from one version with segments
+	// from another.
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT ordinal, locator, rendered_html
-		FROM story_segments
-		WHERE story_version_id = $1
-		ORDER BY ordinal
-	`, versionID)
+		SELECT
+			st.slug,
+			st.title,
+			NULLIF(BTRIM(st.author), ''),
+			st.language,
+			version.version,
+			segment.ordinal,
+			segment.segment_kind,
+			segment.heading_level,
+			segment.content_key,
+			segment.content_occurrence,
+			segment.chapter_key,
+			segment.chapter_occurrence,
+			segment.rendered_html,
+			segment.word_count
+		FROM stories st
+		JOIN story_versions AS version
+		  ON version.id = st.published_version_id
+		 AND version.story_id = st.id
+		LEFT JOIN story_segments AS segment
+		  ON segment.story_version_id = version.id
+		WHERE st.account_id = $1
+		  AND st.slug = $2
+		  AND st.is_published = true
+		  AND st.published_version_id IS NOT NULL
+		ORDER BY segment.ordinal
+	`, accountID, slug)
 	if err != nil {
-		return model.StorySegmentsPayload{}, err
+		return model.ReaderStory{}, err
 	}
 	defer rows.Close()
 
-	segs := make([]model.Segment, 0, 64)
+	var story model.ReaderStory
+	found := false
+	story.Segments = make([]model.ReaderSegment, 0, 64)
 	for rows.Next() {
-		var seg model.Segment
-		if err := rows.Scan(&seg.Ordinal, &seg.Locator, &seg.RenderedHTML); err != nil {
-			return model.StorySegmentsPayload{}, err
+		var (
+			author            sql.NullString
+			ordinal           sql.NullInt64
+			kind              sql.NullString
+			headingLevel      sql.NullInt64
+			contentKey        sql.NullString
+			contentOccurrence sql.NullInt64
+			chapterKey        sql.NullString
+			chapterOccurrence sql.NullInt64
+			renderedHTML      sql.NullString
+			wordCount         sql.NullInt64
+		)
+		if err := rows.Scan(
+			&story.Slug,
+			&story.Title,
+			&author,
+			&story.Language,
+			&story.Version,
+			&ordinal,
+			&kind,
+			&headingLevel,
+			&contentKey,
+			&contentOccurrence,
+			&chapterKey,
+			&chapterOccurrence,
+			&renderedHTML,
+			&wordCount,
+		); err != nil {
+			return model.ReaderStory{}, err
 		}
-		segs = append(segs, seg)
+		found = true
+		story.Author = strPtr(author)
+		if !ordinal.Valid {
+			continue
+		}
+
+		segment := model.ReaderSegment{
+			Ordinal:           int(ordinal.Int64),
+			Kind:              kind.String,
+			ContentKey:        contentKey.String,
+			ContentOccurrence: int(contentOccurrence.Int64),
+			RenderedHTML:      renderedHTML.String,
+			WordCount:         int(wordCount.Int64),
+		}
+		if headingLevel.Valid {
+			value := int(headingLevel.Int64)
+			segment.HeadingLevel = &value
+		}
+		if chapterKey.Valid {
+			value := chapterKey.String
+			segment.ChapterKey = &value
+		}
+		if chapterOccurrence.Valid {
+			value := int(chapterOccurrence.Int64)
+			segment.ChapterOccurrence = &value
+		}
+		story.Segments = append(story.Segments, segment)
 	}
 	if err := rows.Err(); err != nil {
-		return model.StorySegmentsPayload{}, err
+		return model.ReaderStory{}, err
 	}
-
-	return model.StorySegmentsPayload{
-		Slug:     slug,
-		Version:  version,
-		Segments: segs,
-	}, nil
+	if !found {
+		return model.ReaderStory{}, sql.ErrNoRows
+	}
+	return story, nil
 }
 
 /* ----------------------------- Progress ----------------------------- */
 
-func (s *Store) ProgressGet(accountID, slug string) (model.ProgressState, error) {
+func (s *Store) ProgressGet(accountID, slug string) (model.ProgressResponse, error) {
 	ctx, cancel := s.ctx()
 	defer cancel()
 
 	profileID, err := s.getDefaultProfileID(ctx, accountID)
 	if err != nil {
-		return model.ProgressState{}, err
+		return model.ProgressResponse{}, err
 	}
 
-	var st model.ProgressState
+	var (
+		hasProgress bool
+		version     sql.NullInt64
+		locatorJSON []byte
+		percent     sql.NullFloat64
+	)
 	err = s.db.QueryRowContext(ctx, `
-		SELECT sv.version, rp.locator, rp.percent
+		SELECT
+			rp.story_version_id IS NOT NULL,
+			sv.version,
+			rp.locator,
+			rp.percent
 		FROM stories st
-		JOIN reading_progress rp ON rp.story_id = st.id AND rp.profile_id = $3
-		JOIN story_versions sv ON sv.id = rp.story_version_id
+		LEFT JOIN reading_progress rp
+		  ON rp.story_id = st.id
+		 AND rp.profile_id = $3
+		LEFT JOIN story_versions sv
+		  ON sv.id = rp.story_version_id
+		 AND sv.story_id = st.id
 		WHERE st.account_id = $1
 		  AND st.slug = $2
+		  AND st.is_published = true
 		  AND st.published_version_id IS NOT NULL
-	`, accountID, slug, profileID).Scan(&st.Version, &st.Locator, &st.Percent)
-
-	if err == nil {
-		st.Percent = clamp01(st.Percent)
+	`, accountID, slug, profileID).Scan(&hasProgress, &version, &locatorJSON, &percent)
+	if err != nil {
+		return model.ProgressResponse{}, err
 	}
-	return st, err
+	if !hasProgress {
+		return model.ProgressResponse{Progress: nil}, nil
+	}
+	if !version.Valid || !percent.Valid {
+		return model.ProgressResponse{}, fmt.Errorf("stored progress is incomplete")
+	}
+
+	var locator readercontract.Locator
+	if err := json.Unmarshal(locatorJSON, &locator); err != nil {
+		return model.ProgressResponse{}, fmt.Errorf("decode stored Reader locator: %w", err)
+	}
+	if err := locator.Validate(); err != nil {
+		return model.ProgressResponse{}, fmt.Errorf("validate stored Reader locator: %w", err)
+	}
+	return model.ProgressResponse{Progress: &model.Progress{
+		Version: int(version.Int64),
+		Locator: locator,
+		Percent: clamp01(percent.Float64),
+	}}, nil
 }
 
-func (s *Store) ProgressPut(accountID, slug string, version int, locator json.RawMessage, percent float64) error {
+func (s *Store) ProgressPut(accountID, slug string, version int, locator readercontract.Locator, percent float64) error {
 	ctx, cancel := s.ctx()
 	defer cancel()
+
+	if err := locator.Validate(); err != nil {
+		return fmt.Errorf("%w: %v", readercontract.ErrLocatorMismatch, err)
+	}
+	if math.IsNaN(percent) || math.IsInf(percent, 0) || percent < 0 || percent > 1 {
+		return fmt.Errorf("progress percent must be between 0 and 1")
+	}
 
 	profileID, err := s.getDefaultProfileID(ctx, accountID)
 	if err != nil {
 		return err
 	}
 
-	percent = clamp01(percent)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
 
-	// ensure story exists + published pointer (scoped)
-	var storyID string
-	if err := s.db.QueryRowContext(ctx, `
-		SELECT id
-		FROM stories
-		WHERE account_id = $1
-		  AND slug = $2
-		  AND published_version_id IS NOT NULL
-	`, accountID, slug).Scan(&storyID); err != nil {
+	var storyID, versionID string
+	if err := tx.QueryRowContext(ctx, `
+		SELECT story.id, version.id
+		FROM stories AS story
+		JOIN story_versions AS version
+		  ON version.story_id = story.id
+		 AND version.version = $3
+		WHERE story.account_id = $1
+		  AND story.slug = $2
+		  AND story.is_published = true
+		  AND story.published_version_id IS NOT NULL
+	`, accountID, slug, version).Scan(&storyID, &versionID); err != nil {
 		return err
 	}
 
-	// ensure version exists for that story
-	var versionID string
-	if err := s.db.QueryRowContext(ctx, `
-		SELECT id
-		FROM story_versions
-		WHERE story_id = $1 AND version = $2
-	`, storyID, version).Scan(&versionID); err != nil {
+	var (
+		storedKey               string
+		storedOccurrence        int
+		storedChapterKey        sql.NullString
+		storedChapterOccurrence sql.NullInt64
+	)
+	if err := tx.QueryRowContext(ctx, `
+		SELECT
+			content_key,
+			content_occurrence,
+			chapter_key,
+			chapter_occurrence
+		FROM story_segments
+		WHERE story_version_id = $1
+		  AND ordinal = $2
+	`, versionID, locator.Segment.Ordinal).Scan(
+		&storedKey,
+		&storedOccurrence,
+		&storedChapterKey,
+		&storedChapterOccurrence,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return readercontract.ErrLocatorMismatch
+		}
 		return err
 	}
 
-	_, err = s.db.ExecContext(ctx, `
+	if storedKey != locator.Segment.Key || storedOccurrence != locator.Segment.Occurrence {
+		return readercontract.ErrLocatorMismatch
+	}
+	if storedChapterKey.Valid != (locator.Chapter != nil) {
+		return readercontract.ErrLocatorMismatch
+	}
+	if storedChapterKey.Valid {
+		if !storedChapterOccurrence.Valid ||
+			storedChapterKey.String != locator.Chapter.Key ||
+			int(storedChapterOccurrence.Int64) != locator.Chapter.Occurrence {
+			return readercontract.ErrLocatorMismatch
+		}
+	}
+
+	locatorJSON, err := json.Marshal(locator)
+	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `
 		INSERT INTO reading_progress (profile_id, story_id, story_version_id, locator, percent, updated_at)
 		VALUES ($1,$2,$3,$4,$5,now())
 		ON CONFLICT (profile_id, story_id)
@@ -433,9 +555,11 @@ func (s *Store) ProgressPut(accountID, slug string, version int, locator json.Ra
 			locator=EXCLUDED.locator,
 			percent=EXCLUDED.percent,
 			updated_at=now()
-	`, profileID, storyID, versionID, locator, percent)
+	`, profileID, storyID, versionID, locatorJSON, percent); err != nil {
+		return err
+	}
 
-	return err
+	return tx.Commit()
 }
 
 /* ------------------------- Continue / Recent -------------------- */

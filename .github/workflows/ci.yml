@@ -60,6 +60,13 @@ jobs:
         working-directory: .
         run: scripts/tests/progress-store-integration.sh
 
+      - name: Build migration image for Reader contract tests
+        run: docker build --target migrate --tag pandapages-migrate:reader-test .
+
+      - name: Test Reader 2 migrations, Store, and HTTP contract
+        working-directory: .
+        run: scripts/tests/reader-store-integration.sh
+
       - name: Build production API
         env:
           CGO_ENABLED: "0"
@@ -171,6 +178,7 @@ jobs:
             scripts/tests/postgresql-backup-unit.sh \
             scripts/tests/postgresql-fixtures-integration.sh \
             scripts/tests/progress-store-integration.sh \
+            scripts/tests/reader-store-integration.sh \
             scripts/tests/postgresql-roles-contract.sh \
             scripts/tests/postgresql-roles-integration.sh \
             scripts/dev/seed-test-data.sh
