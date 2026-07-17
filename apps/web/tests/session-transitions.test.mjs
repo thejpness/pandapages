@@ -1,21 +1,10 @@
 import assert from 'node:assert/strict'
 import { readFile, readdir } from 'node:fs/promises'
 import test from 'node:test'
-import { transformWithOxc } from 'vite'
+import { loadTypeScript as loadModule } from './helpers/typescript-module.mjs'
 
-async function loadTypeScript(relativePath, transform = (source) => source) {
-  const sourceURL = new URL(relativePath, import.meta.url)
-  const source = await readFile(sourceURL, 'utf8')
-  const transformed = await transformWithOxc(transform(source), sourceURL.pathname)
-  const moduleURL =
-    'data:text/javascript;base64,' +
-    Buffer.from(transformed.code).toString('base64') +
-    '#' +
-    Date.now() +
-    Math.random()
-
-  return { module: await import(moduleURL), source }
-}
+const loadTypeScript = (relativePath, transform) =>
+  loadModule(relativePath, import.meta.url, transform)
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {

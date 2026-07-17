@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"pandapages/api/internal/model"
+	"pandapages/api/internal/readercontract"
 	"pandapages/api/internal/session"
 )
 
@@ -29,11 +30,19 @@ type authTestStore struct {
 	existsCalls      int
 	libraryCalls     int
 	libraryAccount   string
+	readerCalls      int
+	readerAccount    string
+	readerSlug       string
+	readerResponse   model.ReaderStory
+	readerErr        error
+	progressGetCalls int
+	progressGetState model.ProgressResponse
+	progressGetErr   error
 	progressPutCalls int
 	progressAccount  string
 	progressSlug     string
 	progressVersion  int
-	progressLocator  json.RawMessage
+	progressLocator  readercontract.Locator
 	progressPercent  float64
 	progressPutErr   error
 }
@@ -63,24 +72,24 @@ func (s *authTestStore) Library(accountID string) ([]model.StoryItem, error) {
 	return []model.StoryItem{}, nil
 }
 
-func (*authTestStore) StoryLatest(string, string) (model.StoryPayload, error) {
-	return model.StoryPayload{}, nil
+func (s *authTestStore) ReaderStory(accountID, slug string) (model.ReaderStory, error) {
+	s.readerCalls++
+	s.readerAccount = accountID
+	s.readerSlug = slug
+	return s.readerResponse, s.readerErr
 }
 
-func (*authTestStore) StorySegments(string, string) (model.StorySegmentsPayload, error) {
-	return model.StorySegmentsPayload{}, nil
+func (s *authTestStore) ProgressGet(string, string) (model.ProgressResponse, error) {
+	s.progressGetCalls++
+	return s.progressGetState, s.progressGetErr
 }
 
-func (*authTestStore) ProgressGet(string, string) (model.ProgressState, error) {
-	return model.ProgressState{}, nil
-}
-
-func (s *authTestStore) ProgressPut(accountID, slug string, version int, locator json.RawMessage, percent float64) error {
+func (s *authTestStore) ProgressPut(accountID, slug string, version int, locator readercontract.Locator, percent float64) error {
 	s.progressPutCalls++
 	s.progressAccount = accountID
 	s.progressSlug = slug
 	s.progressVersion = version
-	s.progressLocator = append(json.RawMessage(nil), locator...)
+	s.progressLocator = locator
 	s.progressPercent = percent
 	return s.progressPutErr
 }

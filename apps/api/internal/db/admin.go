@@ -25,9 +25,15 @@ func (s *Store) AdminPreview(req model.AdminPreviewRequest) (model.AdminPreviewR
 	segs := make([]model.AdminSegment, 0, len(out.Segments))
 	for _, seg := range out.Segments {
 		segs = append(segs, model.AdminSegment{
-			Ordinal:      seg.Ordinal,
-			Locator:      seg.Locator,
-			RenderedHTML: seg.RenderedHTML,
+			Ordinal:           seg.Ordinal,
+			Kind:              string(seg.Kind),
+			HeadingLevel:      seg.HeadingLevel,
+			ContentKey:        seg.ContentKey,
+			ContentOccurrence: seg.ContentOccurrence,
+			ChapterKey:        seg.ChapterKey,
+			ChapterOccurrence: seg.ChapterOccurrence,
+			RenderedHTML:      seg.RenderedHTML,
+			WordCount:         seg.WordCount,
 		})
 	}
 
@@ -191,12 +197,6 @@ func (s *Store) AdminDraftUpsert(accountID string, req model.AdminDraftUpsertReq
 	}
 
 	// --- Sections (chapters) + segment section assignment ---
-	type headingLoc struct {
-		Type  string `json:"type"`
-		H     int    `json:"h"`
-		Index int    `json:"index"`
-	}
-
 	headingText := func(md string) string {
 		s := strings.TrimSpace(md)
 		s = strings.TrimLeft(s, "#")
@@ -212,11 +212,7 @@ func (s *Store) AdminDraftUpsert(accountID string, req model.AdminDraftUpsertReq
 	chapters := make([]chapter, 0, 16)
 
 	for _, seg := range ing.Segments {
-		var loc headingLoc
-		if err := json.Unmarshal(seg.Locator, &loc); err != nil {
-			continue
-		}
-		if loc.Type == "heading" && loc.H == 2 {
+		if seg.Kind == "heading" && seg.HeadingLevel != nil && *seg.HeadingLevel == 2 {
 			t := headingText(seg.Markdown)
 			if strings.TrimSpace(t) == "" {
 				t = fmt.Sprintf("Chapter %d", len(chapters)+1)
@@ -264,16 +260,13 @@ func (s *Store) AdminDraftUpsert(accountID string, req model.AdminDraftUpsertReq
 	for _, seg := range ing.Segments {
 		var sectionArg any = nil
 
-		var loc headingLoc
-		_ = json.Unmarshal(seg.Locator, &loc)
-
 		if len(chapters) == 0 {
 			sectionArg = sectionIDByStart[1]
 		} else {
 			// H1 title stays unsectioned; H2 starts a chapter; everything after belongs to current chapter
-			if loc.Type == "heading" && loc.H == 1 {
+			if seg.Kind == "heading" && seg.HeadingLevel != nil && *seg.HeadingLevel == 1 {
 				sectionArg = nil
-			} else if loc.Type == "heading" && loc.H == 2 {
+			} else if seg.Kind == "heading" && seg.HeadingLevel != nil && *seg.HeadingLevel == 2 {
 				if id, ok := sectionIDByStart[seg.Ordinal]; ok {
 					currentChapterID = id
 					sectionArg = currentChapterID
@@ -286,9 +279,27 @@ func (s *Store) AdminDraftUpsert(accountID string, req model.AdminDraftUpsertReq
 		}
 
 		_, err := tx.ExecContext(ctx, `
-			INSERT INTO story_segments (story_version_id, section_id, ordinal, locator, markdown, rendered_html, word_count)
-			VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7)
-		`, versionID, sectionArg, seg.Ordinal, string(seg.Locator), seg.Markdown, seg.RenderedHTML, seg.WordCount)
+			INSERT INTO story_segments (
+				story_version_id, section_id, ordinal,
+				segment_kind, heading_level, content_key, content_occurrence,
+				chapter_key, chapter_occurrence,
+				markdown, rendered_html, word_count
+			)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		`,
+			versionID,
+			sectionArg,
+			seg.Ordinal,
+			string(seg.Kind),
+			seg.HeadingLevel,
+			seg.ContentKey,
+			seg.ContentOccurrence,
+			seg.ChapterKey,
+			seg.ChapterOccurrence,
+			seg.Markdown,
+			seg.RenderedHTML,
+			seg.WordCount,
+		)
 		if err != nil {
 			return model.AdminDraftUpsertResponse{}, err
 		}

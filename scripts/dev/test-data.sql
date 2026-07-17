@@ -230,7 +230,10 @@ VALUES
   );
 
 INSERT INTO story_segments (
-  id, story_version_id, section_id, ordinal, locator, markdown, rendered_html, word_count
+  id, story_version_id, section_id, ordinal,
+  segment_kind, heading_level, content_key, content_occurrence,
+  chapter_key, chapter_occurrence,
+  markdown, rendered_html, word_count
 )
 VALUES
   (
@@ -238,7 +241,9 @@ VALUES
     'f17e0000-0000-4000-8000-000000000011',
     NULL,
     1,
-    '{"type":"heading","h":1,"index":0}'::jsonb,
+    'heading', 1,
+    'd31878cf2371f991a595a486444819b429166c113ee33c598822396243a5c3bc', 1,
+    NULL, NULL,
     '# TEST ONLY — Moonlit Café',
     '<h1>TEST ONLY — Moonlit Café</h1>',
     5
@@ -248,7 +253,9 @@ VALUES
     'f17e0000-0000-4000-8000-000000000011',
     NULL,
     2,
-    '{"type":"para","n":1}'::jsonb,
+    'paragraph', NULL,
+    '29b24293f72cc951a07c8b554caa723bb4bb1aced83257bb1c6325d0fc087798', 1,
+    NULL, NULL,
     'Pöndá carried a lantern past the café window.',
     '<p>Pöndá carried a lantern past the café window.</p>',
     8
@@ -258,7 +265,9 @@ VALUES
     'f17e0000-0000-4000-8000-000000000011',
     'f17e0000-0000-4000-8000-000000000020',
     3,
-    '{"type":"heading","h":2,"index":1}'::jsonb,
+    'heading', 2,
+    '6f744b440fbf4fa52da46bebf4fd3e5f2de7a1c2fb11f7e9ac2794ccd1956c4e', 1,
+    '6f744b440fbf4fa52da46bebf4fd3e5f2de7a1c2fb11f7e9ac2794ccd1956c4e', 1,
     '## Chapter One — Lanterns',
     '<h2>Chapter One — Lanterns</h2>',
     4
@@ -268,7 +277,9 @@ VALUES
     'f17e0000-0000-4000-8000-000000000011',
     'f17e0000-0000-4000-8000-000000000020',
     4,
-    '{"type":"para","n":2}'::jsonb,
+    'paragraph', NULL,
+    'aae1f4bebb97b03ea9d0cfd5431675a250ab6a14be567445b1bb250874574e19', 1,
+    '6f744b440fbf4fa52da46bebf4fd3e5f2de7a1c2fb11f7e9ac2794ccd1956c4e', 1,
     '“Ready?” asked Pöndá. The moon replied, “Oui — allons-y!”',
     '<p>“Ready?” asked Pöndá. The moon replied, “Oui — allons-y!”</p>',
     9
@@ -278,7 +289,9 @@ VALUES
     'f17e0000-0000-4000-8000-000000000011',
     'f17e0000-0000-4000-8000-000000000021',
     5,
-    '{"type":"heading","h":2,"index":2}'::jsonb,
+    'heading', 2,
+    '3749b6630ab08c6998fd65117d5265c7e7514e35f02022a4005505d0aba52a73', 1,
+    '3749b6630ab08c6998fd65117d5265c7e7514e35f02022a4005505d0aba52a73', 1,
     '## Chapter Two — 世界',
     '<h2>Chapter Two — 世界</h2>',
     4
@@ -288,7 +301,9 @@ VALUES
     'f17e0000-0000-4000-8000-000000000011',
     'f17e0000-0000-4000-8000-000000000021',
     6,
-    '{"type":"para","n":3}'::jsonb,
+    'paragraph', NULL,
+    'fcbc17ea710ed18987f528decf4c035647b6721c8123e983c88a437aa5ac81db', 1,
+    '3749b6630ab08c6998fd65117d5265c7e7514e35f02022a4005505d0aba52a73', 1,
     '星の光 shimmered over the quiet water. 🐼',
     '<p>星の光 shimmered over the quiet water. 🐼</p>',
     7

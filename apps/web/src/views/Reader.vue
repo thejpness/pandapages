@@ -2,16 +2,22 @@
 import { onMounted, onBeforeUnmount, ref, nextTick, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  getStory,
-  getStorySegments,
+  getReaderStory,
   saveProgress,
   getProgress,
   getAPIErrorStatus,
-  isJsonObject,
-  type JsonObject,
   type ProgressState,
-  type StorySegment,
 } from '../lib/api'
+import {
+  capturePagedReaderLocator,
+  captureScrollReaderLocator,
+  createReaderLocatorV2,
+  findReaderSegment,
+  settleProgrammaticReaderRestore,
+  type ReaderLocatorV2,
+  type ReaderSegmentLayout,
+  type ReaderStorySegment,
+} from '../lib/reader-locator-v2'
 import { loadPrefs, savePrefs, type ReaderPrefs } from '../lib/prefs'
 import { haptic } from '../lib/haptics'
 import { authState } from '../lib/session'
@@ -35,7 +41,7 @@ type Page = {
   index: number
   startOrdinal: number
   endOrdinal: number
-  html: string
+  segments: ReaderStorySegment[]
 }
 
 type Chapter = {
@@ -57,19 +63,6 @@ function scrollToY(y: number) {
   window.scrollTo(0, Math.max(0, y || 0))
 }
 
-function asLocator(value: unknown): JsonObject {
-  if (typeof value !== 'string') {
-    return isJsonObject(value) ? value : {}
-  }
-
-  try {
-    const parsed: unknown = JSON.parse(value)
-    return isJsonObject(parsed) ? parsed : {}
-  } catch {
-    return {}
-  }
-}
-
 function calcPercentScroll(): number {
   const el = document.documentElement
   const scrollTop = el.scrollTop || document.body.scrollTop
@@ -78,10 +71,11 @@ function calcPercentScroll(): number {
   return clamp01(scrollTop / scrollHeight)
 }
 
-// Simple v1 paging rule: 1–2 segments per page
-function buildPages(segments: StorySegment[]): Page[] {
+// Temporary page construction remains intentionally simple in this backend
+// contract PR. It uses the already-loaded coherent segment payload.
+function buildPages(segments: ReaderStorySegment[]): Page[] {
   const out: Page[] = []
-  let buf: StorySegment[] = []
+  let buf: ReaderStorySegment[] = []
 
   const flush = () => {
     const first = buf[0]
@@ -92,7 +86,7 @@ function buildPages(segments: StorySegment[]): Page[] {
       index: out.length,
       startOrdinal: first.ordinal,
       endOrdinal: last.ordinal,
-      html: buf.map((segment) => segment.renderedHtml).join(''),
+      segments: [...buf],
     })
     buf = []
   }
@@ -103,7 +97,9 @@ function buildPages(segments: StorySegment[]): Page[] {
   }
   flush()
 
-  if (!out.length) out.push({ index: 0, startOrdinal: 0, endOrdinal: 0, html: '<p>No content.</p>' })
+  if (!out.length) {
+    out.push({ index: 0, startOrdinal: 0, endOrdinal: 0, segments: [] })
+  }
   return out.map((p, idx) => ({ ...p, index: idx }))
 }
 
@@ -123,26 +119,19 @@ let slug = String(route.params.slug)
 
 const title = ref('')
 const author = ref('')
-const html = ref('')
 const version = ref(1)
 const storyLoading = ref(false)
 const loadError = ref('')
 
-const segments = ref<StorySegment[] | null>(null)
-const pages = computed<Page[]>(() => (segments.value ? buildPages(segments.value) : []))
+const segments = ref<ReaderStorySegment[]>([])
+const pages = computed<Page[]>(() => buildPages(segments.value))
 
-// Chapters derived from segments (no backend change required)
 const chapters = computed<Chapter[]>(() => {
-  if (!segments.value?.length || !pages.value.length) return []
+  if (!segments.value.length || !pages.value.length) return []
 
   const out: Chapter[] = []
   for (const s of segments.value) {
-    const loc = asLocator(s.locator)
-    const isH2 =
-      (loc.type === 'heading' && Number(loc.h) === 2) ||
-      /^\s*<h2[\s>]/i.test(s.renderedHtml)
-
-    if (!isH2) continue
+    if (s.kind !== 'heading' || s.headingLevel !== 2) continue
 
     const chapterTitle = extractHeadingTextFromHTML(s.renderedHtml) || 'Chapter'
     const segmentOrdinal = s.ordinal
@@ -179,7 +168,7 @@ const progressSaveState = ref<ProgressSaveState>({
   confirmed: null,
   error: null,
 })
-const progressBaselineState = ref<ProgressBaselineState<ProgressState>>({
+const progressBaselineState = ref<ProgressBaselineState<ProgressState | null>>({
   status: 'loading',
   value: null,
   error: null,
@@ -194,19 +183,25 @@ watch(prefs, (p) => savePrefs(p), { deep: true })
 const showControls = ref(false)
 const showChapters = ref(false)
 
-const resumeToast = ref<{ mode: 'scroll' | 'paged'; y?: number; page?: number; percent: number } | null>(null)
+const resumeToast = ref<{
+  locator: ReaderLocatorV2
+  percent: number
+} | null>(null)
 
 const themeBg = computed(() => (prefs.value.theme === 'warm' ? '#0F1413' : '#0B1724'))
 const themeText = computed(() => 'rgba(255,255,255,0.92)')
 
 let progressCoordinator: ProgressSaveCoordinator | null = null
 let unsubscribeProgress: (() => void) | null = null
-let progressBaselineController: ProgressBaselineController<ProgressState> | null = null
+let progressBaselineController: ProgressBaselineController<
+  ProgressState | null
+> | null = null
 let unsubscribeProgressBaseline: (() => void) | null = null
 let progressBaselineOrigin: ProgressSnapshot | null = null
 let movedWhileProgressUnavailable = false
 let storyGeneration = 0
 let handlingProgressSessionLoss = false
+let suppressProgressCapture = false
 
 const saveStatusText = computed(() => {
   if (progressBaselineState.value.status !== 'ready') return ''
@@ -254,36 +249,53 @@ function updatePercent() {
   }
 }
 
+function scrollSegmentLayouts(): ReaderSegmentLayout[] {
+  return Array.from(
+    document.querySelectorAll<HTMLElement>('[data-reader-scroll-segment]'),
+  ).flatMap((element) => {
+    const ordinal = Number(element.dataset.readerSegmentOrdinal)
+    if (!Number.isInteger(ordinal) || ordinal < 1) return []
+    const rect = element.getBoundingClientRect()
+    return [{ ordinal, top: rect.top, bottom: rect.bottom }]
+  })
+}
+
 function captureProgressSnapshot(storySlug = slug): ProgressSnapshot | null {
   if (prefs.value.mode === 'paged') {
     const n = pages.value.length
     const p = n <= 1 ? 0 : clamp01(currentPage.value / (n - 1))
     const page = pages.value[currentPage.value]
     if (!page) return null
+    const locator = capturePagedReaderLocator(
+      segments.value,
+      page.startOrdinal,
+    )
+    if (!locator) return null
     return {
       slug: storySlug,
       version: version.value,
-      locator: {
-        mode: 'paged',
-        page: currentPage.value,
-        startOrdinal: page.startOrdinal,
-        endOrdinal: page.endOrdinal,
-      },
+      locator,
       percent: p,
     }
   }
 
-  const y = window.scrollY || 0
+  const locator = captureScrollReaderLocator(
+    segments.value,
+    scrollSegmentLayouts(),
+    window.innerHeight,
+  )
+  if (!locator) return null
   const p = calcPercentScroll()
   return {
     slug: storySlug,
     version: version.value,
-    locator: { mode: 'scroll', scrollY: y },
+    locator,
     percent: p,
   }
 }
 
 function scheduleSave() {
+  if (suppressProgressCapture) return
   updatePercent()
   const snapshot = captureProgressSnapshot()
   if (progressBaselineState.value.status !== 'ready') {
@@ -371,32 +383,57 @@ async function retryProgressSave() {
   }
 }
 
+function restoreReaderLocator(locator: ReaderLocatorV2) {
+  const segment = findReaderSegment(segments.value, locator)
+  if (!segment) return
+
+  if (prefs.value.mode === 'paged') {
+    const pageIndex = pages.value.findIndex(
+      (page) =>
+        segment.ordinal >= page.startOrdinal &&
+        segment.ordinal <= page.endOrdinal,
+    )
+    const safePage = Math.max(0, pageIndex)
+    currentPage.value = safePage
+    const element = pagedRef.value
+    element?.scrollTo({
+      left: safePage * element.clientWidth,
+      behavior: 'auto',
+    })
+    return
+  }
+
+  const element = document.querySelector<HTMLElement>(
+    `[data-reader-scroll-segment][data-reader-segment-ordinal="${segment.ordinal}"]`,
+  )
+  if (!element) return
+  const rect = element.getBoundingClientRect()
+  const readingLine = window.innerHeight * 0.35
+  const target =
+    window.scrollY +
+    rect.top +
+    rect.height * locator.segment.offset -
+    readingLine
+  scrollToY(target)
+}
+
 function doResume() {
   const t = resumeToast.value
   resumeToast.value = null
   if (!t) return
 
-  if (t.mode === 'paged') {
-    const idx = Math.max(0, Math.min(pages.value.length - 1, Number(t.page ?? 0)))
-    currentPage.value = idx
-    requestAnimationFrame(() => {
-      const el = pagedRef.value
-      if (!el) return
-      el.scrollTo({ left: idx * el.clientWidth, behavior: 'auto' })
-      requestAnimationFrame(() => el.scrollTo({ left: idx * el.clientWidth, behavior: 'auto' }))
-    })
-    return
-  }
-
-  const y = t.y || 0
   requestAnimationFrame(() => {
-    scrollToY(y)
-    requestAnimationFrame(() => scrollToY(y))
+    restoreReaderLocator(t.locator)
+    requestAnimationFrame(() => restoreReaderLocator(t.locator))
   })
 }
 
 async function startOver() {
   resumeToast.value = null
+  const firstSegment = segments.value[0]
+  if (!firstSegment) return
+  const locator = createReaderLocatorV2(firstSegment, 0)
+
   if (prefs.value.mode === 'paged') {
     currentPage.value = 0
     percent.value = 0
@@ -407,7 +444,12 @@ async function startOver() {
     percent.value = 0
   }
 
-  const snapshot = captureProgressSnapshot()
+  const snapshot: ProgressSnapshot = {
+    slug,
+    version: version.value,
+    locator,
+    percent: 0,
+  }
   if (progressBaselineState.value.status !== 'ready') {
     movedWhileProgressUnavailable = true
     return
@@ -501,24 +543,40 @@ function jumpToChapter(c: Chapter) {
   scheduleSave()
 }
 
-function setMode(mode: 'scroll' | 'paged') {
+async function setMode(mode: 'scroll' | 'paged') {
   if (prefs.value.mode === mode) return
-  prefs.value.mode = mode
-  showChapters.value = false
+  const anchor = captureProgressSnapshot()?.locator ?? null
 
-  if (mode === 'paged') {
-    currentPage.value = 0
-    percent.value = 0
-    void nextTick(() => {
-      pagedRef.value?.scrollTo({ left: 0, behavior: 'auto' })
-      scheduleSave()
-    })
-  } else {
-    void nextTick(() => {
-      scrollToY(0)
-      scheduleSave()
-    })
+  suppressProgressCapture = true
+  showChapters.value = false
+  prefs.value.mode = mode
+  try {
+    await nextTick()
+    if (anchor) {
+      // Programmatic scroll events from the second restore can be delivered on
+      // the following frame. Keep capture suppressed until they have settled,
+      // then publish the preserved anchor exactly once below.
+      await settleProgrammaticReaderRestore(() => restoreReaderLocator(anchor))
+    }
+    updatePercent()
+  } finally {
+    suppressProgressCapture = false
   }
+
+  if (!anchor || resumeToast.value) return
+  const snapshot: ProgressSnapshot = {
+    slug,
+    version: version.value,
+    locator: anchor,
+    percent: percent.value,
+  }
+  if (progressBaselineState.value.status !== 'ready') {
+    if (progressSnapshotsDiffer(snapshot, progressBaselineOrigin)) {
+      movedWhileProgressUnavailable = true
+    }
+    return
+  }
+  progressCoordinator?.update(snapshot)
 }
 
 function setTheme(theme: 'night' | 'warm') {
@@ -541,49 +599,29 @@ function progressSnapshotFromServer(
   storySlug: string
 ): ProgressSnapshot | null {
   if (!progress || progress.version !== version.value) return null
-  const locator = asLocator(progress.locator)
-  if (!Object.keys(locator).length) return null
   return {
     slug: storySlug,
     version: progress.version,
-    locator,
+    locator: progress.locator,
     percent: clamp01(progress.percent),
   }
 }
 
 function showResumeOffer(progress: ProgressState | null) {
   resumeToast.value = null
-  if (!progress?.locator || progress.version !== version.value) return
-
-  const loc = asLocator(progress.locator)
-  const mode = loc.mode === 'paged' ? 'paged' : 'scroll'
-
-  if (mode === 'paged' && prefs.value.mode === 'paged' && pages.value.length) {
-    const page = typeof loc.page === 'number' ? loc.page : 0
-    const count = pages.value.length
-    const safePage = Math.max(
-      0,
-      Math.min(count - 1, Number.isFinite(page) ? page : 0),
-    )
-    const savedPercent = clamp01(progress.percent)
-
-    if (safePage > 0 || savedPercent > 0.02) {
-      resumeToast.value = {
-        mode: 'paged',
-        page: safePage,
-        percent: savedPercent,
-      }
-    }
+  if (!progress || progress.version !== version.value) return
+  if (!findReaderSegment(segments.value, progress.locator)) return
+  const savedPercent = clamp01(progress.percent)
+  if (
+    progress.locator.segment.ordinal === 1 &&
+    progress.locator.segment.offset <= 0.02 &&
+    savedPercent <= 0.02
+  ) {
     return
   }
-
-  const scrollY = typeof loc.scrollY === 'number' ? loc.scrollY : 0
-  if (!Number.isFinite(scrollY) || scrollY <= 64) return
-
   resumeToast.value = {
-    mode: 'scroll',
-    y: scrollY,
-    percent: clamp01(progress.percent),
+    locator: progress.locator,
+    percent: savedPercent,
   }
 }
 
@@ -635,7 +673,7 @@ function beginProgressBaselineLoad(generation: number, storySlug: string) {
   movedWhileProgressUnavailable = false
 
   const controller = createProgressBaselineController({
-    load: () => getProgress(storySlug),
+    load: async () => (await getProgress(storySlug)).progress,
   })
   progressBaselineController = controller
   unsubscribeProgressBaseline = controller.subscribe((state) => {
@@ -674,21 +712,13 @@ async function load() {
   loadError.value = ''
 
   try {
-    const s = await getStory(storySlug)
+    const s = await getReaderStory(storySlug)
     if (generation !== storyGeneration) return
     title.value = s.title
     author.value = s.author || ''
-    html.value = s.renderedHtml
     version.value = s.version
-
-    if (prefs.value.mode === 'paged') {
-      const seg = await getStorySegments(storySlug)
-      if (generation !== storyGeneration) return
-      segments.value = Array.isArray(seg.segments) ? seg.segments : []
-      currentPage.value = 0
-    } else {
-      segments.value = null
-    }
+    segments.value = s.segments
+    currentPage.value = 0
 
     await nextTick()
     if (generation !== storyGeneration) return
@@ -699,8 +729,7 @@ async function load() {
     if (getAPIErrorStatus(error) === 401) {
       title.value = ''
       author.value = ''
-      html.value = ''
-      segments.value = null
+      segments.value = []
       await moveToUnlockAfterProgressSessionLoss(generation, storySlug)
       return
     }
@@ -762,8 +791,7 @@ watch(
     loadError.value = ''
     title.value = ''
     author.value = ''
-    html.value = ''
-    segments.value = null
+    segments.value = []
     currentPage.value = 0
     resumeToast.value = null
     leaveAfterSaveFailure.value = false
@@ -985,7 +1013,17 @@ watch(
         class="mt-8"
         :style="{ fontSize: `${prefs.fontPx}px`, lineHeight: String(prefs.lineHeight) }"
       >
-        <article class="reader" v-html="html"></article>
+        <article class="reader">
+          <div
+            v-for="segment in segments"
+            :key="`${segment.contentKey}-${segment.contentOccurrence}`"
+            data-reader-scroll-segment
+            :data-reader-segment-ordinal="segment.ordinal"
+            :data-reader-content-key="segment.contentKey"
+            :data-reader-content-occurrence="segment.contentOccurrence"
+            v-html="segment.renderedHtml"
+          ></div>
+        </article>
       </section>
 
       <!-- Paged mode -->
@@ -997,7 +1035,17 @@ watch(
         @scroll.passive="onPagedScroll"
       >
         <div v-for="p in pages" :key="p.index" class="page">
-          <article class="reader" v-html="p.html"></article>
+          <article class="reader">
+            <div
+              v-for="segment in p.segments"
+              :key="`${segment.contentKey}-${segment.contentOccurrence}`"
+              :data-reader-segment-ordinal="segment.ordinal"
+              :data-reader-content-key="segment.contentKey"
+              :data-reader-content-occurrence="segment.contentOccurrence"
+              v-html="segment.renderedHtml"
+            ></div>
+            <p v-if="!p.segments.length">No content.</p>
+          </article>
         </div>
 
         <div v-if="!pages.length" class="page">

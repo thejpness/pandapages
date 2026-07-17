@@ -49,7 +49,15 @@ function scrollSnapshot(scrollY, percent = scrollY / 1000) {
   return {
     slug: 'test-story',
     version: 1,
-    locator: { mode: 'scroll', scrollY },
+    locator: {
+      schema: 2,
+      segment: {
+        key: 'a'.repeat(64),
+        occurrence: 1,
+        ordinal: 1,
+        offset: Math.max(0, Math.min(1, scrollY / 10000)),
+      },
+    },
     percent,
   }
 }
@@ -246,7 +254,7 @@ test('repeated Retry actions share one active progress GET', async () => {
   assert.equal(first, second)
   await Promise.resolve()
   assert.equal(calls, 2)
-  retry.resolve({ version: 1, locator: null, percent: 0 })
+  retry.resolve(null)
   await Promise.all([first, second])
 })
 
@@ -278,7 +286,7 @@ test('successful Retry changes the baseline to ready', async () => {
   let calls = 0
   const progress = {
     version: 1,
-    locator: { mode: 'scroll', scrollY: 320 },
+    locator: scrollSnapshot(320).locator,
     percent: 0.32,
   }
   const controller = await baselineController(async () => {
@@ -299,7 +307,7 @@ test('successful Retry initializes the writable coordinator exactly once', async
   const controller = await baselineController(async () => {
     calls += 1
     if (calls === 1) throw new TypeError('offline')
-    return { version: 1, locator: null, percent: 0 }
+    return null
   })
   controller.subscribe((state) => {
     if (state.status === 'ready') coordinatorCreations += 1
@@ -334,7 +342,7 @@ test('existing server progress is not overwritten before baseline recovery', asy
 
   retry.resolve({
     version: 1,
-    locator: { mode: 'scroll', scrollY: 700 },
+    locator: scrollSnapshot(700).locator,
     percent: 0.7,
   })
   await recovery
@@ -348,15 +356,15 @@ test('retry recovery after unavailable movement does not confirm an older-versio
   const current = scrollSnapshot(860, 0.86)
   const olderVersionProgress = {
     version: 2,
-    locator: { mode: 'scroll', scrollY: 220 },
+    locator: scrollSnapshot(220).locator,
     percent: 0.22,
   }
   const confirmed =
     olderVersionProgress.version === current.version
-      ? scrollSnapshot(
-          olderVersionProgress.locator.scrollY,
-          olderVersionProgress.percent
-        )
+      ? {
+          ...scrollSnapshot(220, olderVersionProgress.percent),
+          locator: olderVersionProgress.locator,
+        }
       : null
 
   const plan = applyRecoveryPlan(baseline, coordinator, { confirmed, current })
@@ -433,7 +441,7 @@ test('retry movement remains desired when a current-version baseline is confirme
 })
 
 test('successful empty progress is a known baseline that enables first save', async () => {
-  const empty = { version: 0, locator: null, percent: 0 }
+  const empty = null
   const writes = []
   let coordinator = null
   const controller = await baselineController(async () => empty)
@@ -453,7 +461,7 @@ test('successful empty progress is a known baseline that enables first save', as
 test('successful version-mismatch progress is known, not unavailable', async () => {
   const mismatch = {
     version: 2,
-    locator: { mode: 'scroll', scrollY: 200 },
+    locator: scrollSnapshot(200).locator,
     percent: 0.2,
   }
   const controller = await baselineController(async () => mismatch)
@@ -470,7 +478,7 @@ test('disposed pending loads cannot later expose a writable baseline', async () 
   controller.subscribe((state) => statuses.push(state.status))
   const load = controller.load()
   controller.dispose()
-  pending.resolve({ version: 1, locator: null, percent: 0 })
+  pending.resolve(null)
   await load
 
   assert.equal(statuses.includes('ready'), false)

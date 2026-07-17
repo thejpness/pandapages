@@ -4,11 +4,12 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"pandapages/api/internal/readercontract"
 
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
@@ -31,11 +32,16 @@ type Input struct {
 }
 
 type Segment struct {
-	Ordinal      int
-	Locator      json.RawMessage
-	Markdown     string
-	RenderedHTML string
-	WordCount    int
+	Ordinal           int
+	Kind              readercontract.SegmentKind
+	HeadingLevel      *int
+	ContentKey        string
+	ContentOccurrence int
+	ChapterKey        *string
+	ChapterOccurrence *int
+	Markdown          string
+	RenderedHTML      string
+	WordCount         int
 }
 
 type Output struct {
@@ -231,9 +237,6 @@ func Ingest(in Input) (Output, error) {
 	src := []byte(body)
 	segs := make([]Segment, 0, 64)
 	ordinal := 1
-	paraN := 0
-	headIdx := 0
-
 	for n := doc.FirstChild(); n != nil; n = n.NextSibling() {
 		switch x := n.(type) {
 		case *ast.Heading:
@@ -244,11 +247,11 @@ func Ingest(in Input) (Output, error) {
 			level := x.Level
 			md := strings.Repeat("#", level) + " " + txt
 			h, _ := render(md)
-			loc, _ := json.Marshal(map[string]any{"type": "heading", "h": level, "index": headIdx})
-			headIdx++
+			headingLevel := level
 
 			segs = append(segs, Segment{
-				Ordinal: ordinal, Locator: loc, Markdown: md, RenderedHTML: h, WordCount: wordCount(txt),
+				Ordinal: ordinal, Kind: readercontract.SegmentKindHeading, HeadingLevel: &headingLevel,
+				Markdown: md, RenderedHTML: h, WordCount: wordCount(txt),
 			})
 			ordinal++
 
@@ -257,12 +260,11 @@ func Ingest(in Input) (Output, error) {
 			if md == "" {
 				md = textContent(src, x)
 			}
-			paraN++
 			h, _ := render(md)
-			loc, _ := json.Marshal(map[string]any{"type": "para", "n": paraN})
 
 			segs = append(segs, Segment{
-				Ordinal: ordinal, Locator: loc, Markdown: md, RenderedHTML: h, WordCount: wordCount(md),
+				Ordinal: ordinal, Kind: readercontract.SegmentKindParagraph,
+				Markdown: md, RenderedHTML: h, WordCount: wordCount(md),
 			})
 			ordinal++
 
@@ -273,13 +275,32 @@ func Ingest(in Input) (Output, error) {
 				continue
 			}
 			h, _ := render(md)
-			loc, _ := json.Marshal(map[string]any{"type": "block", "kind": fmt.Sprintf("%T", n)})
 
 			segs = append(segs, Segment{
-				Ordinal: ordinal, Locator: loc, Markdown: md, RenderedHTML: h, WordCount: wordCount(md),
+				Ordinal: ordinal, Kind: readercontract.SegmentKindOther,
+				Markdown: md, RenderedHTML: h, WordCount: wordCount(md),
 			})
 			ordinal++
 		}
+	}
+
+	identityInputs := make([]readercontract.SegmentIdentityInput, 0, len(segs))
+	for _, segment := range segs {
+		identityInputs = append(identityInputs, readercontract.SegmentIdentityInput{
+			Kind:         segment.Kind,
+			HeadingLevel: segment.HeadingLevel,
+			Markdown:     segment.Markdown,
+		})
+	}
+	identities, err := readercontract.AssignSegmentIdentities(identityInputs)
+	if err != nil {
+		return Output{}, err
+	}
+	for index := range segs {
+		segs[index].ContentKey = identities[index].ContentKey
+		segs[index].ContentOccurrence = identities[index].ContentOccurrence
+		segs[index].ChapterKey = identities[index].ChapterKey
+		segs[index].ChapterOccurrence = identities[index].ChapterOccurrence
 	}
 
 	source := map[string]any{}

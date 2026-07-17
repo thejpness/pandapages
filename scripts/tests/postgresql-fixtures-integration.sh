@@ -167,10 +167,10 @@ expect_seed_failure() {
   fi
 }
 
-printf '1..16\n'
+printf '1..17\n'
 
 run_goose up >"$test_root/fresh-goose.out" 2>"$test_root/fresh-goose.err"
-grep -q 'OK.*00013_remove_historical_test_fixtures.sql' \
+grep -q 'OK.*00014_reader_2_contract.sql' \
   "$test_root/fresh-goose.out" "$test_root/fresh-goose.err"
 assert_query 't' "
   SELECT bool_and(relation IS NOT NULL)
@@ -605,6 +605,17 @@ assert_query '3|1|1|1' "
 " 'cleanup rerun'
 printf 'ok 9 - non-restoring rollback and cleanup rerun preserve ambiguous stories idempotently\n'
 
+run_goose up-to 14 >"$test_root/reader2-upgrade.out" 2>"$test_root/reader2-upgrade.err"
+assert_query '0|0' "
+  SELECT
+    (SELECT count(*) FROM reading_progress),
+    (SELECT count(*) FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'story_segments'
+         AND column_name = 'locator');
+" 'Reader 2 fixture boundary'
+printf 'ok 10 - Reader 2 upgrade resets beta progress and removes the obsolete segment locator\n'
+
 expect_seed_failure missing-ack \
   env -u PP_ALLOW_TEST_SEED \
     PP_TEST_SEED_DATABASE="$database" \
@@ -636,7 +647,7 @@ expect_seed_failure malformed-invocation \
     PP_TEST_SEED_DATABASE="$database" \
     PP_TEST_SEED_CONTAINER="$postgres_container" \
     "$seed_script" --unknown
-printf 'ok 10 - seed command fails closed for acknowledgement, target, Docker, service, and invocation errors\n'
+printf 'ok 11 - seed command fails closed for acknowledgement, target, Docker, service, and invocation errors\n'
 
 env \
   PP_ALLOW_TEST_SEED=1 \
@@ -657,27 +668,24 @@ assert_query '1|1|1|1|1|1|2|6|1|0' "
     (SELECT count(*) FROM generation_jobs WHERE id = 'f17e0000-0000-4000-8000-000000000040'),
     (SELECT count(*) FROM reading_progress WHERE story_id = 'f17e0000-0000-4000-8000-000000000010');
 " 'explicit seed inventory'
-printf 'ok 11 - explicit seed installs deterministic published UTF-8 chapter/segment fixtures without progress\n'
+printf 'ok 12 - explicit seed installs deterministic published UTF-8 chapter/segment fixtures without progress\n'
 
-assert_query '1|heading|2|2|## Chapter Two — 世界|<h2>Chapter Two — 世界</h2>|4|para|3|星の光 shimmered over the quiet water. 🐼|<p>星の光 shimmered over the quiet water. 🐼</p>|7|t' "
+assert_query '6|3|3|2|2|2|6|3|3|t|## Chapter Two — 世界|<h2>Chapter Two — 世界</h2>|星の光 shimmered over the quiet water. 🐼|<p>星の光 shimmered over the quiet water. 🐼</p>|t' "
   SELECT
-    (
-      SELECT locator->>'index'
-      FROM story_segments
-      WHERE story_version_id = 'f17e0000-0000-4000-8000-000000000011'
-        AND ordinal = 3
-    ),
-    heading.locator->>'type',
-    heading.locator->>'h',
-    heading.locator->>'index',
+    (SELECT count(*) FROM story_segments WHERE story_version_id = heading.story_version_id),
+    (SELECT count(*) FROM story_segments WHERE story_version_id = heading.story_version_id AND segment_kind = 'heading'),
+    (SELECT count(*) FROM story_segments WHERE story_version_id = heading.story_version_id AND segment_kind = 'paragraph'),
+    (SELECT count(*) FROM story_segments WHERE story_version_id = heading.story_version_id AND ordinal IN (1, 2) AND chapter_key IS NULL AND chapter_occurrence IS NULL),
+    (SELECT count(*) FROM story_segments WHERE story_version_id = heading.story_version_id AND ordinal IN (3, 4) AND chapter_key = '6f744b440fbf4fa52da46bebf4fd3e5f2de7a1c2fb11f7e9ac2794ccd1956c4e' AND chapter_occurrence = 1),
+    (SELECT count(*) FROM story_segments WHERE story_version_id = heading.story_version_id AND ordinal IN (5, 6) AND chapter_key = '3749b6630ab08c6998fd65117d5265c7e7514e35f02022a4005505d0aba52a73' AND chapter_occurrence = 1),
+    (SELECT count(*) FROM story_segments WHERE story_version_id = heading.story_version_id AND content_occurrence = 1),
+    (SELECT count(*) FROM story_segments WHERE story_version_id = heading.story_version_id AND segment_kind = 'heading' AND heading_level IN (1, 2)),
+    (SELECT count(*) FROM story_segments WHERE story_version_id = heading.story_version_id AND segment_kind = 'paragraph' AND heading_level IS NULL),
+    (SELECT bool_and(content_key ~ '^[0-9a-f]{64}$') FROM story_segments WHERE story_version_id = heading.story_version_id),
     heading.markdown,
     heading.rendered_html,
-    heading.word_count,
-    paragraph.locator->>'type',
-    paragraph.locator->>'n',
     paragraph.markdown,
     paragraph.rendered_html,
-    paragraph.word_count,
     heading.section_id = paragraph.section_id
       AND heading.section_id = 'f17e0000-0000-4000-8000-000000000021'
   FROM story_segments AS heading
@@ -687,7 +695,7 @@ assert_query '1|heading|2|2|## Chapter Two — 世界|<h2>Chapter Two — 世界
   WHERE heading.story_version_id = 'f17e0000-0000-4000-8000-000000000011'
     AND heading.ordinal = 5;
 " 'explicit fixture ingestion segment shape'
-printf 'ok 12 - each top-level heading and paragraph is an independent, correctly owned Reader segment\n'
+printf 'ok 13 - canonical keys, kinds, chapter propagation, and six independent fixture segments match ingestion\n'
 
 api_environment="$test_root/api.env"
 {
@@ -746,17 +754,17 @@ curl --fail --silent --show-error \
   "$api_base/api/v1/auth/unlock" >/dev/null
 curl --fail --silent --show-error \
   --cookie "$cookie_jar" \
-  "$api_base/api/v1/story/test-only-moonlit-cafe" \
-  >"$test_root/story.json"
-curl --fail --silent --show-error \
-  --cookie "$cookie_jar" \
-  "$api_base/api/v1/story/test-only-moonlit-cafe/segments" \
-  >"$test_root/segments.json"
-grep -q 'Moonlit Café' "$test_root/story.json"
-grep -q 'Pöndá' "$test_root/story.json"
-grep -q '世界' "$test_root/segments.json"
-grep -q '星の光' "$test_root/segments.json"
-printf 'ok 13 - the current signed-session API reads the seeded story, chapters, segments, and UTF-8 content\n'
+  "$api_base/api/v1/reader/test-only-moonlit-cafe" \
+  >"$test_root/reader.json"
+grep -q 'Moonlit Café' "$test_root/reader.json"
+grep -q 'Pöndá' "$test_root/reader.json"
+grep -q '世界' "$test_root/reader.json"
+grep -q '星の光' "$test_root/reader.json"
+if grep -q 'markdown\|f17e0000-0000-4000-8000-0000000000' "$test_root/reader.json"; then
+  printf 'Reader response exposed Markdown or internal IDs\n' >&2
+  exit 1
+fi
+printf 'ok 14 - the signed-session coherent Reader endpoint returns six UTF-8 segments without internal content\n'
 
 docker rm --force "$api_container" >/dev/null
 api_created=false
@@ -776,21 +784,24 @@ env \
   PP_TEST_SEED_DATABASE="$database" \
   PP_TEST_SEED_CONTAINER="$postgres_container" \
   "$seed_script" --with-progress >/dev/null
-assert_query '1|1|6|0.6' "
+assert_query '1|1|6|2|4|0.35|0.6' "
   SELECT
     (SELECT count(*) FROM stories WHERE id = 'f17e0000-0000-4000-8000-000000000010'),
     (SELECT count(*) FROM story_versions WHERE id = 'f17e0000-0000-4000-8000-000000000011'),
     (SELECT count(*) FROM story_segments WHERE story_version_id = 'f17e0000-0000-4000-8000-000000000011'),
+    (SELECT locator->>'schema' FROM reading_progress WHERE story_id = 'f17e0000-0000-4000-8000-000000000010'),
+    (SELECT locator->'segment'->>'ordinal' FROM reading_progress WHERE story_id = 'f17e0000-0000-4000-8000-000000000010'),
+    (SELECT locator->'segment'->>'offset' FROM reading_progress WHERE story_id = 'f17e0000-0000-4000-8000-000000000010'),
     (SELECT percent FROM reading_progress WHERE story_id = 'f17e0000-0000-4000-8000-000000000010');
 " 'seed idempotency and opt-in progress'
-printf 'ok 14 - repeated seed and progress requests are idempotent, with progress opt-in only\n'
+printf 'ok 15 - repeated seed and valid Locator v2 progress requests are idempotent and opt-in only\n'
 
 env \
   PP_ALLOW_TEST_SEED=1 \
   PP_TEST_SEED_DATABASE="$database" \
   PP_TEST_SEED_CONTAINER="$postgres_container" \
   "$seed_script" --remove >/dev/null
-assert_query '0|0|0|0|0|0|0|0|0|0|0|1|1|1' "
+assert_query '0|0|0|0|0|0|0|0|0|0|0|1|1|0' "
   SELECT
     (SELECT count(*) FROM stories WHERE id = 'f17e0000-0000-4000-8000-000000000010'),
     (SELECT count(*) FROM story_versions WHERE id = 'f17e0000-0000-4000-8000-000000000011'),
@@ -817,7 +828,7 @@ env \
   PP_TEST_SEED_DATABASE="$database" \
   PP_TEST_SEED_CONTAINER="$postgres_container" \
   "$seed_script" --remove >/dev/null
-printf 'ok 15 - fixture removal and recreation touch only fixed test IDs and preserve unrelated data\n'
+printf 'ok 16 - fixture removal and recreation touch only fixed test IDs and preserve unrelated data\n'
 
 cleanup
 trap - EXIT HUP INT TERM
@@ -825,5 +836,5 @@ trap - EXIT HUP INT TERM
 [[ -z $(docker network ls -q --filter label=com.pandapages.disposable=fixture-migration-integration) ]]
 [[ -z $(docker volume ls -q --filter label=com.pandapages.disposable=fixture-migration-integration) ]]
 [[ ! -e "$test_root" ]]
-printf 'ok 16 - disposable containers, network, volume, credentials, and artifacts are removed\n'
+printf 'ok 17 - disposable containers, network, volume, credentials, and artifacts are removed\n'
 printf 'postgresql_fixtures_integration=passed\n'

@@ -206,7 +206,7 @@ if ! docker run --rm \
   sed 's/generated-migrator-password-not-for-production/[redacted]/g' "$test_root/goose.err" >&2
   exit 1
 fi
-grep -q 'OK.*00013_remove_historical_test_fixtures.sql' "$test_root/goose.out" "$test_root/goose.err"
+grep -q 'OK.*00014_reader_2_contract.sql' "$test_root/goose.out" "$test_root/goose.err"
 printf 'ok 2 - Goose applies every migration as a non-superuser owner session\n'
 
 docker exec -i "$source_container" \
