@@ -258,7 +258,7 @@ VALUES
     'f17e0000-0000-4000-8000-000000000011',
     'f17e0000-0000-4000-8000-000000000020',
     3,
-    '{"type":"heading","h":2,"index":0}'::jsonb,
+    '{"type":"heading","h":2,"index":1}'::jsonb,
     '## Chapter One — Lanterns',
     '<h2>Chapter One — Lanterns</h2>',
     4
@@ -278,10 +278,20 @@ VALUES
     'f17e0000-0000-4000-8000-000000000011',
     'f17e0000-0000-4000-8000-000000000021',
     5,
-    '{"type":"heading","h":2,"index":1}'::jsonb,
-    E'## Chapter Two — 世界\n\n星の光 shimmered over the quiet water. 🐼',
-    '<h2>Chapter Two — 世界</h2><p>星の光 shimmered over the quiet water. 🐼</p>',
-    10
+    '{"type":"heading","h":2,"index":2}'::jsonb,
+    '## Chapter Two — 世界',
+    '<h2>Chapter Two — 世界</h2>',
+    4
+  ),
+  (
+    'f17e0000-0000-4000-8000-000000000035',
+    'f17e0000-0000-4000-8000-000000000011',
+    'f17e0000-0000-4000-8000-000000000021',
+    6,
+    '{"type":"para","n":3}'::jsonb,
+    '星の光 shimmered over the quiet water. 🐼',
+    '<p>星の光 shimmered over the quiet water. 🐼</p>',
+    7
   );
 
 UPDATE stories

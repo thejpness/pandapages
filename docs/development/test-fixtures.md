@@ -35,9 +35,14 @@ fixture account.
 
 Forward migration `00013_remove_historical_test_fixtures.sql` removes the
 historical fixtures after `00008` has run. Because `00008` generated UUIDs,
-`00013` identifies each historical story by its exact slug, title, author,
-language, rights, source marker, and oldest-account assignment. Cascades start
-only at those positively identified story rows. The migration deletes the exact
+`00013` cannot identify a story by an immutable fixture ID. It instead requires
+an exact lifecycle fingerprint before deleting a story root: oldest-account
+ownership; story, work, and publication metadata; exactly one version numbered
+1; the historical frontmatter, Markdown, rendered HTML, and content hash; both
+draft and published pointers targeting that version; exact section and segment
+rows, counts, ordinals, locators, ownership, content, and word counts; and the
+historical contributor links. Cascades start only at story rows satisfying
+every part of that fingerprint. The migration separately deletes the exact
 seeded child, prompt, and generation-job payloads, and deletes historical work
 and contributor rows only when no remaining story references them.
 
@@ -45,15 +50,17 @@ The shared account and Default profile are always preserved. A work or
 contributor reused by unrelated content is preserved. The cleanup Down path
 does not restore test data; use the explicit command below instead.
 
-The historical migration did not provide immutable IDs. If an operator has
-materially edited a fixture's identifying metadata, the cleanup deliberately
-preserves that ambiguous row rather than risking deletion of repurposed data.
-Names such as `Ted`, `Aesop`, and `Mary Shelley`, the classic work titles, and
-even the three public-looking slugs can plausibly collide with intentional
-content. For that reason a name or slug alone is never the cleanup predicate.
-Deletion order is the exact fixture generation job, exact oldest-account story
-roots and their dependants, exact child/prompt payloads, then only unreferenced
-work/contributor rows.
+The historical migration did not provide immutable IDs. A content or hash
+change, additional version, new draft, republication, pointer change, structural
+change, metadata change, ownership ambiguity, or any other fingerprint mismatch
+preserves the entire story with its versions, sections, segments, contributor
+links, and progress for manual review. Names such as `Ted`, `Aesop`, and
+`Mary Shelley`, the classic work titles, and even the three public-looking
+slugs can plausibly collide with intentional content. For that reason story
+metadata alone is never treated as a complete fixture fingerprint. Deletion
+order is the exact fixture generation job, exact unchanged historical story
+lifecycles and their dependants, exact child/prompt payloads, then only
+unreferenced work/contributor rows.
 
 ## Local workflow
 
@@ -69,9 +76,12 @@ PP_TEST_SEED_DATABASE=pandapages \
 scripts/dev/seed-test-data.sh
 ```
 
-The fixture contains one published UTF-8 story, two chapters, five ordered
+The fixture contains one published UTF-8 story, two chapters, six ordered
 segments, fixed test-only UUIDs, a test work/contributor, a child/prompt pair,
-and one test generation job. It does not include progress by default.
+and one test generation job. The segments mirror ingestion's top-level block
+model: H1, opening paragraph, Chapter One H2, its paragraph, Chapter Two H2,
+and its paragraph are six independent rows with heading- or paragraph-only
+locators. It does not include progress by default.
 
 Add the Default-profile progress row only for a test that needs it:
 
@@ -116,12 +126,18 @@ PostgreSQL resources and proves:
 
 - a fresh full migration has the required schema and no fixtures;
 - the real `up-to 12` history contains the complete historical inventory;
-- `00013` removes fixture-owned rows while preserving the account, Default
-  profile, unrelated same-account story/version/segment/progress/job, unrelated
-  profile/settings, and shared catalogue records;
+- `00013` removes an unchanged historical lifecycle and all fixture-owned
+  dependants;
+- content-only edits, additional drafts, and republished versions preserve the
+  complete ambiguous story lifecycle, including segments, pointers, contributor
+  links, and progress;
+- the account, Default profile, unrelated same-account
+  story/version/segment/progress/job, unrelated profile/settings, and shared
+  catalogue records remain;
 - cleanup rollback/reapplication is non-restoring and idempotent;
 - seed refusal cases fail closed;
-- explicit seed, optional progress, rerun, removal, and recreation are safe;
+- explicit six-block seed shape, optional progress, rerun, removal, and
+  recreation are safe;
 - the signed-session API reads the UTF-8 story and segments;
 - every generated container, network, volume, credential, and artifact is
   removed.
