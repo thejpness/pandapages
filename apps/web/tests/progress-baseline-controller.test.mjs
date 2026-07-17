@@ -484,35 +484,57 @@ test('disposed pending loads cannot later expose a writable baseline', async () 
   assert.equal(statuses.includes('ready'), false)
 })
 
-test('Reader exposes an accessible unavailable and checking status with Retry', async () => {
-  const reader = await readFile(
-    new URL('../src/views/Reader.vue', import.meta.url),
-    'utf8'
+test('progress presentation is truthful across baseline and save states', async () => {
+  const { module } = await loadTypeScript(
+    '../src/lib/reader-progress-policy.ts'
   )
-  assert.match(reader, /return 'Progress unavailable'/)
-  assert.match(reader, /return 'Checking progress…'/)
-  assert.match(reader, /role="status" aria-live="polite" aria-atomic="true"/)
-  assert.match(reader, /@click="retryProgressBaseline"/)
+
+  assert.deepEqual(
+    module.readerProgressPresentation({
+      baselineStatus: 'unavailable',
+      baselineAttempt: 1,
+      saveStatus: 'idle',
+    }),
+    { text: 'Progress unavailable', retryKind: 'baseline', retryDisabled: false },
+  )
+  assert.deepEqual(
+    module.readerProgressPresentation({
+      baselineStatus: 'loading',
+      baselineAttempt: 2,
+      saveStatus: 'idle',
+    }),
+    { text: 'Checking progress…', retryKind: 'baseline', retryDisabled: true },
+  )
+  assert.equal(
+    module.readerProgressPresentation({
+      baselineStatus: 'ready',
+      baselineAttempt: 1,
+      saveStatus: 'saved',
+    }).text,
+    'Saved',
+  )
 })
 
-test('Reader gates lifecycle persistence and save-failure navigation UI on readiness', async () => {
-  const reader = await readFile(
-    new URL('../src/views/Reader.vue', import.meta.url),
-    'utf8'
+test('lifecycle and Library persistence policies require a ready baseline', async () => {
+  const { module } = await loadTypeScript(
+    '../src/lib/reader-progress-policy.ts'
   )
-  const pageHide = reader.slice(
-    reader.indexOf('function onPageHide()'),
-    reader.indexOf('function onVisibilityChange()')
-  )
-  const library = reader.slice(
-    reader.indexOf('async function goLibrary()'),
-    reader.indexOf('function leaveReaderAnyway()')
-  )
-  assert.match(pageHide, /progressBaselineState\.value\.status !== 'ready'/)
-  assert.match(library, /progressBaselineState\.value\.status !== 'ready'/)
-  assert.match(
-    reader,
-    /v-if="progressBaselineState\.status === 'ready' && leaveAfterSaveFailure"/
-  )
-  assert.match(reader, /disposeProgressBaselineController\(\)/)
+  const allowed = (overrides = {}) =>
+    module.readerLifecyclePersistenceAllowed({
+      baselineStatus: 'ready',
+      sessionLoss: false,
+      decisionPending: false,
+      awaitingIntent: false,
+      ...overrides,
+    })
+
+  assert.equal(allowed(), true)
+  assert.equal(allowed({ baselineStatus: 'loading' }), false)
+  assert.equal(allowed({ baselineStatus: 'unavailable' }), false)
+  assert.equal(allowed({ sessionLoss: true }), false)
+  assert.equal(allowed({ decisionPending: true }), false)
+  assert.equal(allowed({ awaitingIntent: true }), false)
+  assert.equal(module.readerLibraryPersistenceStrategy('ready'), 'drain')
+  assert.equal(module.readerLibraryPersistenceStrategy('loading'), 'immediate')
+  assert.equal(module.readerLibraryPersistenceStrategy('unavailable'), 'immediate')
 })

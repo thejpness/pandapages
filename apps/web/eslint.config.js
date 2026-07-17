@@ -49,7 +49,7 @@ export default withVueTs(
     },
   },
   {
-    files: ['tests/**/*.mjs', 'eslint.config.js'],
+    files: ['tests/**/*.{mjs,ts}', 'playwright.config.ts', 'eslint.config.js'],
     languageOptions: {
       globals: globals.nodeBuiltin,
     },
@@ -67,7 +67,8 @@ export default withVueTs(
   },
   {
     files: [
-      'src/views/Reader.vue',
+      'src/components/reader/ReaderScrollView.vue',
+      'src/components/reader/ReaderPagedView.vue',
       'src/views/admin/AdminUpload.vue',
     ],
     rules: {

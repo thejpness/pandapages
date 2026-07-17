@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { loadTypeScript as loadModule } from './helpers/typescript-module.mjs'
 
@@ -401,18 +400,17 @@ test('transport and server errors remain retryable coordinator failures', async 
   assert.equal(coordinator.current().status, 'saved')
 })
 
-test('401 progress failure is wired to the signed-session loss transition', async () => {
-  const reader = await readFile(
-    new URL('../src/views/Reader.vue', import.meta.url),
-    'utf8'
-  )
-  assert.match(reader, /getAPIErrorStatus\(state\.error\) === 401/)
-  assert.match(reader, /authState\.confirmLocked\(\)/)
-  assert.match(
-    reader,
-    /safeNextPath\(`\/read\/\$\{encodeURIComponent\(storySlug\)\}`\)/
-  )
-  assert.match(reader, /router\.replace\(\{ path: '\/unlock', query: \{ next \} \}\)/)
+test('401 progress failure remains visible to the signed-session owner', async () => {
+  const { coordinator, persistence } = await coordinatorHarness()
+  coordinator.initialize(scrollSnapshot(0, 0))
+  coordinator.update(scrollSnapshot(100), { debounce: false })
+  const flush = coordinator.flush()
+  const ended = Object.assign(new Error('session ended'), { status: 401 })
+  persistence.calls[0].reject(ended)
+
+  await assert.rejects(flush, (error) => error.status === 401)
+  assert.equal(coordinator.current().status, 'error')
+  assert.equal(coordinator.current().error.status, 401)
 })
 
 test('explicit Library navigation can await a pending coordinator drain', async () => {
@@ -431,19 +429,26 @@ test('explicit Library navigation can await a pending coordinator drain', async 
   assert.equal(navigated, true)
 })
 
-test('failed Library flush remains in Reader and exposes Leave anyway', async () => {
-  const reader = await readFile(
-    new URL('../src/views/Reader.vue', import.meta.url),
-    'utf8'
-  )
-  const goLibrary = reader.slice(
-    reader.indexOf('async function goLibrary()'),
-    reader.indexOf('function leaveReaderAnyway()')
-  )
-  assert.match(goLibrary, /await coordinator\?\.flush\(\)/)
-  assert.match(goLibrary, /leaveAfterSaveFailure\.value = true/)
-  assert.match(reader, />\s*Leave anyway\s*</)
-  assert.match(reader, /function leaveReaderAnyway\(\)/)
+test('failed Library drain remains retryable before navigation', async () => {
+  const { coordinator, persistence } = await coordinatorHarness()
+  coordinator.initialize(scrollSnapshot(0, 0))
+  coordinator.update(scrollSnapshot(100), { debounce: false })
+  let navigated = false
+  let leaveGate = false
+  const navigation = (async () => {
+    try {
+      await coordinator.flush()
+      navigated = true
+    } catch {
+      leaveGate = true
+    }
+  })()
+
+  persistence.calls[0].reject(new Error('offline'))
+  await navigation
+  assert.equal(navigated, false)
+  assert.equal(leaveGate, true)
+  assert.equal(coordinator.current().status, 'error')
 })
 
 test('page-hide keepalive never starts a parallel request', async () => {

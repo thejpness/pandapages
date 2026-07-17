@@ -712,3 +712,10 @@ These require product-owner decisions rather than technical inference:
 13. **Version change experience:** When a story is republished, should progress reset, map to content anchors, retain a historical reader, or ask the reader? Current silent mismatch is not a product decision.
 
 These questions do not block the corrective PRs in Orders 1–10. They do block safe identity, sharing, destructive lifecycle, offline content, assets and AI implementation.
+
+
+## 21. Dated follow-up: Reader 2 scroll foundation (17 July 2026)
+
+The frontend follow-up replaces the monolithic Reader surface with focused story, progress, preference, rendering, and dialog boundaries. Reading preferences now use strict `pp_reader_prefs_v2` validation with no v1 migration. Canonical segment anchors drive scroll percentage and restore; the baseline and serialized save controllers remain authoritative.
+
+The follow-up also introduces local Literata and Atkinson Hyperlegible Next fonts, Reka UI dialog primitives, narrow VueUse lifecycle helpers, and deterministic Playwright/axe coverage. It makes no backend, migration, authentication, production configuration, offline, or cross-version mapping change. The original F13 row above remains the historical baseline rather than being rewritten.

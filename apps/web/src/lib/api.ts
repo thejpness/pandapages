@@ -297,9 +297,13 @@ export function parseReaderStoryPayload(value: unknown): ReaderStoryPayload {
   }
 }
 
-export async function getReaderStory(slug: string): Promise<ReaderStoryPayload> {
+export async function getReaderStory(
+  slug: string,
+  signal?: AbortSignal,
+): Promise<ReaderStoryPayload> {
   const data = await request<unknown>(
     `/api/v1/reader/${encodeURIComponent(slug)}`,
+    { signal },
   )
   return parseReaderStoryPayload(data)
 }

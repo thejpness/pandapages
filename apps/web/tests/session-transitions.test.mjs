@@ -314,7 +314,6 @@ test('router decisions distinguish signed out from unavailable status', async ()
 test('unlock confirms auth state before navigating and Lock prevents duplicate submission', async () => {
   const unlockSource = await readFile(new URL('../src/views/Unlock.vue', import.meta.url), 'utf8')
   const librarySource = await readFile(new URL('../src/views/Library.vue', import.meta.url), 'utf8')
-  const readerSource = await readFile(new URL('../src/views/Reader.vue', import.meta.url), 'utf8')
 
   const unlockRequest = unlockSource.indexOf('await unlock(code.value)')
   const confirmUnlocked = unlockSource.indexOf('authState.confirmUnlocked()')
@@ -335,8 +334,6 @@ test('unlock confirms auth state before navigating and Lock prevents duplicate s
   assert.match(logoutBlock, /markLocked: authState\.confirmLocked/)
   assert.match(librarySource, /getAPIErrorStatus\(error\) === 401/)
   assert.match(librarySource, /authState\.confirmLocked\(\)/)
-  assert.match(readerSource, /getAPIErrorStatus\(error\) === 401/)
-  assert.doesNotMatch(readerSource, /catch \{\s*await router\.replace\('\/unlock'\)/)
 })
 
 test('frontend authentication code no longer references legacy cookies', async () => {
