@@ -167,7 +167,7 @@ expect_seed_failure() {
   fi
 }
 
-printf '1..12\n'
+printf '1..16\n'
 
 run_goose up >"$test_root/fresh-goose.out" 2>"$test_root/fresh-goose.err"
 grep -q 'OK.*00013_remove_historical_test_fixtures.sql' \
@@ -231,9 +231,201 @@ assert_query '3|3|1|9|1|1|1|1|3|2|2' "
 " 'historical fixture inventory'
 printf 'ok 3 - the real pre-cleanup migration path recreates the complete historical fixture set\n'
 
+run_goose up-to 13 >"$test_root/exact-cleanup-goose.out" 2>"$test_root/exact-cleanup-goose.err"
+assert_query '0|0|0|0|0|0|0|0|0|0|0' "
+  SELECT
+    (SELECT count(*) FROM stories WHERE slug IN ('the-fox-and-the-grapes','the-little-star-and-the-moon','frankenstein-excerpt-ch1')),
+    (SELECT count(*) FROM story_versions AS version JOIN stories AS story ON story.id = version.story_id WHERE story.slug IN ('the-fox-and-the-grapes','the-little-star-and-the-moon','frankenstein-excerpt-ch1')),
+    (SELECT count(*) FROM story_sections AS section JOIN story_versions AS version ON version.id = section.story_version_id JOIN stories AS story ON story.id = version.story_id WHERE story.slug IN ('the-fox-and-the-grapes','the-little-star-and-the-moon','frankenstein-excerpt-ch1')),
+    (SELECT count(*) FROM story_segments AS segment JOIN story_versions AS version ON version.id = segment.story_version_id JOIN stories AS story ON story.id = version.story_id WHERE story.slug IN ('the-fox-and-the-grapes','the-little-star-and-the-moon','frankenstein-excerpt-ch1')),
+    (SELECT count(*) FROM reading_progress AS progress JOIN stories AS story ON story.id = progress.story_id WHERE story.slug IN ('the-fox-and-the-grapes','the-little-star-and-the-moon','frankenstein-excerpt-ch1')),
+    (SELECT count(*) FROM child_profiles WHERE name = 'Ted' AND age_months = 34),
+    (SELECT count(*) FROM prompt_profiles WHERE name = 'Bedtime calm v1' AND schema_version = 1),
+    (SELECT count(*) FROM generation_jobs WHERE model = 'seed-model' AND prompt_version = 'v1'),
+    (SELECT count(*) FROM works WHERE canonical_title IN ('The Fox and the Grapes','The Little Star and the Moon','Frankenstein; or, The Modern Prometheus')),
+    (SELECT count(*) FROM contributors WHERE name IN ('Aesop','Mary Shelley')),
+    (SELECT count(*) FROM story_contributors AS link JOIN stories AS story ON story.id = link.story_id WHERE story.slug IN ('the-fox-and-the-grapes','frankenstein-excerpt-ch1'));
+" 'exact historical fixture cleanup'
+printf 'ok 4 - an unchanged historical lifecycle is removed with versions, sections, segments, links, progress, and fixture profiles/jobs\n'
+
+reset_database
+run_goose up-to 12 >"$test_root/preservation-goose.out" 2>"$test_root/preservation-goose.err"
+
 docker exec -i "$postgres_container" \
   psql -X --username="$database_user" --dbname="$database" \
     --set=ON_ERROR_STOP=1 --file=- >/dev/null <<'SQL'
+BEGIN;
+
+-- Content-only edit: retain every story-level field but replace the v1 body
+-- and hash. The cleanup must preserve the entire story.
+UPDATE story_versions AS version
+SET markdown = E'# The Fox and the Grapes\n\nThis is legitimate replacement content.\n',
+    rendered_html = '<h1>The Fox and the Grapes</h1><p>This is legitimate replacement content.</p>',
+    content_hash = encode(digest(
+      E'# The Fox and the Grapes\n\nThis is legitimate replacement content.\n',
+      'sha256'
+    ), 'hex')
+FROM stories AS story
+WHERE version.story_id = story.id
+  AND version.version = 1
+  AND story.slug = 'the-fox-and-the-grapes';
+
+-- Additional draft version: model AdminDraftUpsert's new-version, generic
+-- section, segment, and draft-pointer behaviour while leaving v1 published.
+INSERT INTO story_versions (
+  id, story_id, version, frontmatter, markdown, rendered_html, content_hash
+)
+SELECT
+  'e13e0000-0000-4000-8000-000000000101',
+  story.id,
+  2,
+  '{"title":"The Little Star and the Moon","author":"Panda Pages (seed)","language":"en-GB"}',
+  E'# A legitimate new Little Star draft\n\nThe moon now follows a different path.\n',
+  '<h1>A legitimate new Little Star draft</h1><p>The moon now follows a different path.</p>',
+  encode(digest(
+    E'# A legitimate new Little Star draft\n\nThe moon now follows a different path.\n',
+    'sha256'
+  ), 'hex')
+FROM stories AS story
+WHERE story.slug = 'the-little-star-and-the-moon';
+
+INSERT INTO story_sections (id, story_version_id, kind, title, ordinal)
+VALUES (
+  'e13e0000-0000-4000-8000-000000000102',
+  'e13e0000-0000-4000-8000-000000000101',
+  'section',
+  NULL,
+  1
+);
+
+INSERT INTO story_segments (
+  id, story_version_id, section_id, ordinal, locator, markdown, rendered_html, word_count
+)
+VALUES
+  (
+    'e13e0000-0000-4000-8000-000000000103',
+    'e13e0000-0000-4000-8000-000000000101',
+    'e13e0000-0000-4000-8000-000000000102',
+    1,
+    '{"type":"heading","h":1,"index":0}',
+    '# A legitimate new Little Star draft',
+    '<h1>A legitimate new Little Star draft</h1>',
+    6
+  ),
+  (
+    'e13e0000-0000-4000-8000-000000000104',
+    'e13e0000-0000-4000-8000-000000000101',
+    'e13e0000-0000-4000-8000-000000000102',
+    2,
+    '{"type":"para","n":1}',
+    'The moon now follows a different path.',
+    '<p>The moon now follows a different path.</p>',
+    7
+  );
+
+UPDATE stories
+SET draft_version_id = 'e13e0000-0000-4000-8000-000000000101'
+WHERE slug = 'the-little-star-and-the-moon';
+
+INSERT INTO reading_progress (
+  profile_id, story_id, story_version_id, locator, percent
+)
+SELECT
+  profile.id,
+  story.id,
+  'e13e0000-0000-4000-8000-000000000101',
+  '{"type":"para","n":1}',
+  0.61
+FROM stories AS story
+JOIN LATERAL (
+  SELECT id
+  FROM profiles
+  WHERE account_id = story.account_id
+    AND name = 'Default'
+  ORDER BY created_at ASC, id ASC
+  LIMIT 1
+) AS profile ON true
+WHERE story.slug = 'the-little-star-and-the-moon';
+
+-- Additional published version: model a new draft followed by AdminPublish,
+-- which leaves both pointers on v2 and keeps the story published.
+INSERT INTO story_versions (
+  id, story_id, version, frontmatter, markdown, rendered_html, content_hash
+)
+SELECT
+  'e13e0000-0000-4000-8000-000000000201',
+  story.id,
+  2,
+  '{"title":"Frankenstein (Excerpt — Chapter 1)","author":"Mary Shelley","language":"en-GB"}',
+  E'# A legitimately republished excerpt\n\nThis replacement is intentionally short.\n',
+  '<h1>A legitimately republished excerpt</h1><p>This replacement is intentionally short.</p>',
+  encode(digest(
+    E'# A legitimately republished excerpt\n\nThis replacement is intentionally short.\n',
+    'sha256'
+  ), 'hex')
+FROM stories AS story
+WHERE story.slug = 'frankenstein-excerpt-ch1';
+
+INSERT INTO story_sections (id, story_version_id, kind, title, ordinal)
+VALUES (
+  'e13e0000-0000-4000-8000-000000000202',
+  'e13e0000-0000-4000-8000-000000000201',
+  'section',
+  NULL,
+  1
+);
+
+INSERT INTO story_segments (
+  id, story_version_id, section_id, ordinal, locator, markdown, rendered_html, word_count
+)
+VALUES
+  (
+    'e13e0000-0000-4000-8000-000000000203',
+    'e13e0000-0000-4000-8000-000000000201',
+    'e13e0000-0000-4000-8000-000000000202',
+    1,
+    '{"type":"heading","h":1,"index":0}',
+    '# A legitimately republished excerpt',
+    '<h1>A legitimately republished excerpt</h1>',
+    4
+  ),
+  (
+    'e13e0000-0000-4000-8000-000000000204',
+    'e13e0000-0000-4000-8000-000000000201',
+    'e13e0000-0000-4000-8000-000000000202',
+    2,
+    '{"type":"para","n":1}',
+    'This replacement is intentionally short.',
+    '<p>This replacement is intentionally short.</p>',
+    5
+  );
+
+UPDATE stories
+SET draft_version_id = 'e13e0000-0000-4000-8000-000000000201',
+    published_version_id = 'e13e0000-0000-4000-8000-000000000201',
+    is_published = true
+WHERE slug = 'frankenstein-excerpt-ch1';
+
+INSERT INTO reading_progress (
+  profile_id, story_id, story_version_id, locator, percent
+)
+SELECT
+  profile.id,
+  story.id,
+  'e13e0000-0000-4000-8000-000000000201',
+  '{"type":"para","n":1}',
+  0.72
+FROM stories AS story
+JOIN LATERAL (
+  SELECT id
+  FROM profiles
+  WHERE account_id = story.account_id
+    AND name = 'Default'
+  ORDER BY created_at ASC, id ASC
+  LIMIT 1
+) AS profile ON true
+WHERE story.slug = 'frankenstein-excerpt-ch1';
+
 WITH target_account AS (
   SELECT id FROM accounts ORDER BY created_at ASC, id ASC LIMIT 1
 )
@@ -341,24 +533,47 @@ VALUES (
   'preserved-model',
   'preserved-v1'
 );
+
+COMMIT;
 SQL
 
-run_goose up-to 13 >"$test_root/cleanup-goose.out" 2>"$test_root/cleanup-goose.err"
-assert_query '0|0|0|0|0|0|0|0|0|0|0' "
+run_goose up-to 13 >"$test_root/preservation-cleanup-goose.out" 2>"$test_root/preservation-cleanup-goose.err"
+
+assert_query '1|1|3|1|1|1' "
   SELECT
-    (SELECT count(*) FROM stories WHERE slug IN ('the-fox-and-the-grapes','the-little-star-and-the-moon','frankenstein-excerpt-ch1')),
-    (SELECT count(*) FROM story_versions AS version JOIN stories AS story ON story.id = version.story_id WHERE story.slug IN ('the-fox-and-the-grapes','the-little-star-and-the-moon','frankenstein-excerpt-ch1')),
-    (SELECT count(*) FROM story_sections AS section JOIN story_versions AS version ON version.id = section.story_version_id JOIN stories AS story ON story.id = version.story_id WHERE story.slug IN ('the-fox-and-the-grapes','the-little-star-and-the-moon','frankenstein-excerpt-ch1')),
-    (SELECT count(*) FROM story_segments AS segment JOIN story_versions AS version ON version.id = segment.story_version_id JOIN stories AS story ON story.id = version.story_id WHERE story.slug IN ('the-fox-and-the-grapes','the-little-star-and-the-moon','frankenstein-excerpt-ch1')),
-    (SELECT count(*) FROM reading_progress AS progress JOIN stories AS story ON story.id = progress.story_id WHERE story.slug IN ('the-fox-and-the-grapes','the-little-star-and-the-moon','frankenstein-excerpt-ch1')),
-    (SELECT count(*) FROM child_profiles WHERE name = 'Ted' AND age_months = 34),
-    (SELECT count(*) FROM prompt_profiles WHERE name = 'Bedtime calm v1' AND schema_version = 1),
-    (SELECT count(*) FROM generation_jobs WHERE model = 'seed-model' AND prompt_version = 'v1'),
-    (SELECT count(*) FROM works WHERE canonical_title IN ('The Little Star and the Moon','Frankenstein; or, The Modern Prometheus')),
-    (SELECT count(*) FROM contributors WHERE name = 'Mary Shelley'),
-    (SELECT count(*) FROM story_contributors AS link JOIN stories AS story ON story.id = link.story_id WHERE story.slug IN ('the-fox-and-the-grapes','frankenstein-excerpt-ch1'));
-" 'cleanup fixture removal'
-printf 'ok 4 - forward cleanup removes every positively identified fixture and dependent row\n'
+    (SELECT count(*) FROM stories WHERE slug = 'the-fox-and-the-grapes'),
+    (SELECT count(*) FROM story_versions AS version JOIN stories AS story ON story.id = version.story_id WHERE story.slug = 'the-fox-and-the-grapes'),
+    (SELECT count(*) FROM story_segments AS segment JOIN story_versions AS version ON version.id = segment.story_version_id JOIN stories AS story ON story.id = version.story_id WHERE story.slug = 'the-fox-and-the-grapes'),
+    (SELECT count(*) FROM story_contributors AS link JOIN stories AS story ON story.id = link.story_id WHERE story.slug = 'the-fox-and-the-grapes'),
+    (SELECT count(*) FROM reading_progress AS progress JOIN stories AS story ON story.id = progress.story_id WHERE story.slug = 'the-fox-and-the-grapes'),
+    (SELECT count(*) FROM story_versions AS version JOIN stories AS story ON story.id = version.story_id WHERE story.slug = 'the-fox-and-the-grapes' AND version.content_hash <> '2fb47f4013a00e9348fa92c2da31ee0688e3a8ef878fa4308646b1656c9adad4');
+" 'content-edited fixture preservation'
+printf 'ok 5 - content-only edits preserve the story, version, segments, contributor link, and progress\n'
+
+assert_query '1|2|1|5|1|1|1' "
+  SELECT
+    (SELECT count(*) FROM stories WHERE slug = 'the-little-star-and-the-moon'),
+    (SELECT count(*) FROM story_versions AS version JOIN stories AS story ON story.id = version.story_id WHERE story.slug = 'the-little-star-and-the-moon'),
+    (SELECT count(*) FROM story_sections WHERE story_version_id = 'e13e0000-0000-4000-8000-000000000101'),
+    (SELECT count(*) FROM story_segments AS segment JOIN story_versions AS version ON version.id = segment.story_version_id JOIN stories AS story ON story.id = version.story_id WHERE story.slug = 'the-little-star-and-the-moon'),
+    (SELECT count(*) FROM stories WHERE slug = 'the-little-star-and-the-moon' AND draft_version_id = 'e13e0000-0000-4000-8000-000000000101'),
+    (SELECT count(*) FROM stories AS story JOIN story_versions AS version ON version.id = story.published_version_id WHERE story.slug = 'the-little-star-and-the-moon' AND version.version = 1),
+    (SELECT count(*) FROM reading_progress AS progress JOIN stories AS story ON story.id = progress.story_id WHERE story.slug = 'the-little-star-and-the-moon' AND progress.story_version_id = 'e13e0000-0000-4000-8000-000000000101' AND round(progress.percent::numeric, 2) = 0.61);
+" 'additional draft preservation'
+printf 'ok 6 - an additional draft preserves both versions, every segment, both pointers, and progress\n'
+
+assert_query '1|2|2|5|1|1|1|1' "
+  SELECT
+    (SELECT count(*) FROM stories WHERE slug = 'frankenstein-excerpt-ch1'),
+    (SELECT count(*) FROM story_versions AS version JOIN stories AS story ON story.id = version.story_id WHERE story.slug = 'frankenstein-excerpt-ch1'),
+    (SELECT count(*) FROM story_sections AS section JOIN story_versions AS version ON version.id = section.story_version_id JOIN stories AS story ON story.id = version.story_id WHERE story.slug = 'frankenstein-excerpt-ch1'),
+    (SELECT count(*) FROM story_segments AS segment JOIN story_versions AS version ON version.id = segment.story_version_id JOIN stories AS story ON story.id = version.story_id WHERE story.slug = 'frankenstein-excerpt-ch1'),
+    (SELECT count(*) FROM stories WHERE slug = 'frankenstein-excerpt-ch1' AND draft_version_id = 'e13e0000-0000-4000-8000-000000000201'),
+    (SELECT count(*) FROM stories WHERE slug = 'frankenstein-excerpt-ch1' AND published_version_id = 'e13e0000-0000-4000-8000-000000000201' AND is_published),
+    (SELECT count(*) FROM story_contributors AS link JOIN stories AS story ON story.id = link.story_id WHERE story.slug = 'frankenstein-excerpt-ch1'),
+    (SELECT count(*) FROM reading_progress AS progress JOIN stories AS story ON story.id = progress.story_id WHERE story.slug = 'frankenstein-excerpt-ch1' AND progress.story_version_id = 'e13e0000-0000-4000-8000-000000000201' AND round(progress.percent::numeric, 2) = 0.72);
+" 'republished fixture preservation'
+printf 'ok 7 - a republished additional version preserves the whole story lifecycle and progress\n'
 
 assert_query '1|1|1|1|1|1|1|1|1|1|1|1|1|1' "
   SELECT
@@ -377,18 +592,18 @@ assert_query '1|1|1|1|1|1|1|1|1|1|1|1|1|1' "
     (SELECT count(*) FROM contributors WHERE name = 'Aesop'),
     (SELECT count(*) FROM story_contributors WHERE story_id = 'a11e0000-0000-4000-8000-000000000010');
 " 'upgrade preservation'
-printf 'ok 5 - shared account/catalogue rows and unrelated stories, settings, progress, and jobs are preserved\n'
+printf 'ok 8 - shared account/catalogue rows and unrelated stories, settings, progress, and jobs are preserved\n'
 
 run_goose down-to 12 >"$test_root/cleanup-down.out" 2>"$test_root/cleanup-down.err"
 run_goose up-to 13 >"$test_root/cleanup-rerun.out" 2>"$test_root/cleanup-rerun.err"
-assert_query '0|1|1|1' "
+assert_query '3|1|1|1' "
   SELECT
     (SELECT count(*) FROM stories WHERE slug IN ('the-fox-and-the-grapes','the-little-star-and-the-moon','frankenstein-excerpt-ch1')),
     (SELECT count(*) FROM stories WHERE id = 'a11e0000-0000-4000-8000-000000000010'),
     (SELECT count(*) FROM profile_settings WHERE profile_id = 'a11e0000-0000-4000-8000-000000000001'),
     (SELECT count(*) FROM reading_progress WHERE story_id = 'a11e0000-0000-4000-8000-000000000010');
 " 'cleanup rerun'
-printf 'ok 6 - non-restoring rollback and cleanup rerun are safe and idempotent\n'
+printf 'ok 9 - non-restoring rollback and cleanup rerun preserve ambiguous stories idempotently\n'
 
 expect_seed_failure missing-ack \
   env -u PP_ALLOW_TEST_SEED \
@@ -421,7 +636,7 @@ expect_seed_failure malformed-invocation \
     PP_TEST_SEED_DATABASE="$database" \
     PP_TEST_SEED_CONTAINER="$postgres_container" \
     "$seed_script" --unknown
-printf 'ok 7 - seed command fails closed for acknowledgement, target, Docker, service, and invocation errors\n'
+printf 'ok 10 - seed command fails closed for acknowledgement, target, Docker, service, and invocation errors\n'
 
 env \
   PP_ALLOW_TEST_SEED=1 \
@@ -429,7 +644,7 @@ env \
   PP_TEST_SEED_CONTAINER="$postgres_container" \
   "$seed_script" >"$test_root/seed.out"
 grep -q '^test_seed=installed progress=absent target=local_or_disposable$' "$test_root/seed.out"
-assert_query '1|1|1|1|1|1|2|5|1|0' "
+assert_query '1|1|1|1|1|1|2|6|1|0' "
   SELECT
     (SELECT count(*) FROM child_profiles WHERE id = 'f17e0000-0000-4000-8000-000000000001'),
     (SELECT count(*) FROM prompt_profiles WHERE id = 'f17e0000-0000-4000-8000-000000000002'),
@@ -442,7 +657,37 @@ assert_query '1|1|1|1|1|1|2|5|1|0' "
     (SELECT count(*) FROM generation_jobs WHERE id = 'f17e0000-0000-4000-8000-000000000040'),
     (SELECT count(*) FROM reading_progress WHERE story_id = 'f17e0000-0000-4000-8000-000000000010');
 " 'explicit seed inventory'
-printf 'ok 8 - explicit seed installs deterministic published UTF-8 chapter/segment fixtures without progress\n'
+printf 'ok 11 - explicit seed installs deterministic published UTF-8 chapter/segment fixtures without progress\n'
+
+assert_query '1|heading|2|2|## Chapter Two — 世界|<h2>Chapter Two — 世界</h2>|4|para|3|星の光 shimmered over the quiet water. 🐼|<p>星の光 shimmered over the quiet water. 🐼</p>|7|t' "
+  SELECT
+    (
+      SELECT locator->>'index'
+      FROM story_segments
+      WHERE story_version_id = 'f17e0000-0000-4000-8000-000000000011'
+        AND ordinal = 3
+    ),
+    heading.locator->>'type',
+    heading.locator->>'h',
+    heading.locator->>'index',
+    heading.markdown,
+    heading.rendered_html,
+    heading.word_count,
+    paragraph.locator->>'type',
+    paragraph.locator->>'n',
+    paragraph.markdown,
+    paragraph.rendered_html,
+    paragraph.word_count,
+    heading.section_id = paragraph.section_id
+      AND heading.section_id = 'f17e0000-0000-4000-8000-000000000021'
+  FROM story_segments AS heading
+  JOIN story_segments AS paragraph
+    ON paragraph.story_version_id = heading.story_version_id
+   AND paragraph.ordinal = 6
+  WHERE heading.story_version_id = 'f17e0000-0000-4000-8000-000000000011'
+    AND heading.ordinal = 5;
+" 'explicit fixture ingestion segment shape'
+printf 'ok 12 - each top-level heading and paragraph is an independent, correctly owned Reader segment\n'
 
 api_environment="$test_root/api.env"
 {
@@ -511,7 +756,7 @@ grep -q 'Moonlit Café' "$test_root/story.json"
 grep -q 'Pöndá' "$test_root/story.json"
 grep -q '世界' "$test_root/segments.json"
 grep -q '星の光' "$test_root/segments.json"
-printf 'ok 9 - the current signed-session API reads the seeded story, chapters, segments, and UTF-8 content\n'
+printf 'ok 13 - the current signed-session API reads the seeded story, chapters, segments, and UTF-8 content\n'
 
 docker rm --force "$api_container" >/dev/null
 api_created=false
@@ -531,26 +776,33 @@ env \
   PP_TEST_SEED_DATABASE="$database" \
   PP_TEST_SEED_CONTAINER="$postgres_container" \
   "$seed_script" --with-progress >/dev/null
-assert_query '1|1|5|0.6' "
+assert_query '1|1|6|0.6' "
   SELECT
     (SELECT count(*) FROM stories WHERE id = 'f17e0000-0000-4000-8000-000000000010'),
     (SELECT count(*) FROM story_versions WHERE id = 'f17e0000-0000-4000-8000-000000000011'),
     (SELECT count(*) FROM story_segments WHERE story_version_id = 'f17e0000-0000-4000-8000-000000000011'),
     (SELECT percent FROM reading_progress WHERE story_id = 'f17e0000-0000-4000-8000-000000000010');
 " 'seed idempotency and opt-in progress'
-printf 'ok 10 - repeated seed and progress requests are idempotent, with progress opt-in only\n'
+printf 'ok 14 - repeated seed and progress requests are idempotent, with progress opt-in only\n'
 
 env \
   PP_ALLOW_TEST_SEED=1 \
   PP_TEST_SEED_DATABASE="$database" \
   PP_TEST_SEED_CONTAINER="$postgres_container" \
   "$seed_script" --remove >/dev/null
-assert_query '0|0|0|0|1|1|1' "
+assert_query '0|0|0|0|0|0|0|0|0|0|0|1|1|1' "
   SELECT
     (SELECT count(*) FROM stories WHERE id = 'f17e0000-0000-4000-8000-000000000010'),
+    (SELECT count(*) FROM story_versions WHERE id = 'f17e0000-0000-4000-8000-000000000011'),
+    (SELECT count(*) FROM story_sections WHERE story_version_id = 'f17e0000-0000-4000-8000-000000000011'),
+    (SELECT count(*) FROM story_segments WHERE story_version_id = 'f17e0000-0000-4000-8000-000000000011'),
     (SELECT count(*) FROM child_profiles WHERE id = 'f17e0000-0000-4000-8000-000000000001'),
     (SELECT count(*) FROM prompt_profiles WHERE id = 'f17e0000-0000-4000-8000-000000000002'),
+    (SELECT count(*) FROM works WHERE id = 'f17e0000-0000-4000-8000-000000000003'),
+    (SELECT count(*) FROM contributors WHERE id = 'f17e0000-0000-4000-8000-000000000004'),
+    (SELECT count(*) FROM generation_jobs WHERE id = 'f17e0000-0000-4000-8000-000000000040'),
     (SELECT count(*) FROM reading_progress WHERE story_id = 'f17e0000-0000-4000-8000-000000000010'),
+    (SELECT count(*) FROM story_contributors WHERE story_id = 'f17e0000-0000-4000-8000-000000000010'),
     (SELECT count(*) FROM stories WHERE id = 'a11e0000-0000-4000-8000-000000000010'),
     (SELECT count(*) FROM profile_settings WHERE profile_id = 'a11e0000-0000-4000-8000-000000000001'),
     (SELECT count(*) FROM reading_progress WHERE story_id = 'a11e0000-0000-4000-8000-000000000010');
@@ -565,7 +817,7 @@ env \
   PP_TEST_SEED_DATABASE="$database" \
   PP_TEST_SEED_CONTAINER="$postgres_container" \
   "$seed_script" --remove >/dev/null
-printf 'ok 11 - fixture removal and recreation touch only fixed test IDs and preserve unrelated data\n'
+printf 'ok 15 - fixture removal and recreation touch only fixed test IDs and preserve unrelated data\n'
 
 cleanup
 trap - EXIT HUP INT TERM
@@ -573,5 +825,5 @@ trap - EXIT HUP INT TERM
 [[ -z $(docker network ls -q --filter label=com.pandapages.disposable=fixture-migration-integration) ]]
 [[ -z $(docker volume ls -q --filter label=com.pandapages.disposable=fixture-migration-integration) ]]
 [[ ! -e "$test_root" ]]
-printf 'ok 12 - disposable containers, network, volume, credentials, and artifacts are removed\n'
+printf 'ok 16 - disposable containers, network, volume, credentials, and artifacts are removed\n'
 printf 'postgresql_fixtures_integration=passed\n'
