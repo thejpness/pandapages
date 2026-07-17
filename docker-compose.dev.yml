@@ -31,6 +31,7 @@ services:
     networks: [internal]
     labels:
       - traefik.enable=false
+      - com.pandapages.test-seed-target=local-development
 
   migrate:
     build:
