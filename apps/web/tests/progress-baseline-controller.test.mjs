@@ -34,6 +34,75 @@ async function baselineController(load) {
   return module.createProgressBaselineController({ load })
 }
 
+async function recoveryModules() {
+  const [baseline, coordinator] = await Promise.all([
+    loadTypeScript('../src/lib/progress-baseline-controller.ts'),
+    loadTypeScript('../src/lib/progress-save-coordinator.ts'),
+  ])
+  return {
+    baseline: baseline.module,
+    coordinator: coordinator.module,
+  }
+}
+
+function scrollSnapshot(scrollY, percent = scrollY / 1000) {
+  return {
+    slug: 'test-story',
+    version: 1,
+    locator: { mode: 'scroll', scrollY },
+    percent,
+  }
+}
+
+function controlledPersistence() {
+  const calls = []
+  return {
+    calls,
+    persist(snapshot, options) {
+      const gate = deferred()
+      calls.push({ snapshot, options, ...gate })
+      return gate.promise
+    },
+  }
+}
+
+function createCoordinator(module, persistence = controlledPersistence()) {
+  let nextTimer = 1
+  const timers = new Map()
+  return {
+    persistence,
+    coordinator: module.createProgressSaveCoordinator({
+      persist: persistence.persist,
+      debounceMs: 450,
+      setTimer(callback) {
+        const id = nextTimer
+        nextTimer += 1
+        timers.set(id, callback)
+        return id
+      },
+      clearTimer(id) {
+        timers.delete(id)
+      },
+    }),
+  }
+}
+
+function applyRecoveryPlan(module, coordinator, { confirmed, current }) {
+  const plan = module.planProgressBaselineCoordinatorRecovery({
+    confirmed,
+    current,
+    retriedAfterUnavailableMovement: true,
+  })
+  coordinator.initialize(plan.initialConfirmed, plan.initialDesired)
+  if (plan.updateDesired) {
+    coordinator.update(plan.updateDesired, {
+      force: plan.forceUpdate,
+      debounce: false,
+    })
+  }
+  return plan
+}
+
 async function failedReaderHarness(error = new TypeError('network unavailable')) {
   const writes = []
   let coordinator = null
@@ -271,6 +340,96 @@ test('existing server progress is not overwritten before baseline recovery', asy
   await recovery
   coordinator.update({ percent: 0.9 })
   assert.deepEqual(writes, [{ percent: 0.9 }])
+})
+
+test('retry recovery after unavailable movement does not confirm an older-version locator before PUT succeeds', async () => {
+  const { baseline, coordinator: coordinatorModule } = await recoveryModules()
+  const { coordinator, persistence } = createCoordinator(coordinatorModule)
+  const current = scrollSnapshot(860, 0.86)
+  const olderVersionProgress = {
+    version: 2,
+    locator: { mode: 'scroll', scrollY: 220 },
+    percent: 0.22,
+  }
+  const confirmed =
+    olderVersionProgress.version === current.version
+      ? scrollSnapshot(
+          olderVersionProgress.locator.scrollY,
+          olderVersionProgress.percent
+        )
+      : null
+
+  const plan = applyRecoveryPlan(baseline, coordinator, { confirmed, current })
+
+  assert.equal(confirmed, null)
+  assert.equal(plan.initialConfirmed, null)
+  assert.equal(plan.initialDesired, null)
+  assert.deepEqual(plan.updateDesired, current)
+  assert.equal(plan.forceUpdate, true)
+  assert.equal(persistence.calls.length, 0)
+
+  const dirty = coordinator.current()
+  assert.equal(dirty.status, 'dirty')
+  assert.deepEqual(dirty.confirmed, null)
+  assert.deepEqual(dirty.desired, current)
+
+  const flushed = coordinator.flush()
+  assert.equal(coordinator.current().status, 'saving')
+  assert.equal(persistence.calls.length, 1)
+  assert.deepEqual(persistence.calls[0].snapshot, current)
+  assert.equal(persistence.calls[0].snapshot.version, current.version)
+  assert.notEqual(coordinator.current().status, 'saved')
+
+  const duplicateFlush = coordinator.flush()
+  assert.equal(persistence.calls.length, 1)
+  persistence.calls[0].resolve()
+  await Promise.all([flushed, duplicateFlush])
+
+  const saved = coordinator.current()
+  assert.equal(saved.status, 'saved')
+  assert.deepEqual(saved.confirmed, current)
+  assert.deepEqual(saved.desired, current)
+})
+
+test('failed recovery PUT after older-version retry remains a truthful save error', async () => {
+  const { baseline, coordinator: coordinatorModule } = await recoveryModules()
+  const { coordinator, persistence } = createCoordinator(coordinatorModule)
+  const current = scrollSnapshot(910, 0.91)
+
+  applyRecoveryPlan(baseline, coordinator, { confirmed: null, current })
+  const flushed = coordinator.flush()
+  const saveError = Object.assign(new Error('progress update failed'), {
+    status: 503,
+  })
+  persistence.calls[0].reject(saveError)
+  await assert.rejects(flushed, (error) => error === saveError)
+
+  const state = coordinator.current()
+  assert.equal(state.status, 'error')
+  assert.deepEqual(state.confirmed, null)
+  assert.deepEqual(state.desired, current)
+  assert.equal(state.error, saveError)
+  assert.equal(persistence.calls.length, 1)
+})
+
+test('retry movement remains desired when a current-version baseline is confirmed', async () => {
+  const { baseline, coordinator: coordinatorModule } = await recoveryModules()
+  const { coordinator, persistence } = createCoordinator(coordinatorModule)
+  const confirmed = scrollSnapshot(240, 0.24)
+  const current = scrollSnapshot(760, 0.76)
+
+  applyRecoveryPlan(baseline, coordinator, { confirmed, current })
+  const dirty = coordinator.current()
+  assert.equal(dirty.status, 'dirty')
+  assert.deepEqual(dirty.confirmed, confirmed)
+  assert.deepEqual(dirty.desired, current)
+
+  const flushed = coordinator.flush()
+  assert.equal(persistence.calls.length, 1)
+  assert.deepEqual(persistence.calls[0].snapshot, current)
+  persistence.calls[0].resolve()
+  await flushed
+  assert.equal(coordinator.current().status, 'saved')
 })
 
 test('successful empty progress is a known baseline that enables first save', async () => {

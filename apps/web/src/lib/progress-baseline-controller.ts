@@ -34,6 +34,40 @@ export type ProgressBaselineControllerOptions<T> = {
   load: () => Promise<T>
 }
 
+export type ProgressBaselineCoordinatorRecoveryPlan<TSnapshot> = {
+  initialConfirmed: TSnapshot | null
+  initialDesired: TSnapshot | null
+  updateDesired: TSnapshot | null
+  forceUpdate: boolean
+}
+
+export function planProgressBaselineCoordinatorRecovery<TSnapshot>({
+  confirmed,
+  current,
+  retriedAfterUnavailableMovement,
+}: {
+  confirmed: TSnapshot | null
+  current: TSnapshot | null
+  retriedAfterUnavailableMovement: boolean
+}): ProgressBaselineCoordinatorRecoveryPlan<TSnapshot> {
+  if (retriedAfterUnavailableMovement) {
+    return {
+      initialConfirmed: confirmed,
+      initialDesired: confirmed,
+      updateDesired: current,
+      forceUpdate: current !== null,
+    }
+  }
+
+  const initial = confirmed ?? current
+  return {
+    initialConfirmed: initial,
+    initialDesired: initial,
+    updateDesired: null,
+    forceUpdate: false,
+  }
+}
+
 export function createProgressBaselineController<T>(
   options: ProgressBaselineControllerOptions<T>
 ): ProgressBaselineController<T> {

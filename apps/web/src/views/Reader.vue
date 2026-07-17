@@ -19,6 +19,7 @@ import { safeNextPath } from '../lib/session-navigation'
 import { navigationDidFail } from '../lib/session-transitions'
 import {
   createProgressBaselineController,
+  planProgressBaselineCoordinatorRecovery,
   type ProgressBaselineController,
   type ProgressBaselineState,
 } from '../lib/progress-baseline-controller'
@@ -612,16 +613,18 @@ function initializeProgressFromBaseline(
   const confirmed = progressSnapshotFromServer(progress, storySlug)
   const coordinator = createProgressCoordinator(generation, storySlug)
 
-  if (confirmed) {
-    coordinator.initialize(confirmed)
-  } else if (isRetry && movedWhileProgressUnavailable && !progress?.locator) {
-    coordinator.initialize(null)
-  } else {
-    coordinator.initialize(current)
-  }
+  const recovery = planProgressBaselineCoordinatorRecovery({
+    confirmed,
+    current,
+    retriedAfterUnavailableMovement: isRetry && movedWhileProgressUnavailable,
+  })
+  coordinator.initialize(recovery.initialConfirmed, recovery.initialDesired)
 
-  if (isRetry && movedWhileProgressUnavailable && current) {
-    coordinator.update(current)
+  if (recovery.updateDesired) {
+    coordinator.update(
+      recovery.updateDesired,
+      recovery.forceUpdate ? { force: true } : undefined
+    )
   }
   movedWhileProgressUnavailable = false
 }
