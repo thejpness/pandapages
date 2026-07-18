@@ -34,6 +34,13 @@ export default defineConfig({
         ...devices['Desktop Chrome'],
       },
     },
+    {
+      name: 'webkit-paged-core',
+      grep: /@paged-core/,
+      use: {
+        ...devices['iPhone 13'],
+      },
+    },
   ],
   webServer: {
     command: 'npm run dev -- --host 127.0.0.1 --port 4173 --strictPort',

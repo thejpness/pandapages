@@ -7,6 +7,7 @@ defineProps<{
   retryKind: 'baseline' | 'save' | null
   retryDisabled: boolean
   chaptersAvailable: boolean
+  readerReady: boolean
   settingsOpen: boolean
   chaptersOpen: boolean
   navigating: boolean
@@ -71,6 +72,7 @@ const emit = defineEmits<{
           type="button"
           aria-controls="reader-chapters-dialog"
           :aria-expanded="chaptersOpen"
+          :disabled="!readerReady"
           @click="emit('chapters')"
         >
           Chapters
@@ -81,6 +83,7 @@ const emit = defineEmits<{
           aria-label="Reading settings"
           aria-controls="reader-settings-dialog"
           :aria-expanded="settingsOpen"
+          :disabled="!readerReady"
           @click="emit('settings')"
         >
           <span aria-hidden="true">Aa</span>

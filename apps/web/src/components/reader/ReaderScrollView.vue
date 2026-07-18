@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useEventListener, useResizeObserver } from '@vueuse/core'
 import {
   captureReaderScrollPosition,
@@ -40,6 +40,8 @@ const articleRef = ref<HTMLElement | null>(null)
 const elements = new Map<number, HTMLElement>()
 let captureFrame: number | null = null
 let movementPending = false
+let programmaticRestore = false
+let disposed = false
 
 const firstSegmentIsHeading = computed(() => {
   const first = props.segments[0]
@@ -93,6 +95,7 @@ function capture(): ReaderScrollPosition | null {
 
 function publishPosition() {
   captureFrame = null
+  if (disposed) return
   const intentionalMovement = movementPending
   movementPending = false
   const position = capture()
@@ -104,14 +107,45 @@ function publishPosition() {
 }
 
 function scheduleCapture(intentionalMovement = false) {
+  if (disposed) return
   movementPending ||= intentionalMovement
   if (captureFrame !== null) return
   captureFrame = window.requestAnimationFrame(publishPosition)
 }
 
-useEventListener(window, 'scroll', () => scheduleCapture(true), { passive: true })
+useEventListener(
+  window,
+  'scroll',
+  () => scheduleCapture(!programmaticRestore),
+  { passive: true },
+)
 useEventListener(window, 'resize', scheduleCapture, { passive: true })
 useResizeObserver(articleRef, () => scheduleCapture())
+
+async function waitForWindowScrollQuiet(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    let finished = false
+    let quietTimer: number | null = null
+    const maximumTimer = window.setTimeout(complete, 500)
+
+    function complete() {
+      if (finished) return
+      finished = true
+      if (quietTimer !== null) window.clearTimeout(quietTimer)
+      window.clearTimeout(maximumTimer)
+      window.removeEventListener('scroll', onScroll)
+      resolve()
+    }
+
+    function onScroll() {
+      if (quietTimer !== null) window.clearTimeout(quietTimer)
+      quietTimer = window.setTimeout(complete, 80)
+    }
+
+    window.addEventListener('scroll', onScroll, { passive: true })
+    onScroll()
+  })
+}
 
 async function settleAt(
   element: HTMLElement,
@@ -119,6 +153,7 @@ async function settleAt(
   allowMotion: boolean,
 ): Promise<void> {
   const scroll = (behavior: ScrollBehavior) => {
+    if (disposed || !element.isConnected) return
     const rect = element.getBoundingClientRect()
     const readingLine = readerReadingLine(viewport())
     const maximumScrollTop = Math.max(
@@ -166,11 +201,20 @@ async function restore(
   const match = findReaderResumeSegment(props.segments, locator)
   if (!match) return false
   await nextTick()
+  if (disposed) return false
   const element = elements.get(match.segment.ordinal)
   if (!element) return false
-  await settleAt(element, locator.segment.offset, options.allowMotion ?? true)
-  emit('active', match.segment.ordinal)
-  return true
+  programmaticRestore = true
+  movementPending = false
+  try {
+    await settleAt(element, locator.segment.offset, options.allowMotion ?? true)
+    await waitForWindowScrollQuiet()
+    if (disposed || !element.isConnected) return false
+    emit('active', match.segment.ordinal)
+    return true
+  } finally {
+    programmaticRestore = false
+  }
 }
 
 async function moveToOrdinal(
@@ -182,7 +226,8 @@ async function moveToOrdinal(
     props.segments.find((candidate) => candidate.ordinal === ordinal) ?? null
   if (!segment) return null
   const locator = createReaderLocatorV2(segment, offset)
-  await restore(locator, options)
+  const restored = await restore(locator, options)
+  if (!restored) return null
   return {
     locator,
     percent: readerWeightedPercent(props.segments, segment.ordinal, offset),
@@ -195,7 +240,18 @@ function focusContent() {
 
 onMounted(async () => {
   await nextTick()
+  if (disposed) return
   scheduleCapture()
+})
+
+onBeforeUnmount(() => {
+  disposed = true
+  if (captureFrame !== null) {
+    window.cancelAnimationFrame(captureFrame)
+    captureFrame = null
+  }
+  movementPending = false
+  programmaticRestore = false
 })
 
 defineExpose({ capture, restore, moveToOrdinal, focusContent })

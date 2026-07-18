@@ -41,6 +41,7 @@ import { navigationDidFail } from '../lib/session-transitions'
 
 type ReaderView = {
   capture: () => ReaderCapturedPosition | null
+  whenReady?: () => Promise<void>
   restore: (
     locator: ReaderLocatorV2,
     options?: { allowMotion?: boolean },
@@ -58,6 +59,7 @@ const router = useRouter()
 const reducedMotion = usePreferredReducedMotion()
 const slug = ref(String(route.params.slug))
 const readerView = ref<ReaderView | null>(null)
+const readerInitialized = ref(false)
 const settingsOpen = ref(false)
 const chaptersOpen = ref(false)
 const activeOrdinal = ref(1)
@@ -65,6 +67,8 @@ const percent = ref(0)
 const navigationMessage = ref('')
 let preferenceGeneration = 0
 let readerGeneration = 0
+let resumeFocusPending = false
+const captureSuppressionOwners = new Set<symbol>()
 
 const {
   preferences,
@@ -100,13 +104,35 @@ const progress = useReaderProgress({
   },
 })
 
+function suppressProgressCapture(): () => void {
+  const owner = Symbol('reader-capture-suppression')
+  captureSuppressionOwners.add(owner)
+  progress.captureSuppressed.value = true
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    captureSuppressionOwners.delete(owner)
+    progress.captureSuppressed.value = captureSuppressionOwners.size > 0
+  }
+}
+
+function clearProgressCaptureSuppressions() {
+  captureSuppressionOwners.clear()
+  progress.captureSuppressed.value = false
+}
+
 const story = useReaderStory({
   onSessionEnded: moveToUnlock,
-  onReady: (loaded) => {
+  onReady: async (loaded) => {
+    const activeGeneration = readerGeneration
+    await readerView.value?.whenReady?.()
+    if (activeGeneration !== readerGeneration) return
     activeOrdinal.value = loaded.segments[0]?.ordinal ?? 1
     percent.value = captureCurrent()?.percent ?? 0
     readerView.value?.focusContent()
     progress.begin(loaded.slug, loaded.version, loaded.segments)
+    readerInitialized.value = true
   },
 })
 
@@ -125,7 +151,12 @@ const chapter = computed(() =>
 const themeClass = computed(
   () => 'reader-theme--' + preferences.value.theme,
 )
-const resumeOpen = computed(() => progress.decision.value !== null)
+const resumeOpen = computed(
+  () =>
+    progress.decision.value !== null &&
+    !settingsOpen.value &&
+    !chaptersOpen.value,
+)
 const resumeKind = computed(() => progress.decision.value?.kind ?? 'resume')
 const resumePercent = computed(() =>
   progress.decision.value?.kind === 'resume'
@@ -151,6 +182,7 @@ async function restore(locator: ReaderLocatorV2): Promise<boolean> {
     percent.value = current.percent
     activeOrdinal.value = current.locator.segment.ordinal
   }
+  if (restored) resumeFocusPending = true
   return restored ?? false
 }
 
@@ -178,14 +210,33 @@ async function applyPreferences(candidate: ReaderPreferencesV2) {
   const transition = planReaderModeTransition(captureCurrent())
   const anchor = transition.anchor?.locator ?? null
   const operation = ++preferenceGeneration
-  progress.captureSuppressed.value = true
+  const operationIsCurrent = () =>
+    operation === preferenceGeneration &&
+    activeGeneration === readerGeneration
+  const previous = preferences.value
+  const debouncePagedReflow =
+    previous.mode === 'paged' &&
+    validated.mode === 'paged' &&
+    (previous.fontFamily !== validated.fontFamily ||
+      previous.fontSize !== validated.fontSize ||
+      previous.lineHeight !== validated.lineHeight ||
+      previous.contentWidth !== validated.contentWidth)
+  const releaseCaptureSuppression = suppressProgressCapture()
   preferences.value = validated
   try {
     await nextTick()
-    if (activeGeneration !== readerGeneration) return
+    if (!operationIsCurrent()) return
+    if (debouncePagedReflow) {
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 120)
+      })
+      if (!operationIsCurrent()) return
+    }
+    await readerView.value?.whenReady?.()
+    if (!operationIsCurrent()) return
     if (anchor) {
       await readerView.value?.restore(anchor, { allowMotion: false })
-      if (activeGeneration !== readerGeneration) return
+      if (!operationIsCurrent()) return
     }
     const current = captureCurrent()
     if (current) {
@@ -193,30 +244,29 @@ async function applyPreferences(candidate: ReaderPreferencesV2) {
       activeOrdinal.value = current.locator.segment.ordinal
     }
   } finally {
-    if (
-      operation === preferenceGeneration &&
-      activeGeneration === readerGeneration
-    ) {
-      progress.captureSuppressed.value = false
-    }
+    releaseCaptureSuppression()
   }
 }
 
 function updatePreferences(candidate: ReaderPreferencesV2) {
+  if (!readerInitialized.value) return
   void applyPreferences(candidate)
 }
 
 function changeMode(mode: ReaderMode) {
+  if (!readerInitialized.value) return
   if (preferences.value.mode === mode) return
   void applyPreferences({ ...preferences.value, mode })
 }
 
 function resetPreferences() {
+  if (!readerInitialized.value) return
   const defaults = resetStoredPreferences()
   void applyPreferences(defaults)
 }
 
 async function selectChapter(selected: ReaderChapter) {
+  if (!readerInitialized.value) return
   const activeGeneration = readerGeneration
   chaptersOpen.value = false
   await nextTick()
@@ -224,7 +274,7 @@ async function selectChapter(selected: ReaderChapter) {
     window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()))
   })
   if (activeGeneration !== readerGeneration) return
-  progress.captureSuppressed.value = true
+  const releaseCaptureSuppression = suppressProgressCapture()
   try {
     const position = await readerView.value?.moveToOrdinal(
       selected.ordinal,
@@ -239,14 +289,26 @@ async function selectChapter(selected: ReaderChapter) {
       progress.announcement.value = 'Moved to ' + selected.title + '.'
     }
   } finally {
-    if (activeGeneration === readerGeneration) {
-      progress.captureSuppressed.value = false
-    }
+    releaseCaptureSuppression()
+  }
+}
+
+async function resumeCurrentVersion() {
+  const releaseCaptureSuppression = suppressProgressCapture()
+  try {
+    await progress.resume(restore)
+  } finally {
+    releaseCaptureSuppression()
   }
 }
 
 async function startCurrentVersion() {
-  await progress.startCurrentVersion(moveToBeginning)
+  const releaseCaptureSuppression = suppressProgressCapture()
+  try {
+    await progress.startCurrentVersion(moveToBeginning)
+  } finally {
+    releaseCaptureSuppression()
+  }
 }
 
 function closeResume(open: boolean) {
@@ -270,10 +332,13 @@ async function routeChanged(nextSlug: string) {
   readerGeneration += 1
   progress.pageHide()
   progress.dispose()
+  clearProgressCaptureSuppressions()
   story.dispose()
+  readerInitialized.value = false
   settingsOpen.value = false
   chaptersOpen.value = false
   navigationMessage.value = ''
+  resumeFocusPending = false
   percent.value = 0
   activeOrdinal.value = 1
   slug.value = nextSlug
@@ -296,6 +361,16 @@ watch(
   () => String(route.params.slug),
   (nextSlug) => {
     if (nextSlug !== slug.value) void routeChanged(nextSlug)
+  },
+)
+
+watch(
+  resumeOpen,
+  async (open, wasOpen) => {
+    if (open || !wasOpen || !resumeFocusPending) return
+    resumeFocusPending = false
+    await nextTick()
+    readerView.value?.focusContent()
   },
 )
 
@@ -326,6 +401,7 @@ onBeforeUnmount(() => {
   readerGeneration += 1
   progress.pageHide()
   progress.dispose()
+  clearProgressCaptureSuppressions()
   story.dispose()
   delete document.documentElement.dataset.readerTheme
   document.title = 'Panda Pages'
@@ -350,6 +426,7 @@ onBeforeUnmount(() => {
         :retry-kind="progress.retryKind.value"
         :retry-disabled="progress.retryDisabled.value"
         :chapters-available="chapters.length > 0"
+        :reader-ready="readerInitialized"
         :settings-open="settingsOpen"
         :chapters-open="chaptersOpen"
         :navigating="progress.navigatingToLibrary.value"
@@ -370,7 +447,10 @@ onBeforeUnmount(() => {
         {{ navigationMessage }}
       </p>
 
-      <main class="reader-main">
+      <main
+        class="reader-main"
+        :class="{ 'reader-main--paged': preferences.mode === 'paged' }"
+      >
         <ReaderScrollView
           v-if="preferences.mode === 'scroll'"
           ref="readerView"
@@ -399,6 +479,8 @@ onBeforeUnmount(() => {
           :line-height="preferences.lineHeight"
           :content-width="preferences.contentWidth"
           :capture-enabled="progress.captureEnabled.value"
+          :reduced-motion="reducedMotion === 'reduce'"
+          :keyboard-enabled="!settingsOpen && !chaptersOpen && !resumeOpen"
           @position="onPosition"
           @active="onActive"
         />
@@ -422,7 +504,7 @@ onBeforeUnmount(() => {
         :kind="resumeKind"
         :percent="resumePercent"
         @update:open="closeResume"
-        @resume="progress.resume(restore)"
+        @resume="resumeCurrentVersion"
         @start-over="startCurrentVersion"
         @library="progress.goLibrary"
         @dismiss="progress.dismissDecision"

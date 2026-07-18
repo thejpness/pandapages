@@ -47,6 +47,7 @@ test('Reader payload boundary accepts one coherent strict response', async () =>
   for (const invalid of [
     { ...validStory(), html: '<h1>duplicate</h1>' },
     { ...validStory(), version: 0 },
+    { ...validStory(), segments: [] },
     { ...validStory(), segments: [validSegment({ contentKey: 'BAD' })] },
     { ...validStory(), segments: [validSegment({ headingLevel: null })] },
     {

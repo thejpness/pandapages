@@ -2,11 +2,19 @@ import { AxeBuilder } from '@axe-core/playwright'
 import type { Page } from '@playwright/test'
 import {
   expect,
+  makeOversizedReaderStory,
+  makePagedReaderStory,
   progressFor,
   READER_SLUG,
   test,
 } from './support/reader-api'
-import { gotoReader } from './support/reader-page'
+import {
+  gotoReader,
+  nextReaderPage,
+  readerPageCount,
+  seedReaderPreferences,
+  waitForReaderPage,
+} from './support/reader-page'
 
 async function expectNoSeriousOrCriticalViolations(
   page: Page,
@@ -97,6 +105,52 @@ test.describe('Reader automated accessibility checks', () => {
     })
     await page.goto(`/read/${READER_SLUG}`)
     await expect(page.getByRole('heading', { name: 'Story unavailable' })).toBeVisible()
+    await expectNoSeriousOrCriticalViolations(page)
+  })
+
+  test('axe: ready paged Reader has no serious or critical violations', async ({
+    page,
+    api,
+  }) => {
+    await seedReaderPreferences(page)
+    api.setStory(makePagedReaderStory())
+    await gotoReader(page, api, READER_SLUG)
+    await expectNoSeriousOrCriticalViolations(page)
+  })
+
+  test('axe: final paged page has no serious or critical violations', async ({
+    page,
+    api,
+  }) => {
+    await seedReaderPreferences(page)
+    api.setStory(makePagedReaderStory())
+    await gotoReader(page, api, READER_SLUG)
+    await page.keyboard.press('End')
+    await waitForReaderPage(page, await readerPageCount(page))
+    await expectNoSeriousOrCriticalViolations(page)
+  })
+
+  test('axe: oversized paged content has no serious or critical violations', async ({
+    page,
+    api,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 720 })
+    await seedReaderPreferences(page)
+    api.setStory(makeOversizedReaderStory())
+    await gotoReader(page, api, READER_SLUG)
+    await nextReaderPage(page)
+    await expectNoSeriousOrCriticalViolations(page)
+  })
+
+  test('axe: Chapters dialog from paged mode has no serious or critical violations', async ({
+    page,
+    api,
+  }) => {
+    await seedReaderPreferences(page)
+    api.setStory(makePagedReaderStory())
+    await gotoReader(page, api, READER_SLUG)
+    await page.getByRole('button', { name: 'Chapters' }).click()
+    await expect(page.getByRole('dialog', { name: 'Chapters' })).toBeVisible()
     await expectNoSeriousOrCriticalViolations(page)
   })
 })
