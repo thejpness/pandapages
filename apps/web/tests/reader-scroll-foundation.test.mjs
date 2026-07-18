@@ -392,7 +392,7 @@ test('current chapter prefers server identity and falls back by ordinal', async 
   assert.equal(chaptersModule.currentReaderChapter(chapters, null), null)
 })
 
-test('transitional pages retain ordered two-segment grouping', async () => {
+test('canonical pages retain ordered content without empty pages', async () => {
   const pagesModule = await readerModule('../src/lib/reader-pages.ts')
   const segments = Array.from({ length: 7 }, (_, index) =>
     segment({
@@ -400,8 +400,14 @@ test('transitional pages retain ordered two-segment grouping', async () => {
       contentKey: String(index + 1).repeat(64),
     }),
   )
+  const metrics = {
+    fontSize: 20,
+    lineHeight: 1.65,
+    contentWidth: 720,
+    availableHeight: 640,
+  }
 
-  const pages = pagesModule.buildTransitionalReaderPages(segments)
+  const pages = pagesModule.buildReaderPages(segments, metrics)
   assert.deepEqual(
     pages.map(({ index, startOrdinal, endOrdinal, segments: pageSegments }) => ({
       index,
@@ -410,16 +416,18 @@ test('transitional pages retain ordered two-segment grouping', async () => {
       ordinals: pageSegments.map(({ ordinal }) => ordinal),
     })),
     [
-      { index: 0, startOrdinal: 1, endOrdinal: 2, ordinals: [1, 2] },
-      { index: 1, startOrdinal: 3, endOrdinal: 4, ordinals: [3, 4] },
-      { index: 2, startOrdinal: 5, endOrdinal: 6, ordinals: [5, 6] },
-      { index: 3, startOrdinal: 7, endOrdinal: 7, ordinals: [7] },
+      {
+        index: 0,
+        startOrdinal: 1,
+        endOrdinal: 7,
+        ordinals: [1, 2, 3, 4, 5, 6, 7],
+      },
     ],
   )
-  assert.equal(pagesModule.readerPageForOrdinal(pages, 4), 1)
-  assert.equal(pagesModule.readerPageForOrdinal(pages, 7), 3)
+  assert.equal(pagesModule.readerPageForOrdinal(pages, 4), 0)
+  assert.equal(pagesModule.readerPageForOrdinal(pages, 7), 0)
   assert.equal(pagesModule.readerPageForOrdinal(pages, 8), -1)
-  assert.deepEqual(pagesModule.buildTransitionalReaderPages([]), [])
+  assert.deepEqual(pagesModule.buildReaderPages([], metrics), [])
 })
 
 test('content failures distinguish a missing story from service unavailability', async () => {

@@ -275,7 +275,8 @@ export function parseReaderStoryPayload(value: unknown): ReaderStoryPayload {
     (value.author !== null && typeof value.author !== 'string') ||
     typeof value.language !== 'string' ||
     !isPositiveInteger(value.version) ||
-    !Array.isArray(value.segments)
+    !Array.isArray(value.segments) ||
+    value.segments.length === 0
   ) {
     throw new Error('Invalid Reader response')
   }

@@ -1,6 +1,44 @@
 import type { Page } from '@playwright/test'
 import { expect, type CapturedRequest, type ReaderApiMock } from './reader-api'
 
+export type ReaderPreferenceOverrides = Partial<{
+  mode: 'scroll' | 'paged'
+  theme: 'night' | 'warm'
+  fontFamily: 'book' | 'clear' | 'system'
+  fontSize: number
+  lineHeight: number
+  contentWidth: number
+}>
+
+export async function seedReaderPreferences(
+  page: Page,
+  overrides: ReaderPreferenceOverrides = {},
+): Promise<void> {
+  await page.addInitScript((preferenceOverrides) => {
+    localStorage.setItem(
+      'pp_reader_prefs_v2',
+      JSON.stringify({
+        schema: 2,
+        mode: 'paged',
+        theme: 'night',
+        fontFamily: 'book',
+        fontSize: 20,
+        lineHeight: 1.65,
+        contentWidth: 720,
+        ...preferenceOverrides,
+      }),
+    )
+  }, overrides)
+}
+
+export function pagedReader(page: Page) {
+  return page.locator('[data-reader-paged-view]')
+}
+
+export function pagedViewport(page: Page) {
+  return page.locator('.reader-paged-viewport')
+}
+
 export async function settleReaderFrames(page: Page): Promise<void> {
   await page.evaluate(
     () =>
@@ -16,7 +54,7 @@ export async function gotoReader(
   slug: string,
 ): Promise<void> {
   await page.goto(`/read/${encodeURIComponent(slug)}`)
-  await expect(page.locator('[data-reader-scroll-view], .reader-paged-story')).toBeVisible()
+  await expect(page.locator('[data-reader-scroll-view], [data-reader-paged-view][data-reader-paged-ready="true"]')).toBeVisible()
   await expect
     .poll(() => api.count('GET', `/api/v1/progress/${encodeURIComponent(slug)}`))
     .toBe(1)
@@ -126,4 +164,132 @@ export async function expectFocusTrapped(
     await page.keyboard.press('Tab')
     expect(await dialog.evaluate((element) => element.contains(document.activeElement))).toBe(true)
   }
+}
+
+export async function waitForPagedReady(page: Page): Promise<void> {
+  const reader = pagedReader(page)
+  await expect(reader).toBeVisible()
+  await expect(reader).toHaveAttribute('data-reader-paged-ready', 'true')
+  await expect(reader).toHaveAttribute('data-reader-page-count', /^[1-9]\d*$/)
+}
+
+export async function readerPageCount(page: Page): Promise<number> {
+  await waitForPagedReady(page)
+  return Number(await pagedReader(page).getAttribute('data-reader-page-count'))
+}
+
+export async function currentReaderPage(page: Page): Promise<number> {
+  await waitForPagedReady(page)
+  return Number(await pagedReader(page).getAttribute('data-reader-current-page'))
+}
+
+export async function waitForReaderPage(
+  page: Page,
+  pageNumber: number,
+): Promise<void> {
+  const reader = pagedReader(page)
+  await expect(reader).toHaveAttribute(
+    'data-reader-current-page',
+    String(pageNumber),
+  )
+  const current = reader.locator('[data-reader-page-current="true"]')
+  await expect(current).toHaveCount(1)
+  await expect(current).toHaveAttribute(
+    'data-reader-page-index',
+    String(pageNumber - 1),
+  )
+  await expect
+    .poll(() =>
+      pagedViewport(page).evaluate((viewport) => {
+        const width = Math.max(1, viewport.clientWidth)
+        const position = viewport.scrollLeft / width
+        return Math.abs(position - Math.round(position))
+      }),
+    )
+    .toBeLessThanOrEqual(0.02)
+}
+
+export async function currentPagedOrdinalRange(
+  page: Page,
+): Promise<{ start: number; end: number }> {
+  const current = pagedReader(page).locator('[data-reader-page-current="true"]')
+  await expect(current).toHaveCount(1)
+  return {
+    start: Number(await current.getAttribute('data-reader-page-start-ordinal')),
+    end: Number(await current.getAttribute('data-reader-page-end-ordinal')),
+  }
+}
+
+export async function expectCurrentPageContainsOrdinal(
+  page: Page,
+  ordinal: number,
+): Promise<void> {
+  await expect
+    .poll(async () => {
+      const range = await currentPagedOrdinalRange(page)
+      return ordinal >= range.start && ordinal <= range.end
+    })
+    .toBe(true)
+}
+
+export async function nextReaderPage(page: Page): Promise<number> {
+  const current = await currentReaderPage(page)
+  await page.getByRole('button', { name: 'Next page' }).click()
+  await waitForReaderPage(page, current + 1)
+  return current + 1
+}
+
+export async function previousReaderPage(page: Page): Promise<number> {
+  const current = await currentReaderPage(page)
+  await page.getByRole('button', { name: 'Previous page' }).click()
+  await waitForReaderPage(page, current - 1)
+  return current - 1
+}
+
+export async function scrollPagedViewportTo(
+  page: Page,
+  pageNumber: number,
+): Promise<void> {
+  await pagedViewport(page).evaluate((viewport, targetPage) => {
+    viewport.scrollTo({
+      left: (Number(targetPage) - 1) * viewport.clientWidth,
+      behavior: 'auto',
+    })
+  }, pageNumber)
+  await waitForReaderPage(page, pageNumber)
+}
+
+export async function wheelPagedViewport(
+  page: Page,
+  direction: 1 | -1,
+): Promise<void> {
+  const viewport = pagedViewport(page)
+  await viewport.hover()
+  const width = await viewport.evaluate((element) => element.clientWidth)
+  await page.mouse.wheel(direction * width, 0)
+}
+
+export async function scrollOversizedPageTo(
+  page: Page,
+  offset: number,
+): Promise<void> {
+  const current = pagedReader(page).locator(
+    '[data-reader-page-current="true"][data-reader-page-oversized="true"]',
+  )
+  await expect(current).toHaveCount(1)
+  await current.evaluate((element, targetOffset) => {
+    const maximum = Math.max(0, element.scrollHeight - element.clientHeight)
+    element.scrollTo({
+      top: maximum * Math.max(0, Math.min(1, Number(targetOffset))),
+      behavior: 'auto',
+    })
+  }, offset)
+  await expect
+    .poll(() =>
+      current.evaluate((element) => {
+        const maximum = Math.max(0, element.scrollHeight - element.clientHeight)
+        return maximum > 0 ? element.scrollTop / maximum : 0
+      }),
+    )
+    .toBeCloseTo(offset, 1)
 }

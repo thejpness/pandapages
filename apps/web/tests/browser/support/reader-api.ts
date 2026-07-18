@@ -555,3 +555,204 @@ export const test = base.extend<{ api: ReaderApiMock }>({
 })
 
 export { expect }
+function fixtureKey(seed: number): string {
+  return Math.max(0, Math.trunc(seed)).toString(16).padStart(64, '0')
+}
+
+export function makePagedReaderStory(
+  overrides: Partial<Pick<ReaderStoryFixture, 'slug' | 'title' | 'author' | 'language' | 'version'>> = {},
+): ReaderStoryFixture {
+  const title = overrides.title ?? 'TEST ONLY — Paged Moonlight'
+  const repeatedChapterKey = fixtureKey(900)
+  const finalChapterKey = fixtureKey(901)
+  const paragraph = repeated(
+    'Pöndá reads a calm moonlit sentence beside the harbour. 🐼',
+    6,
+  )
+
+  return {
+    slug: overrides.slug ?? READER_SLUG,
+    title,
+    author: overrides.author ?? 'Panda Pages Test Fixture',
+    language: overrides.language ?? 'en-GB',
+    version: overrides.version ?? 1,
+    segments: [
+      {
+        ordinal: 1,
+        kind: 'heading',
+        headingLevel: 1,
+        contentKey: fixtureKey(1),
+        contentOccurrence: 1,
+        chapterKey: null,
+        chapterOccurrence: null,
+        renderedHtml: '<h1>' + escapeHtml(title) + '</h1>',
+        wordCount: words(title),
+      },
+      {
+        ordinal: 2,
+        kind: 'paragraph',
+        headingLevel: null,
+        contentKey: fixtureKey(2),
+        contentOccurrence: 1,
+        chapterKey: null,
+        chapterOccurrence: null,
+        renderedHtml: '<p>' + paragraph + '</p>',
+        wordCount: words(paragraph),
+      },
+      {
+        ordinal: 3,
+        kind: 'heading',
+        headingLevel: 2,
+        contentKey: repeatedChapterKey,
+        contentOccurrence: 1,
+        chapterKey: repeatedChapterKey,
+        chapterOccurrence: 1,
+        renderedHtml: '<h2>Moonlit Return</h2>',
+        wordCount: 2,
+      },
+      {
+        ordinal: 4,
+        kind: 'paragraph',
+        headingLevel: null,
+        contentKey: fixtureKey(4),
+        contentOccurrence: 1,
+        chapterKey: repeatedChapterKey,
+        chapterOccurrence: 1,
+        renderedHtml: '<p>' + paragraph + ' First occurrence.</p>',
+        wordCount: words(paragraph) + 2,
+      },
+      {
+        ordinal: 5,
+        kind: 'paragraph',
+        headingLevel: null,
+        contentKey: fixtureKey(5),
+        contentOccurrence: 1,
+        chapterKey: repeatedChapterKey,
+        chapterOccurrence: 1,
+        renderedHtml: '<p>' + paragraph + ' A link remains <a href="/library">keyboard accessible</a>.</p>',
+        wordCount: words(paragraph) + 6,
+      },
+      {
+        ordinal: 6,
+        kind: 'heading',
+        headingLevel: 2,
+        contentKey: repeatedChapterKey,
+        contentOccurrence: 2,
+        chapterKey: repeatedChapterKey,
+        chapterOccurrence: 2,
+        renderedHtml: '<h2>Moonlit Return</h2>',
+        wordCount: 2,
+      },
+      {
+        ordinal: 7,
+        kind: 'paragraph',
+        headingLevel: null,
+        contentKey: fixtureKey(7),
+        contentOccurrence: 1,
+        chapterKey: repeatedChapterKey,
+        chapterOccurrence: 2,
+        renderedHtml: '<p>' + paragraph + ' Second occurrence.</p>',
+        wordCount: words(paragraph) + 2,
+      },
+      {
+        ordinal: 8,
+        kind: 'paragraph',
+        headingLevel: null,
+        contentKey: fixtureKey(8),
+        contentOccurrence: 1,
+        chapterKey: repeatedChapterKey,
+        chapterOccurrence: 2,
+        renderedHtml: '<p>' + paragraph + ' UTF-8 世界 and café.</p>',
+        wordCount: words(paragraph) + 4,
+      },
+      {
+        ordinal: 9,
+        kind: 'heading',
+        headingLevel: 2,
+        contentKey: finalChapterKey,
+        contentOccurrence: 1,
+        chapterKey: finalChapterKey,
+        chapterOccurrence: 1,
+        renderedHtml: '<h2>Home Again</h2>',
+        wordCount: 2,
+      },
+      {
+        ordinal: 10,
+        kind: 'paragraph',
+        headingLevel: null,
+        contentKey: fixtureKey(10),
+        contentOccurrence: 1,
+        chapterKey: finalChapterKey,
+        chapterOccurrence: 1,
+        renderedHtml: '<p>' + paragraph + ' The end.</p>',
+        wordCount: words(paragraph) + 2,
+      },
+    ],
+  }
+}
+
+export function makeOversizedReaderStory(
+  overrides: Partial<Pick<ReaderStoryFixture, 'slug' | 'title' | 'author' | 'language' | 'version'>> = {},
+): ReaderStoryFixture {
+  const title = overrides.title ?? 'TEST ONLY — Oversized Page'
+  const chapterKey = fixtureKey(950)
+  const longParagraph = repeated(
+    'A very long moonlit paragraph remains readable without clipping or splitting.',
+    140,
+  )
+  const ending = repeated('The harbour settles after the long reading passage.', 4)
+
+  return {
+    slug: overrides.slug ?? READER_SLUG,
+    title,
+    author: overrides.author ?? 'Panda Pages Test Fixture',
+    language: overrides.language ?? 'en-GB',
+    version: overrides.version ?? 1,
+    segments: [
+      {
+        ordinal: 1,
+        kind: 'heading',
+        headingLevel: 1,
+        contentKey: fixtureKey(951),
+        contentOccurrence: 1,
+        chapterKey: null,
+        chapterOccurrence: null,
+        renderedHtml: '<h1>' + escapeHtml(title) + '</h1>',
+        wordCount: words(title),
+      },
+      {
+        ordinal: 2,
+        kind: 'paragraph',
+        headingLevel: null,
+        contentKey: fixtureKey(952),
+        contentOccurrence: 1,
+        chapterKey: null,
+        chapterOccurrence: null,
+        renderedHtml: '<p>' + longParagraph + '</p>',
+        wordCount: words(longParagraph),
+      },
+      {
+        ordinal: 3,
+        kind: 'heading',
+        headingLevel: 2,
+        contentKey: chapterKey,
+        contentOccurrence: 1,
+        chapterKey,
+        chapterOccurrence: 1,
+        renderedHtml: '<h2>After the Long Page</h2>',
+        wordCount: 4,
+      },
+      {
+        ordinal: 4,
+        kind: 'paragraph',
+        headingLevel: null,
+        contentKey: fixtureKey(954),
+        contentOccurrence: 1,
+        chapterKey,
+        chapterOccurrence: 1,
+        renderedHtml: '<p>' + ending + '</p>',
+        wordCount: words(ending),
+      },
+    ],
+  }
+}

@@ -11,7 +11,7 @@ import {
   expectSegmentAtReadingLine,
   gotoReader,
   scrollToSegment,
-  settleReaderFrames,
+  scrollPagedViewportTo,
 } from './support/reader-page'
 
 const serverError = {
@@ -245,7 +245,7 @@ test.describe('Reader progress decisions and persistence', () => {
     expect(behaviors).toContain('auto')
   })
 
-  test('scenario 27: transitional paged mode loads coherently and emits no Reader 1 locator', async ({
+  test('scenario 27: paged mode loads coherently and emits no Reader 1 locator', async ({
     page,
     api,
   }) => {
@@ -267,14 +267,14 @@ test.describe('Reader progress decisions and persistence', () => {
     await gotoReader(page, api, READER_SLUG)
     const paged = page.locator('.reader-paged-view')
     await expect(paged).toBeVisible()
+    const expectedOrdinal = Number(
+      await page.locator('[data-reader-page-index="1"]')
+        .getAttribute('data-reader-page-start-ordinal'),
+    )
 
-    await paged.evaluate((element) => {
-      element.scrollTo({ left: element.clientWidth, behavior: 'auto' })
-      element.dispatchEvent(new Event('scroll'))
-    })
-    await settleReaderFrames(page)
+    await scrollPagedViewportTo(page, 2)
     const request = await put.started
-    expectLocatorV2Request(request, { ordinal: 3 })
+    expectLocatorV2Request(request, { ordinal: expectedOrdinal })
     put.fulfill({ ok: true })
     expect(api.count('GET', `/api/v1/reader/${READER_SLUG}`)).toBe(1)
   })
