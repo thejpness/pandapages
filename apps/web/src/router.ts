@@ -12,14 +12,7 @@ import {
 export const router = createRouter({
   history: createWebHistory(),
   routes: [
-    {
-      path: '/',
-      component: () => import('./views/LandingPage.vue'),
-      props: {
-        storiesHref: '/library',
-        storyBaseHref: '/read',
-      },
-    },
+    { path: '/', redirect: '/library' },
 
     { path: '/unlock', component: Unlock },
     {
@@ -27,22 +20,9 @@ export const router = createRouter({
       component: () => import('./views/SessionUnavailable.vue'),
     },
 
-    {
-      path: '/library',
-      component: Library,
-      meta: { requiresUnlock: true },
-    },
-    {
-      path: '/read/:slug',
-      component: () => import('./views/Reader.vue'),
-      props: true,
-      meta: { requiresUnlock: true },
-    },
-    {
-      path: '/journey',
-      component: () => import('./views/Journey.vue'),
-      meta: { requiresUnlock: true },
-    },
+    { path: '/library', component: Library, meta: { requiresUnlock: true } },
+    { path: '/read/:slug', component: () => import('./views/Reader.vue'), props: true, meta: { requiresUnlock: true } },
+    { path: '/journey', component: () => import('./views/Journey.vue'), meta: { requiresUnlock: true } },
 
     {
       path: '/admin',
@@ -50,14 +30,8 @@ export const router = createRouter({
       meta: { requiresUnlock: true },
       children: [
         { path: '', redirect: { path: 'upload' } },
-        {
-          path: 'upload',
-          component: () => import('./views/admin/AdminUpload.vue'),
-        },
-        {
-          path: 'ai',
-          component: () => import('./views/admin/AdminAI.vue'),
-        },
+        { path: 'upload', component: () => import('./views/admin/AdminUpload.vue') },
+        { path: 'ai', component: () => import('./views/admin/AdminAI.vue') },
       ],
     },
   ],
@@ -68,15 +42,14 @@ export const router = createRouter({
 router.beforeEach(async (to) => {
   if (to.path === '/session-unavailable') return true
 
-  const requires = to.matched.some((route) => route.meta.requiresUnlock)
+  const requires = to.matched.some((r) => r.meta.requiresUnlock)
 
-  // If already unlocked, there is no need to remain on /unlock.
+  // If you're already unlocked, no need to sit on /unlock
   if (to.path === '/unlock') {
     const state = await authState.verify()
     return unlockRouteDecision(state, to.query.next)
   }
 
-  // Public routes, including the landing page.
   if (!requires) return true
 
   const state = await authState.verify()
