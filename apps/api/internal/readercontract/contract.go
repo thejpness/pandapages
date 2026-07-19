@@ -39,6 +39,20 @@ type SegmentIdentity struct {
 	ChapterOccurrence *int
 }
 
+// StoredSegmentIdentity is the immutable Reader 2 identity persisted for a
+// published segment. It intentionally excludes rendered content: callers can
+// validate ordering, occurrences, and chapter propagation without taking
+// ownership of Reader rendering or locator policy.
+type StoredSegmentIdentity struct {
+	Ordinal           int
+	Kind              SegmentKind
+	HeadingLevel      *int
+	ContentKey        string
+	ContentOccurrence int
+	ChapterKey        *string
+	ChapterOccurrence *int
+}
+
 type Locator struct {
 	Schema  int             `json:"schema"`
 	Segment LocatorSegment  `json:"segment"`
@@ -129,6 +143,62 @@ func AssignSegmentIdentities(inputs []SegmentIdentityInput) ([]SegmentIdentity, 
 	}
 
 	return identities, nil
+}
+
+// ValidateStoredSegmentIdentities verifies that a stored version still obeys
+// the sequence contract produced by AssignSegmentIdentities. Content keys
+// cannot be recomputed without loading private Markdown, so this checks their
+// canonical shape and version-scoped occurrence/chapter relationships.
+func ValidateStoredSegmentIdentities(segments []StoredSegmentIdentity) (int, error) {
+	contentOccurrences := make(map[string]int)
+	chapterOccurrences := make(map[string]int)
+	var currentChapterKey *string
+	var currentChapterOccurrence *int
+	chapterCount := 0
+
+	for index, segment := range segments {
+		if segment.Ordinal != index+1 {
+			return 0, fmt.Errorf("segment %d: ordinal must be contiguous from 1", index+1)
+		}
+		headingLevel, err := validateIdentityInput(SegmentIdentityInput{
+			Kind:         segment.Kind,
+			HeadingLevel: segment.HeadingLevel,
+		})
+		if err != nil {
+			return 0, fmt.Errorf("segment %d: %w", index+1, err)
+		}
+		if !ValidContentKey(segment.ContentKey) {
+			return 0, fmt.Errorf("segment %d: content key must be lowercase SHA-256 hex", index+1)
+		}
+
+		contentOccurrences[segment.ContentKey]++
+		if segment.ContentOccurrence != contentOccurrences[segment.ContentKey] {
+			return 0, fmt.Errorf("segment %d: content occurrence is not sequential", index+1)
+		}
+
+		if segment.Kind == SegmentKindHeading && headingLevel == 2 {
+			chapterOccurrences[segment.ContentKey]++
+			chapterKey := segment.ContentKey
+			chapterOccurrence := chapterOccurrences[segment.ContentKey]
+			currentChapterKey = &chapterKey
+			currentChapterOccurrence = &chapterOccurrence
+			chapterCount++
+		}
+
+		if currentChapterKey == nil {
+			if segment.ChapterKey != nil || segment.ChapterOccurrence != nil {
+				return 0, fmt.Errorf("segment %d: chapter identity exists before the first H2", index+1)
+			}
+			continue
+		}
+		if segment.ChapterKey == nil || segment.ChapterOccurrence == nil ||
+			*segment.ChapterKey != *currentChapterKey ||
+			*segment.ChapterOccurrence != *currentChapterOccurrence {
+			return 0, fmt.Errorf("segment %d: chapter identity does not match the current H2", index+1)
+		}
+	}
+
+	return chapterCount, nil
 }
 
 func ValidContentKey(key string) bool {

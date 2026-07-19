@@ -17,6 +17,14 @@ type StoryItem struct {
 	Progress         *LibraryProgressSummary `json:"progress"`
 }
 
+// LibraryReadModel is the account-scoped bookshelf response. Items that cannot
+// be represented safely from their immutable published version are omitted and
+// counted without exposing their metadata or internal identifiers.
+type LibraryReadModel struct {
+	Items                []StoryItem `json:"items"`
+	UnavailableItemCount int64       `json:"unavailableItemCount"`
+}
+
 type LibraryProgressSummary struct {
 	Version          int       `json:"version"`
 	Percent          float64   `json:"percent"`

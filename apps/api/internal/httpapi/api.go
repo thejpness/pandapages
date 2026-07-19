@@ -28,7 +28,7 @@ type Store interface {
 	EnsureDefaultAccount() (string, error)
 	AccountExists(accountID string) (bool, error)
 
-	Library(accountID string) ([]model.StoryItem, error)
+	Library(accountID string) (model.LibraryReadModel, error)
 	ReaderStory(accountID, slug string) (model.ReaderStory, error)
 
 	ProgressGet(accountID, slug string) (model.ProgressResponse, error)
@@ -156,14 +156,14 @@ func New(cfg Config, store Store) http.Handler {
 			return
 		}
 
-		items, err := store.Library(accountID)
+		library, err := store.Library(accountID)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, "db", "library query failed")
 			return
 		}
 
 		noStore(w)
-		writeJSON(w, http.StatusOK, map[string]any{"items": items})
+		writeJSON(w, http.StatusOK, library)
 	}))
 
 	// Reader 2: one coherent published-version payload.

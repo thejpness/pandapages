@@ -11,13 +11,26 @@ readonly postgres_image='postgres:18.1-alpine@sha256:b40d931bd0e7ce6eecc59a5a6ac
 readonly database=pandapages
 readonly database_user=pandapages
 readonly database_password='generated-fixture-password-not-for-production'
-readonly resource_prefix="pandapages-fixture-integration-$$"
+resource_suffix=${PP_FIXTURE_TEST_RESOURCE_SUFFIX:-$$}
+[[ "$resource_suffix" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$ ]] || {
+  printf 'Fixture integration resource suffix is invalid\n' >&2
+  exit 1
+}
+readonly resource_prefix="pandapages-fixture-integration-$resource_suffix"
 readonly postgres_container="$resource_prefix-postgres"
 readonly api_container="$resource_prefix-api"
 readonly network="$resource_prefix-network"
 readonly volume="$resource_prefix-data"
+readonly run_label="com.pandapages.fixture-run=$resource_prefix"
+controlled_goose_failure_status=${PP_FIXTURE_TEST_CONTROLLED_GOOSE_FAILURE_STATUS:-}
 
-for command_name in curl docker grep mktemp sed; do
+if [[ -n "$controlled_goose_failure_status" ]] &&
+  [[ ! "$controlled_goose_failure_status" =~ ^([1-9]|[1-9][0-9]|1[01][0-9]|12[0-5])$ ]]; then
+  printf 'Controlled Goose failure status must be between 1 and 125\n' >&2
+  exit 1
+fi
+
+for command_name in curl docker grep mktemp sed tail; do
   command -v "$command_name" >/dev/null 2>&1 || {
     printf 'Required command is unavailable: %s\n' "$command_name" >&2
     exit 1
@@ -49,43 +62,132 @@ for image in "$migration_image" "$api_image"; do
 done
 
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/pandapages-fixture-integration.XXXXXX")
-postgres_created=false
-api_created=false
-network_created=false
-volume_created=false
+goose_container=''
+goose_run_count=0
+failure_line=''
+failure_signal=''
 
 cleanup() {
-  set +e
-  if $api_created; then
-    docker rm --force "$api_container" >/dev/null 2>&1
-    api_created=false
+  local cleanup_failed=0
+
+  if [[ -n "$goose_container" ]]; then
+    if docker container inspect "$goose_container" >/dev/null 2>&1; then
+      if ! docker rm --force "$goose_container" >/dev/null 2>&1; then
+        printf 'Failed to remove disposable fixture migration container\n' >&2
+        cleanup_failed=1
+      fi
+    fi
+    goose_container=''
   fi
-  if $postgres_created; then
-    docker rm --force "$postgres_container" >/dev/null 2>&1
-    postgres_created=false
+  if docker container inspect "$api_container" >/dev/null 2>&1; then
+    if ! docker rm --force "$api_container" >/dev/null 2>&1; then
+      printf 'Failed to remove disposable fixture API container\n' >&2
+      cleanup_failed=1
+    fi
   fi
-  if $network_created; then
-    docker network rm "$network" >/dev/null 2>&1
-    network_created=false
+  if docker container inspect "$postgres_container" >/dev/null 2>&1; then
+    if ! docker rm --force "$postgres_container" >/dev/null 2>&1; then
+      printf 'Failed to remove disposable fixture PostgreSQL container\n' >&2
+      cleanup_failed=1
+    fi
   fi
-  if $volume_created; then
-    docker volume rm "$volume" >/dev/null 2>&1
-    volume_created=false
+  if docker network inspect "$network" >/dev/null 2>&1; then
+    if ! docker network rm "$network" >/dev/null 2>&1; then
+      printf 'Failed to remove disposable fixture network\n' >&2
+      cleanup_failed=1
+    fi
   fi
-  rm -rf -- "$test_root"
+  if docker volume inspect "$volume" >/dev/null 2>&1; then
+    if ! docker volume rm "$volume" >/dev/null 2>&1; then
+      printf 'Failed to remove disposable fixture volume\n' >&2
+      cleanup_failed=1
+    fi
+  fi
+  if [[ -e "$test_root" ]] && ! rm -rf -- "$test_root"; then
+    printf 'Failed to remove disposable fixture test artifacts\n' >&2
+    cleanup_failed=1
+  fi
+  return "$cleanup_failed"
 }
-trap cleanup EXIT HUP INT TERM
-trap 'printf "Fixture integration failed at line %d\n" "$LINENO" >&2' ERR
+
+redact_diagnostics() {
+  sed -E \
+    -e "s/$database_password/[redacted]/g" \
+    -e 's#postgres://[^[:space:]]+#[redacted-database-url]#g'
+}
+
+print_failure_diagnostics() {
+  local status=$1
+  local log_file
+
+  if [[ -n "$failure_signal" ]]; then
+    printf 'Fixture integration interrupted by %s (status %d)\n' "$failure_signal" "$status" >&2
+  elif [[ -n "$failure_line" ]]; then
+    printf 'Fixture integration failed at line %s (status %d)\n' "$failure_line" "$status" >&2
+  else
+    printf 'Fixture integration failed (status %d)\n' "$status" >&2
+  fi
+
+  for log_file in "$test_root"/*-goose.err "$test_root"/*-goose.out; do
+    [[ -s "$log_file" ]] || continue
+    printf '%s\n' "--- ${log_file##*/} (last 80 lines, redacted) ---" >&2
+    tail -n 80 "$log_file" | redact_diagnostics >&2
+  done
+
+  if docker container inspect "$api_container" >/dev/null 2>&1; then
+    printf '%s\n' '--- fixture API logs (last 80 lines, redacted) ---' >&2
+    docker logs --tail 80 "$api_container" 2>&1 | redact_diagnostics >&2 || true
+  fi
+  if docker container inspect "$postgres_container" >/dev/null 2>&1; then
+    printf '%s\n' '--- fixture PostgreSQL logs (last 80 lines, redacted) ---' >&2
+    docker logs --tail 80 "$postgres_container" 2>&1 | redact_diagnostics >&2 || true
+  fi
+}
+
+record_failure() {
+  failure_line=$1
+}
+
+on_exit() {
+  local status=$?
+  local cleanup_status=0
+
+  trap - EXIT ERR HUP INT TERM
+  if ((status != 0)); then
+    if ! print_failure_diagnostics "$status"; then
+      printf 'Fixture integration diagnostics were incomplete\n' >&2
+    fi
+  fi
+  cleanup || cleanup_status=$?
+  if ((cleanup_status != 0)); then
+    printf 'Fixture integration cleanup was incomplete\n' >&2
+    if ((status == 0)); then
+      status=$cleanup_status
+    fi
+  fi
+  exit "$status"
+}
+
+on_signal() {
+  failure_signal=$1
+  exit "$2"
+}
+
+trap on_exit EXIT
+trap 'record_failure "$LINENO"' ERR
+trap 'on_signal HUP 129' HUP
+trap 'on_signal INT 130' INT
+trap 'on_signal TERM 143' TERM
 
 docker network create \
   --label com.pandapages.disposable=fixture-migration-integration \
+  --label "$run_label" \
   "$network" >/dev/null
-network_created=true
 
 docker volume create \
   --label com.pandapages.disposable=fixture-migration-integration \
+  --label "$run_label" \
   "$volume" >/dev/null
-volume_created=true
 
 docker run --detach \
   --name "$postgres_container" \
@@ -95,6 +197,7 @@ docker run --detach \
   --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
   --tmpfs /var/run/postgresql:rw,nosuid,nodev,noexec,size=16m \
   --label com.pandapages.disposable=fixture-migration-integration \
+  --label "$run_label" \
   --label com.pandapages.test-seed-target=disposable-fixture-integration \
   --env POSTGRES_DB="$database" \
   --env POSTGRES_USER="$database_user" \
@@ -105,7 +208,6 @@ docker run --detach \
   --health-timeout 3s \
   --health-retries 60 \
   "$postgres_image" >/dev/null
-postgres_created=true
 
 health=starting
 for ((attempt = 0; attempt < 60; attempt++)); do
@@ -142,16 +244,35 @@ assert_query() {
 }
 
 run_goose() {
-  docker run --rm \
+  local status
+
+  if [[ -n "$controlled_goose_failure_status" ]]; then
+    printf 'Controlled fixture migration failure for harness regression (status %s)\n' \
+      "$controlled_goose_failure_status" >&2
+    return "$controlled_goose_failure_status"
+  fi
+
+  ((goose_run_count += 1))
+  goose_container="$resource_prefix-goose-$goose_run_count"
+  if docker run --rm \
+    --name "$goose_container" \
     --network "$network" \
     --read-only \
     --security-opt no-new-privileges \
     --tmpfs /tmp:rw,nosuid,nodev,noexec,size=16m \
+    --label com.pandapages.disposable=fixture-migration-integration \
+    --label "$run_label" \
     --env GOOSE_DRIVER=postgres \
     --env "GOOSE_DBSTRING=postgres://$database_user:$database_password@$postgres_container:5432/$database?sslmode=disable" \
     --env GOOSE_MIGRATION_DIR=/migrations \
     --mount "type=bind,src=$repo_root/apps/api/migrations,dst=/migrations,readonly" \
-    "$migration_image" "$@"
+    "$migration_image" "$@"; then
+    goose_container=''
+    return 0
+  else
+    status=$?
+    return "$status"
+  fi
 }
 
 reset_database() {
@@ -167,7 +288,7 @@ expect_seed_failure() {
   fi
 }
 
-printf '1..17\n'
+printf '1..18\n'
 
 run_goose up >"$test_root/fresh-goose.out" 2>"$test_root/fresh-goose.err"
 grep -q 'OK.*00014_reader_2_contract.sql' \
@@ -715,16 +836,16 @@ docker run --detach \
   --security-opt no-new-privileges \
   --tmpfs /tmp:rw,nosuid,nodev,noexec,size=16m \
   --label com.pandapages.disposable=fixture-migration-integration \
+  --label "$run_label" \
   --env-file "$api_environment" \
   --publish 127.0.0.1:0:8080 \
   "$api_image" >/dev/null
-api_created=true
 
 api_status=$(docker inspect --format '{{.State.Status}}' "$api_container")
 [[ "$api_status" == running ]] || {
   printf 'Fixture API exited during startup\n' >&2
   docker logs "$api_container" 2>&1 \
-    | sed "s/$database_password/[redacted]/g" >&2
+    | redact_diagnostics >&2
   exit 1
 }
 
@@ -767,7 +888,6 @@ fi
 printf 'ok 14 - the signed-session coherent Reader endpoint returns six UTF-8 segments without internal content\n'
 
 docker rm --force "$api_container" >/dev/null
-api_created=false
 
 env \
   PP_ALLOW_TEST_SEED=1 \
@@ -830,11 +950,52 @@ env \
   "$seed_script" --remove >/dev/null
 printf 'ok 16 - fixture removal and recreation touch only fixed test IDs and preserve unrelated data\n'
 
+controlled_root="$test_root/controlled-failure"
+controlled_stdout="$controlled_root/stdout"
+controlled_stderr="$controlled_root/stderr"
+controlled_suffix="$$-controlled"
+controlled_prefix="pandapages-fixture-integration-$controlled_suffix"
+controlled_label="com.pandapages.fixture-run=$controlled_prefix"
+mkdir -p "$controlled_root"
+
+PP_FIXTURE_TEST_RESOURCE_SUFFIX="$controlled_suffix" \
+PP_FIXTURE_TEST_CONTROLLED_GOOSE_FAILURE_STATUS=37 \
+TMPDIR="$controlled_root" \
+  "${BASH_SOURCE[0]}" >"$controlled_stdout" 2>"$controlled_stderr" &
+controlled_pid=$!
+if wait "$controlled_pid"; then
+  controlled_status=0
+else
+  controlled_status=$?
+fi
+
+[[ "$controlled_status" == 37 ]] || {
+  printf 'Controlled fixture migration failure status = %s, want 37\n' "$controlled_status" >&2
+  exit 1
+}
+grep -q '^1\.\.18$' "$controlled_stdout"
+grep -q 'Fixture integration failed at line .* (status 37)' "$controlled_stderr"
+grep -q 'fresh-goose.err .*redacted' "$controlled_stderr"
+grep -q 'Controlled fixture migration failure for harness regression (status 37)' "$controlled_stderr"
+if grep -Fq "$database_password" "$controlled_stdout" "$controlled_stderr" ||
+  grep -Eq 'postgres://[^[:space:]]+' "$controlled_stdout" "$controlled_stderr"; then
+  printf 'Controlled fixture diagnostics exposed credentials or a database URL\n' >&2
+  exit 1
+fi
+[[ -z $(docker ps -aq --filter "label=$controlled_label") ]]
+[[ -z $(docker network ls -q --filter "label=$controlled_label") ]]
+[[ -z $(docker volume ls -q --filter "label=$controlled_label") ]]
+if compgen -G "$controlled_root/pandapages-fixture-integration.*" >/dev/null; then
+  printf 'Controlled fixture migration left temporary artifacts behind\n' >&2
+  exit 1
+fi
+printf 'ok 17 - controlled migration failure preserves status, emits redacted diagnostics, and leaves no resources or artifacts\n'
+
 cleanup
-trap - EXIT HUP INT TERM
-[[ -z $(docker ps -aq --filter label=com.pandapages.disposable=fixture-migration-integration) ]]
-[[ -z $(docker network ls -q --filter label=com.pandapages.disposable=fixture-migration-integration) ]]
-[[ -z $(docker volume ls -q --filter label=com.pandapages.disposable=fixture-migration-integration) ]]
+trap - EXIT ERR HUP INT TERM
+[[ -z $(docker ps -aq --filter "label=$run_label") ]]
+[[ -z $(docker network ls -q --filter "label=$run_label") ]]
+[[ -z $(docker volume ls -q --filter "label=$run_label") ]]
 [[ ! -e "$test_root" ]]
-printf 'ok 17 - disposable containers, network, volume, credentials, and artifacts are removed\n'
+printf 'ok 18 - disposable containers, network, volume, credentials, and artifacts are removed\n'
 printf 'postgresql_fixtures_integration=passed\n'

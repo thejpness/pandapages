@@ -58,6 +58,9 @@ test('story action and progress labels remain truthful at every progress boundar
     [null, 'Read', 'Not started'],
     [progress({ percent: 0.01 }), 'Read', 'At the beginning'],
     [progress({ percent: 0.424 }), 'Continue at 42%', '42% read'],
+    [progress({ percent: 0.975 }), 'Continue at 97%', '97% read'],
+    [progress({ percent: 0.979 }), 'Continue at 97%', '97% read'],
+    [progress({ percent: 0.98 }), 'Read again', 'Finished'],
     [progress({ percent: 0.99 }), 'Read again', 'Finished'],
     [
       progress({ version: 1, isCurrentVersion: false }),
@@ -80,6 +83,9 @@ test('story action and progress labels remain truthful at every progress boundar
   })
   assert.equal(module.libraryActionLabel(unavailable), 'Read')
   assert.equal(module.libraryProgressLabel(unavailable), 'Progress unavailable')
+  assert.equal(module.libraryDisplayPercent(progress({ percent: 0.975 })), 97)
+  assert.equal(module.libraryDisplayPercent(progress({ percent: 0.979 })), 97)
+  assert.equal(module.libraryDisplayPercent(progress({ percent: 0.98 })), 98)
 })
 
 test('cover presentation is stable, CSS-ready, and never uses random selection', async () => {

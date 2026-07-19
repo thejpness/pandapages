@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import LibraryAppHeader from '../components/library/LibraryAppHeader.vue'
 import ContinueReadingHero from '../components/library/ContinueReadingHero.vue'
 import BookshelfGrid from '../components/library/BookshelfGrid.vue'
@@ -39,6 +39,7 @@ const headerRef = ref<HeaderExpose | null>(null)
 const stories = ref<LibraryStory[]>([])
 const loading = ref(true)
 const loadError = ref<LoadErrorKind>(null)
+const unavailableItemCount = ref(0)
 const sessionLeaving = ref(false)
 const locking = ref(false)
 const lockError = ref('')
@@ -49,6 +50,7 @@ const q = ref('')
 const sort = ref<LibrarySort>('title')
 let sortWasChosen = false
 let queryTimer: number | null = null
+let queryGeneration = 0
 let loadGeneration = 0
 
 watch(
@@ -56,6 +58,7 @@ watch(
   async (value) => {
     const nextQuery = typeof value === 'string' ? value : ''
     if (nextQuery === q.value) return
+    cancelQuerySync()
     q.value = nextQuery
     await nextTick()
     if (nextQuery) headerRef.value?.focusSearch()
@@ -63,18 +66,34 @@ watch(
   { immediate: true },
 )
 
-watch(q, (value) => {
-  if (sessionLeaving.value) return
+function cancelQuerySync() {
+  queryGeneration += 1
   if (queryTimer !== null) window.clearTimeout(queryTimer)
+  queryTimer = null
+}
+
+function scheduleQuerySync(value: string) {
+  if (sessionLeaving.value || route.path !== '/library') return
+  cancelQuerySync()
+  const generation = queryGeneration
   queryTimer = window.setTimeout(() => {
     queryTimer = null
+    if (
+      generation !== queryGeneration ||
+      sessionLeaving.value ||
+      route.path !== '/library'
+    ) {
+      return
+    }
     const trimmed = value.trim()
+    const routeQuery = typeof route.query.q === 'string' ? route.query.q : ''
+    if (trimmed === routeQuery) return
     void router.replace({
       path: '/library',
       query: trimmed ? { q: trimmed } : {},
     })
   }, 180)
-})
+}
 
 const matchingStories = computed(() =>
   filterLibraryStories(stories.value, q.value),
@@ -94,6 +113,7 @@ const resultLabel = computed(() => {
 
 function setQuery(value: string) {
   q.value = value
+  scheduleQuerySync(value)
 }
 
 function setSort(value: LibrarySort) {
@@ -105,15 +125,13 @@ function setSort(value: LibrarySort) {
 }
 
 function clearSearch() {
-  if (queryTimer !== null) {
-    window.clearTimeout(queryTimer)
-    queryTimer = null
-  }
+  cancelQuerySync()
   q.value = ''
   void router.replace({ path: '/library', query: {} })
 }
 
 function goStory(story: LibraryStory) {
+  cancelQuerySync()
   void router.push(`/read/${encodeURIComponent(story.slug)}`)
 }
 
@@ -139,11 +157,9 @@ function updateDetailsOpen(open: boolean) {
 function clearAccountState(clearQuery: boolean) {
   sessionLeaving.value = true
   loadGeneration += 1
-  if (queryTimer !== null) {
-    window.clearTimeout(queryTimer)
-    queryTimer = null
-  }
+  cancelQuerySync()
   stories.value = []
+  unavailableItemCount.value = 0
   selectedStory.value = null
   detailsOpen.value = false
   loadError.value = null
@@ -171,6 +187,7 @@ async function moveToUnlockAfterConfirmedSignOut() {
 
 async function lockLibrary() {
   if (locking.value) return
+  cancelQuerySync()
   locking.value = true
   lockError.value = ''
 
@@ -187,6 +204,7 @@ async function lockLibrary() {
     }
   } catch {
     lockError.value = 'Could not lock Panda Pages. Your library is still open. Try again.'
+    scheduleQuerySync(q.value)
   } finally {
     locking.value = false
   }
@@ -201,6 +219,7 @@ async function loadLibrary() {
     const response = await getLibrary()
     if (generation !== loadGeneration || sessionLeaving.value) return
     stories.value = response.items
+    unavailableItemCount.value = response.unavailableItemCount
     if (!sortWasChosen) sort.value = defaultLibrarySort(response.items)
   } catch (error) {
     if (generation !== loadGeneration || sessionLeaving.value) return
@@ -229,8 +248,17 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   loadGeneration += 1
-  if (queryTimer !== null) window.clearTimeout(queryTimer)
+  cancelQuerySync()
 })
+
+onBeforeRouteLeave(() => {
+  cancelQuerySync()
+})
+
+function navigateFromLibrary(path: string) {
+  cancelQuerySync()
+  void router.push(path)
+}
 </script>
 
 <template>
@@ -248,8 +276,8 @@ onBeforeUnmount(() => {
       @update:sort="setSort"
       @clear="clearSearch"
       @surprise="goSurprise"
-      @journey="router.push('/journey')"
-      @admin="router.push('/admin/upload')"
+      @journey="navigateFromLibrary('/journey')"
+      @admin="navigateFromLibrary('/admin/upload')"
       @lock="lockLibrary"
     />
 
@@ -286,22 +314,38 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <LibraryEmptyState
-        v-else-if="stories.length === 0"
-        kind="empty"
-        @admin="router.push('/admin/upload')"
-      />
-
-      <LibraryEmptyState
-        v-else-if="visibleStories.length === 0"
-        kind="search"
-        :query="q"
-        @clear="clearSearch"
-      />
-
       <template v-else>
-        <ContinueReadingHero v-if="heroStory" :story="heroStory" />
-        <BookshelfGrid :stories="visibleStories" @details="openDetails" />
+        <section
+          v-if="unavailableItemCount > 0 && stories.length > 0"
+          class="library-partial-warning"
+          role="status"
+          aria-labelledby="library-partial-heading"
+        >
+          <strong id="library-partial-heading">Some stories could not be shown safely</strong>
+          <span>
+            {{ unavailableItemCount === 1 ? 'One story' : `${unavailableItemCount} stories` }}
+            could not be shown safely. The rest of your bookshelf is ready.
+          </span>
+        </section>
+
+        <LibraryEmptyState
+          v-if="stories.length === 0"
+          :kind="unavailableItemCount > 0 ? 'unavailable' : 'empty'"
+          :unavailable-count="unavailableItemCount"
+          @admin="navigateFromLibrary('/admin/upload')"
+        />
+
+        <LibraryEmptyState
+          v-else-if="visibleStories.length === 0"
+          kind="search"
+          :query="q"
+          @clear="clearSearch"
+        />
+
+        <template v-else>
+          <ContinueReadingHero v-if="heroStory" :story="heroStory" />
+          <BookshelfGrid :stories="visibleStories" @details="openDetails" />
+        </template>
       </template>
     </main>
 
@@ -390,6 +434,24 @@ onBeforeUnmount(() => {
 }
 
 .library-alert strong {
+  font-weight: 900;
+}
+
+.library-partial-warning {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.65rem;
+  margin-bottom: clamp(1.25rem, 3vw, 2rem);
+  border: 1px solid #a86a18;
+  border-radius: 1rem;
+  padding: 0.8rem 1rem;
+  background: #fff2d8;
+  color: #613800;
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+.library-partial-warning strong {
   font-weight: 900;
 }
 

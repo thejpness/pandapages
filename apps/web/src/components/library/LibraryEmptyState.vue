@@ -4,15 +4,18 @@ type LibraryStateKind =
   | 'search'
   | 'server-error'
   | 'malformed'
+  | 'unavailable'
   | 'session-ended'
 
 withDefaults(defineProps<{
   kind: LibraryStateKind
   query?: string
   retrying?: boolean
+  unavailableCount?: number
 }>(), {
   query: '',
   retrying: false,
+  unavailableCount: 0,
 })
 
 const emit = defineEmits<{
@@ -30,7 +33,7 @@ const emit = defineEmits<{
     aria-live="polite"
   >
     <span class="library-state__mark" aria-hidden="true">
-      {{ kind === 'search' ? '⌕' : kind.includes('error') || kind === 'malformed' ? '!' : '✦' }}
+      {{ kind === 'search' ? '⌕' : kind.includes('error') || kind === 'malformed' || kind === 'unavailable' ? '!' : '✦' }}
     </span>
 
     <template v-if="kind === 'empty'">
@@ -63,6 +66,15 @@ const emit = defineEmits<{
       <button type="button" :disabled="retrying" @click="emit('retry')">
         {{ retrying ? 'Trying again…' : 'Try again' }}
       </button>
+    </template>
+
+    <template v-else-if="kind === 'unavailable'">
+      <p class="library-state__eyebrow">Stories kept safe</p>
+      <h2>Stories could not be shown safely</h2>
+      <p>
+        {{ unavailableCount === 1 ? 'One published story could' : `${unavailableCount} published stories could` }}
+        not be shown safely. A parent needs to review the published stories before they can return to the bookshelf.
+      </p>
     </template>
 
     <template v-else>
@@ -149,7 +161,8 @@ const emit = defineEmits<{
 }
 
 .library-state--server-error .library-state__mark,
-.library-state--malformed .library-state__mark {
+.library-state--malformed .library-state__mark,
+.library-state--unavailable .library-state__mark {
   background: #ffd9ae;
 }
 </style>
