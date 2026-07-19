@@ -9,15 +9,18 @@ import {
   test,
 } from './support/reader-api'
 import {
+  beginPagedAnnouncementCapture,
   currentPagedOrdinalRange,
   currentReaderPage,
   expectCurrentPageContainsOrdinal,
   expectLocatorV2Request,
   expectNoProgressPut,
+  forceReaderScrollEndFallback,
   gotoReader,
   nextReaderPage,
   pagedReader,
   pagedViewport,
+  pagedAnnouncementHistory,
   previousReaderPage,
   readerPageCount,
   scrollOversizedPageTo,
@@ -70,6 +73,9 @@ async function scrollWebKitPagedViewportTo(
     await viewport.evaluate((element, targetPage) => {
       element.scrollLeft = (Number(targetPage) - 1) * element.clientWidth
       element.dispatchEvent(new Event('scroll'))
+      if ('onscrollend' in element) {
+        element.dispatchEvent(new Event('scrollend'))
+      }
     }, pageNumber)
   }
   const settlesOnTarget = async (): Promise<boolean> => {
@@ -241,6 +247,7 @@ test.describe('Reader paged reading', () => {
     api.setStory(makeReaderStory())
     const put = api.deferProgressPut(READER_SLUG)
     await gotoReader(page, api, READER_SLUG)
+    await beginPagedAnnouncementCapture(page)
 
     const bounds = await pagedViewport(page).boundingBox()
     expect(bounds).not.toBeNull()
@@ -278,6 +285,178 @@ test.describe('Reader paged reading', () => {
       ordinal: (await currentPagedOrdinalRange(page)).start,
     })
     expect(api.progressPuts()).toHaveLength(1)
+    await expect
+      .poll(async () =>
+        (await pagedAnnouncementHistory(page)).filter((value) =>
+          value.startsWith('Page 2 of '),
+        ),
+      )
+      .toHaveLength(1)
+    put.fulfill({ ok: true })
+  })
+
+  test('trusted touch can cross the midpoint, hold, and return without publishing', async ({
+    page,
+    api,
+    context,
+    browserName,
+  }) => {
+    test.skip(browserName !== 'chromium', 'CDP trusted touch input is Chromium-only')
+    await seedReaderPreferences(page)
+    api.setStory(makeReaderStory())
+    await gotoReader(page, api, READER_SLUG)
+    await beginPagedAnnouncementCapture(page)
+
+    const viewport = pagedViewport(page)
+    const bounds = await viewport.boundingBox()
+    expect(bounds).not.toBeNull()
+    if (!bounds) return
+    const cdp = await context.newCDPSession(page)
+    await cdp.send('Emulation.setTouchEmulationEnabled', {
+      enabled: true,
+      maxTouchPoints: 1,
+    })
+    const y = bounds.y + bounds.height / 2
+    const startX = bounds.x + bounds.width * 0.82
+    const crossedX = bounds.x + bounds.width * 0.18
+    await cdp.send('Input.dispatchTouchEvent', {
+      type: 'touchStart',
+      touchPoints: [{ x: startX, y }],
+    })
+    for (let step = 1; step <= 8; step += 1) {
+      const x = startX + ((crossedX - startX) * step) / 8
+      await cdp.send('Input.dispatchTouchEvent', {
+        type: 'touchMove',
+        touchPoints: [{ x, y }],
+      })
+      await page.evaluate(
+        () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+      )
+    }
+    await expect
+      .poll(() =>
+        viewport.evaluate(
+          (element) => element.scrollLeft / Math.max(1, element.clientWidth),
+        ),
+      )
+      .toBeGreaterThan(0.5)
+
+    await page.waitForTimeout(220)
+    expect(await currentReaderPage(page)).toBe(1)
+    expect(api.progressPuts()).toHaveLength(0)
+    expect(
+      (await pagedAnnouncementHistory(page)).some((value) =>
+        value.startsWith('Page 2 of '),
+      ),
+    ).toBe(false)
+
+    for (let step = 1; step <= 8; step += 1) {
+      const x = crossedX + ((startX - crossedX) * step) / 8
+      await cdp.send('Input.dispatchTouchEvent', {
+        type: 'touchMove',
+        touchPoints: [{ x, y }],
+      })
+      await page.evaluate(
+        () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+      )
+    }
+    await expect
+      .poll(() =>
+        viewport.evaluate(
+          (element) => element.scrollLeft / Math.max(1, element.clientWidth),
+        ),
+      )
+      .toBeLessThan(0.2)
+    await cdp.send('Input.dispatchTouchEvent', {
+      type: 'touchEnd',
+      touchPoints: [],
+    })
+
+    await waitForReaderPage(page, 1)
+    await expectNoProgressPut(page, api, READER_SLUG)
+    expect(
+      (await pagedAnnouncementHistory(page)).some((value) =>
+        value.startsWith('Page 2 of '),
+      ),
+    ).toBe(false)
+  })
+
+  test('quiet fallback settles wheel input when scrollend is unavailable', async ({
+    page,
+    api,
+  }) => {
+    await forceReaderScrollEndFallback(page)
+    await seedReaderPreferences(page)
+    api.setStory(makeReaderStory())
+    const put = api.deferProgressPut(READER_SLUG)
+    await gotoReader(page, api, READER_SLUG)
+
+    const viewport = pagedViewport(page)
+    expect(await viewport.evaluate((element) => 'onscrollend' in element)).toBe(false)
+    await wheelPagedViewport(page, 1)
+    await waitForReaderPage(page, 2)
+
+    const request = await put.started
+    expectLocatorV2Request(request, {
+      ordinal: (await currentPagedOrdinalRange(page)).start,
+    })
+    expect(api.progressPuts()).toHaveLength(1)
+    put.fulfill({ ok: true })
+  })
+
+  test('quiet fallback defers active pointer scroll until cancellation', async ({
+    page,
+    api,
+  }) => {
+    await forceReaderScrollEndFallback(page)
+    await seedReaderPreferences(page)
+    api.setStory(makeReaderStory())
+    const put = api.deferProgressPut(READER_SLUG)
+    await gotoReader(page, api, READER_SLUG)
+    await beginPagedAnnouncementCapture(page)
+
+    const viewport = pagedViewport(page)
+    await viewport.evaluate((element) => {
+      element.dispatchEvent(
+        new PointerEvent('pointerdown', {
+          bubbles: true,
+          isPrimary: true,
+          pointerId: 47,
+          pointerType: 'touch',
+        }),
+      )
+      element.scrollLeft = element.clientWidth
+      element.dispatchEvent(new Event('scroll'))
+    })
+    await page.waitForTimeout(220)
+    expect(await currentReaderPage(page)).toBe(1)
+    expect(api.progressPuts()).toHaveLength(0)
+    expect(await pagedAnnouncementHistory(page)).toEqual([])
+
+    await viewport.evaluate((element) => {
+      element.dispatchEvent(
+        new PointerEvent('pointercancel', {
+          bubbles: true,
+          isPrimary: true,
+          pointerId: 47,
+          pointerType: 'touch',
+        }),
+      )
+    })
+    await waitForReaderPage(page, 2)
+
+    const request = await put.started
+    expectLocatorV2Request(request, {
+      ordinal: (await currentPagedOrdinalRange(page)).start,
+    })
+    expect(api.progressPuts()).toHaveLength(1)
+    await expect
+      .poll(async () =>
+        (await pagedAnnouncementHistory(page)).filter((value) =>
+          value.startsWith('Page 2 of '),
+        ),
+      )
+      .toHaveLength(1)
     put.fulfill({ ok: true })
   })
 

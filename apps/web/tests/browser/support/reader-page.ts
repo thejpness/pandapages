@@ -30,6 +30,109 @@ export async function seedReaderPreferences(
     )
   }, overrides)
 }
+export async function forceReaderScrollEndFallback(
+  page: Page,
+): Promise<void> {
+  await page.addInitScript(() => {
+    for (const prototype of [
+      Window.prototype,
+      Document.prototype,
+      Element.prototype,
+      HTMLElement.prototype,
+    ]) {
+      const descriptor = Object.getOwnPropertyDescriptor(
+        prototype,
+        'onscrollend',
+      )
+      if (descriptor?.configurable) {
+        Reflect.deleteProperty(prototype, 'onscrollend')
+      }
+    }
+
+    const add = Object.getOwnPropertyDescriptor(
+      EventTarget.prototype,
+      'addEventListener',
+    )?.value as (
+      this: EventTarget,
+      type: string,
+      listener: EventListenerOrEventListenerObject,
+      options?: boolean | AddEventListenerOptions,
+    ) => void
+    const remove = Object.getOwnPropertyDescriptor(
+      EventTarget.prototype,
+      'removeEventListener',
+    )?.value as (
+      this: EventTarget,
+      type: string,
+      listener: EventListenerOrEventListenerObject,
+      options?: boolean | EventListenerOptions,
+    ) => void
+    Object.defineProperties(EventTarget.prototype, {
+      addEventListener: {
+        configurable: true,
+        value(
+          this: EventTarget,
+          type: string,
+          listener: EventListenerOrEventListenerObject,
+          options?: boolean | AddEventListenerOptions,
+        ) {
+          if (type !== 'scrollend') add.call(this, type, listener, options)
+        },
+      },
+      removeEventListener: {
+        configurable: true,
+        value(
+          this: EventTarget,
+          type: string,
+          listener: EventListenerOrEventListenerObject,
+          options?: boolean | EventListenerOptions,
+        ) {
+          if (type !== 'scrollend') remove.call(this, type, listener, options)
+        },
+      },
+    })
+  })
+}
+
+export async function beginPagedAnnouncementCapture(
+  page: Page,
+): Promise<void> {
+  await page.evaluate(() => {
+    const target = window as Window & {
+      __readerPagedAnnouncements?: string[]
+      __readerPagedAnnouncementObserver?: MutationObserver
+    }
+    target.__readerPagedAnnouncementObserver?.disconnect()
+    target.__readerPagedAnnouncements = []
+    const region = document.querySelector(
+      '[data-reader-paged-view] > .reader-sr-only[role="status"]',
+    )
+    if (!region) throw new Error('missing paged Reader announcement region')
+    target.__readerPagedAnnouncementObserver = new MutationObserver(() => {
+      const value = region.textContent?.trim() ?? ''
+      if (value) target.__readerPagedAnnouncements?.push(value)
+    })
+    target.__readerPagedAnnouncementObserver.observe(region, {
+      childList: true,
+      characterData: true,
+      subtree: true,
+    })
+  })
+}
+
+export async function pagedAnnouncementHistory(
+  page: Page,
+): Promise<string[]> {
+  return page.evaluate(
+    () =>
+      (
+        window as Window & {
+          __readerPagedAnnouncements?: string[]
+        }
+      ).__readerPagedAnnouncements ?? [],
+  )
+}
+
 
 export function pagedReader(page: Page) {
   return page.locator('[data-reader-paged-view]')

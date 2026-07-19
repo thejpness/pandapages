@@ -20,6 +20,12 @@ export type ReaderScrollPosition = {
   percent: number
 }
 
+export type ReaderContainedViewport = {
+  scrollTop: number
+  scrollHeight: number
+  clientHeight: number
+}
+
 export type ReaderResumeMatch = {
   segment: ReaderStorySegment
   matchedBy: 'identity' | 'ordinal'
@@ -69,6 +75,27 @@ export function readerSegmentOffset(
   return clampReaderOffset((readingLine - layout.top) / height)
 }
 
+function finiteNonNegative(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, value) : 0
+}
+
+/**
+ * Returns the canonical 35% reading line in contained scroller content
+ * coordinates. Unlike scroll-range progress, this stays meaningful when the
+ * segment or viewport height changes.
+ */
+export function readerContainedReadingLine(
+  viewport: Pick<ReaderContainedViewport, 'scrollTop' | 'clientHeight'>,
+): number {
+  return (
+    finiteNonNegative(viewport.scrollTop) +
+    readerReadingLine({
+      height: finiteNonNegative(viewport.clientHeight),
+      headerBottom: 0,
+    })
+  )
+}
+
 export function readerSegmentWeight(segment: ReaderStorySegment): number {
   if (!Number.isFinite(segment.wordCount)) return MINIMUM_SEGMENT_WEIGHT
   return Math.max(MINIMUM_SEGMENT_WEIGHT, segment.wordCount)
@@ -102,6 +129,25 @@ export function captureReaderScrollPosition(
   viewport: ReaderViewport,
 ): ReaderScrollPosition | null {
   const readingLine = readerReadingLine(viewport)
+  const layout = activeReaderSegmentLayout(layouts, readingLine)
+  if (!layout) return null
+  const segment =
+    segments.find((candidate) => candidate.ordinal === layout.ordinal) ?? null
+  if (!segment) return null
+
+  const offset = readerSegmentOffset(layout, readingLine)
+  return {
+    locator: createReaderLocatorV2(segment, offset),
+    percent: readerWeightedPercent(segments, segment.ordinal, offset),
+  }
+}
+
+export function captureReaderContainedScrollPosition(
+  segments: readonly ReaderStorySegment[],
+  layouts: readonly ReaderSegmentLayout[],
+  viewport: ReaderContainedViewport,
+): ReaderScrollPosition | null {
+  const readingLine = readerContainedReadingLine(viewport)
   const layout = activeReaderSegmentLayout(layouts, readingLine)
   if (!layout) return null
   const segment =
@@ -150,15 +196,53 @@ export function readerRestoreScrollTop({
   offset: number
   maximumScrollTop?: number
 }): number {
+  const safeElementTop = Number.isFinite(elementTop) ? elementTop : 0
+  const safeElementHeight = Number.isFinite(elementHeight)
+    ? Math.max(0, elementHeight)
+    : 0
+  const safeCurrentScrollTop = finiteNonNegative(currentScrollTop)
+  const safeReadingLine = finiteNonNegative(readingLine)
   const target =
-    currentScrollTop +
-    elementTop +
-    Math.max(0, elementHeight) * clampReaderOffset(offset) -
-    readingLine
+    safeCurrentScrollTop +
+    safeElementTop +
+    safeElementHeight * clampReaderOffset(offset) -
+    safeReadingLine
   const maximum = Number.isFinite(maximumScrollTop)
     ? Math.max(0, maximumScrollTop)
     : Number.POSITIVE_INFINITY
   return Math.min(maximum, Math.max(0, target))
+}
+
+/**
+ * Inverts readerContainedReadingLine for a segment layout expressed in the
+ * scroller content coordinates, clamped to the actual vertical scroll range.
+ */
+export function readerContainedRestoreScrollTop({
+  layout,
+  offset,
+  scrollHeight,
+  clientHeight,
+}: {
+  layout: ReaderSegmentLayout
+  offset: number
+  scrollHeight: number
+  clientHeight: number
+}): number {
+  const safeClientHeight = finiteNonNegative(clientHeight)
+  return readerRestoreScrollTop({
+    elementTop: layout.top,
+    elementHeight: layout.bottom - layout.top,
+    currentScrollTop: 0,
+    readingLine: readerReadingLine({
+      height: safeClientHeight,
+      headerBottom: 0,
+    }),
+    offset,
+    maximumScrollTop: Math.max(
+      0,
+      finiteNonNegative(scrollHeight) - safeClientHeight,
+    ),
+  })
 }
 
 export function readerScrollBehavior(

@@ -5,6 +5,7 @@ import {
   onBeforeUnmount,
   onMounted,
   ref,
+  type Ref,
   watch,
 } from 'vue'
 import { useEventListener, usePreferredReducedMotion } from '@vueuse/core'
@@ -54,6 +55,45 @@ type ReaderView = {
   focusContent: () => void
 }
 
+type ReaderWorkBarrier = {
+  owners: Set<symbol>
+  waiters: Set<() => void>
+  pending: Ref<boolean>
+}
+
+function createReaderWorkBarrier(): ReaderWorkBarrier {
+  return {
+    owners: new Set<symbol>(),
+    waiters: new Set<() => void>(),
+    pending: ref(false),
+  }
+}
+
+function settleReaderWorkBarrier(barrier: ReaderWorkBarrier) {
+  barrier.pending.value = barrier.owners.size > 0
+  if (barrier.pending.value) return
+  for (const resolve of barrier.waiters) resolve()
+  barrier.waiters.clear()
+}
+
+function beginReaderWork(barrier: ReaderWorkBarrier): () => void {
+  const owner = Symbol('reader-work')
+  barrier.owners.add(owner)
+  barrier.pending.value = true
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    barrier.owners.delete(owner)
+    settleReaderWorkBarrier(barrier)
+  }
+}
+
+function resetReaderWorkBarrier(barrier: ReaderWorkBarrier) {
+  barrier.owners.clear()
+  settleReaderWorkBarrier(barrier)
+}
+
 const route = useRoute()
 const router = useRouter()
 const reducedMotion = usePreferredReducedMotion()
@@ -69,6 +109,8 @@ let preferenceGeneration = 0
 let readerGeneration = 0
 let resumeFocusPending = false
 const captureSuppressionOwners = new Set<symbol>()
+const preferenceWorkBarrier = createReaderWorkBarrier()
+const chapterNavigationBarrier = createReaderWorkBarrier()
 
 const {
   preferences,
@@ -122,6 +164,51 @@ function clearProgressCaptureSuppressions() {
   progress.captureSuppressed.value = false
 }
 
+async function waitForReaderWork(
+  barrier: ReaderWorkBarrier,
+  expectedReaderGeneration: number,
+): Promise<boolean> {
+  while (
+    expectedReaderGeneration === readerGeneration &&
+    barrier.owners.size > 0
+  ) {
+    await new Promise<void>((resolve) => barrier.waiters.add(resolve))
+  }
+  return expectedReaderGeneration === readerGeneration
+}
+
+async function waitForStableReaderPlacement(
+  expectedReaderGeneration: number,
+): Promise<boolean> {
+  while (expectedReaderGeneration === readerGeneration) {
+    if (
+      !(await waitForReaderWork(
+        preferenceWorkBarrier,
+        expectedReaderGeneration,
+      )) ||
+      !(await waitForReaderWork(
+        chapterNavigationBarrier,
+        expectedReaderGeneration,
+      ))
+    ) {
+      return false
+    }
+    if (
+      !preferenceWorkBarrier.pending.value &&
+      !chapterNavigationBarrier.pending.value
+    ) {
+      return true
+    }
+  }
+  return false
+}
+
+function invalidateReaderPlacementWork() {
+  preferenceGeneration += 1
+  resetReaderWorkBarrier(preferenceWorkBarrier)
+  resetReaderWorkBarrier(chapterNavigationBarrier)
+}
+
 const story = useReaderStory({
   onSessionEnded: moveToUnlock,
   onReady: async (loaded) => {
@@ -155,7 +242,9 @@ const resumeOpen = computed(
   () =>
     progress.decision.value !== null &&
     !settingsOpen.value &&
-    !chaptersOpen.value,
+    !chaptersOpen.value &&
+    !preferenceWorkBarrier.pending.value &&
+    !chapterNavigationBarrier.pending.value,
 )
 const resumeKind = computed(() => progress.decision.value?.kind ?? 'resume')
 const resumePercent = computed(() =>
@@ -207,23 +296,32 @@ async function applyPreferences(candidate: ReaderPreferencesV2) {
   const validated = validateReaderPreferencesV2(candidate)
   if (!validated) return
   const activeGeneration = readerGeneration
-  const transition = planReaderModeTransition(captureCurrent())
-  const anchor = transition.anchor?.locator ?? null
-  const operation = ++preferenceGeneration
-  const operationIsCurrent = () =>
-    operation === preferenceGeneration &&
-    activeGeneration === readerGeneration
-  const previous = preferences.value
-  const debouncePagedReflow =
-    previous.mode === 'paged' &&
-    validated.mode === 'paged' &&
-    (previous.fontFamily !== validated.fontFamily ||
-      previous.fontSize !== validated.fontSize ||
-      previous.lineHeight !== validated.lineHeight ||
-      previous.contentWidth !== validated.contentWidth)
-  const releaseCaptureSuppression = suppressProgressCapture()
-  preferences.value = validated
+  if (!(await waitForReaderWork(preferenceWorkBarrier, activeGeneration))) return
+  const releasePreferenceWork = beginReaderWork(preferenceWorkBarrier)
+  let releaseCaptureSuppression: (() => void) | null = null
   try {
+    if (
+      !(await waitForReaderWork(
+        chapterNavigationBarrier,
+        activeGeneration,
+      ))
+    ) return
+    const transition = planReaderModeTransition(captureCurrent())
+    const anchor = transition.anchor?.locator ?? null
+    const operation = ++preferenceGeneration
+    const operationIsCurrent = () =>
+      operation === preferenceGeneration &&
+      activeGeneration === readerGeneration
+    const previous = preferences.value
+    const debouncePagedReflow =
+      previous.mode === 'paged' &&
+      validated.mode === 'paged' &&
+      (previous.fontFamily !== validated.fontFamily ||
+        previous.fontSize !== validated.fontSize ||
+        previous.lineHeight !== validated.lineHeight ||
+        previous.contentWidth !== validated.contentWidth)
+    releaseCaptureSuppression = suppressProgressCapture()
+    preferences.value = validated
     await nextTick()
     if (!operationIsCurrent()) return
     if (debouncePagedReflow) {
@@ -243,8 +341,14 @@ async function applyPreferences(candidate: ReaderPreferencesV2) {
       percent.value = current.percent
       activeOrdinal.value = current.locator.segment.ordinal
     }
+  } catch {
+    if (activeGeneration === readerGeneration) {
+      navigationMessage.value =
+        'Your reading place could not be restored after that settings change.'
+    }
   } finally {
-    releaseCaptureSuppression()
+    releaseCaptureSuppression?.()
+    releasePreferenceWork()
   }
 }
 
@@ -268,32 +372,48 @@ function resetPreferences() {
 async function selectChapter(selected: ReaderChapter) {
   if (!readerInitialized.value) return
   const activeGeneration = readerGeneration
+  const releaseChapterNavigation = beginReaderWork(chapterNavigationBarrier)
   chaptersOpen.value = false
-  await nextTick()
-  await new Promise<void>((resolve) => {
-    window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()))
-  })
-  if (activeGeneration !== readerGeneration) return
-  const releaseCaptureSuppression = suppressProgressCapture()
   try {
-    const position = await readerView.value?.moveToOrdinal(
-      selected.ordinal,
-      0,
-      { allowMotion: true },
-    )
-    if (activeGeneration !== readerGeneration) return
-    if (position) {
-      percent.value = position.percent
-      activeOrdinal.value = selected.ordinal
-      progress.desired(position)
-      progress.announcement.value = 'Moved to ' + selected.title + '.'
+    await nextTick()
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() =>
+        window.requestAnimationFrame(() => resolve()),
+      )
+    })
+    if (
+      !(await waitForReaderWork(
+        preferenceWorkBarrier,
+        activeGeneration,
+      ))
+    ) return
+    preferenceGeneration += 1
+    const releaseCaptureSuppression = suppressProgressCapture()
+    try {
+      const position = await readerView.value?.moveToOrdinal(
+        selected.ordinal,
+        0,
+        { allowMotion: true },
+      )
+      if (activeGeneration !== readerGeneration) return
+      if (position) {
+        percent.value = position.percent
+        activeOrdinal.value = selected.ordinal
+        progress.desired(position)
+        progress.announcement.value = 'Moved to ' + selected.title + '.'
+      }
+    } finally {
+      releaseCaptureSuppression()
     }
   } finally {
-    releaseCaptureSuppression()
+    releaseChapterNavigation()
   }
 }
 
 async function resumeCurrentVersion() {
+  const activeGeneration = readerGeneration
+  if (!(await waitForStableReaderPlacement(activeGeneration))) return
+  preferenceGeneration += 1
   const releaseCaptureSuppression = suppressProgressCapture()
   try {
     await progress.resume(restore)
@@ -303,6 +423,9 @@ async function resumeCurrentVersion() {
 }
 
 async function startCurrentVersion() {
+  const activeGeneration = readerGeneration
+  if (!(await waitForStableReaderPlacement(activeGeneration))) return
+  preferenceGeneration += 1
   const releaseCaptureSuppression = suppressProgressCapture()
   try {
     await progress.startCurrentVersion(moveToBeginning)
@@ -330,6 +453,7 @@ async function goLibraryWithoutProgress() {
 
 async function routeChanged(nextSlug: string) {
   readerGeneration += 1
+  invalidateReaderPlacementWork()
   progress.pageHide()
   progress.dispose()
   clearProgressCaptureSuppressions()
@@ -399,6 +523,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   readerGeneration += 1
+  invalidateReaderPlacementWork()
   progress.pageHide()
   progress.dispose()
   clearProgressCaptureSuppressions()
@@ -409,7 +534,11 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="reader-shell" :class="themeClass">
+  <div
+    class="reader-shell"
+    :class="themeClass"
+    :data-reader-preference-pending="preferenceWorkBarrier.pending.value ? 'true' : 'false'"
+  >
     <ReaderStoryState
       v-if="story.contentState.value.status !== 'ready' || !story.story.value"
       :state="story.contentState.value"
@@ -426,7 +555,7 @@ onBeforeUnmount(() => {
         :retry-kind="progress.retryKind.value"
         :retry-disabled="progress.retryDisabled.value"
         :chapters-available="chapters.length > 0"
-        :reader-ready="readerInitialized"
+        :reader-ready="readerInitialized && !preferenceWorkBarrier.pending.value"
         :settings-open="settingsOpen"
         :chapters-open="chaptersOpen"
         :navigating="progress.navigatingToLibrary.value"
