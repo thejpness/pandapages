@@ -325,10 +325,10 @@ test('unlock confirms auth state before navigating and Lock prevents duplicate s
   assert.match(unlockSource, /Could not unlock Panda Pages/)
   assert.match(unlockSource, /navigationDidFail\(result\)/)
 
-  const logoutBlock = librarySource.slice(
-    librarySource.indexOf('async function logout()'),
-    librarySource.indexOf('/* ---------------- "Top" button visibility')
-  )
+  const lockStart = librarySource.indexOf('async function lockLibrary()')
+  const lockEnd = librarySource.indexOf('async function loadLibrary()')
+  assert.ok(lockStart >= 0 && lockStart < lockEnd)
+  const logoutBlock = librarySource.slice(lockStart, lockEnd)
   assert.match(logoutBlock, /if \(locking\.value\) return/)
   assert.match(logoutBlock, /requestLogout: logoutSession/)
   assert.match(logoutBlock, /markLocked: authState\.confirmLocked/)

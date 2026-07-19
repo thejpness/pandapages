@@ -125,14 +125,22 @@ test.describe('Reader content and route states', () => {
       { slug: storyB.slug, title: storyB.title, author: storyB.author },
     ]
     const stale = api.deferStory(storyA.slug)
+    const storyCard = (title: string) =>
+      page.getByRole('article').filter({
+        has: page.getByRole('heading', { level: 3, name: title }),
+      })
 
     await page.goto('/library')
-    await expect(page.getByText(storyA.title, { exact: true }).first()).toBeVisible()
-    await page.getByText(storyA.title, { exact: true }).first().click()
+    await expect(storyCard(storyA.title)).toBeVisible()
+    await storyCard(storyA.title)
+      .getByRole('link', { name: 'Read', exact: true })
+      .click()
     await stale.started
     await page.goBack()
     await expect(page).toHaveURL('/library')
-    await page.getByText(storyB.title, { exact: true }).first().click()
+    await storyCard(storyB.title)
+      .getByRole('link', { name: 'Read', exact: true })
+      .click()
     await expect(page.getByRole('heading', { level: 1, name: storyB.title })).toBeVisible()
 
     stale.fulfill(storyA)

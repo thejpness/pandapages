@@ -30,6 +30,8 @@ type authTestStore struct {
 	existsCalls      int
 	libraryCalls     int
 	libraryAccount   string
+	libraryResponse  []model.StoryItem
+	libraryErr       error
 	readerCalls      int
 	readerAccount    string
 	readerSlug       string
@@ -69,7 +71,13 @@ func (s *authTestStore) AccountExists(accountID string) (bool, error) {
 func (s *authTestStore) Library(accountID string) ([]model.StoryItem, error) {
 	s.libraryCalls++
 	s.libraryAccount = accountID
-	return []model.StoryItem{}, nil
+	if s.libraryErr != nil {
+		return nil, s.libraryErr
+	}
+	if s.libraryResponse == nil {
+		return []model.StoryItem{}, nil
+	}
+	return s.libraryResponse, nil
 }
 
 func (s *authTestStore) ReaderStory(accountID, slug string) (model.ReaderStory, error) {
