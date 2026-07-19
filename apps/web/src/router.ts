@@ -12,7 +12,14 @@ import {
 export const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: '/', redirect: '/library' },
+    {
+      path: '/',
+      component: () => import('./views/LandingPage.vue'),
+      props: {
+        storiesHref: '/library',
+        storyBaseHref: '/read',
+      },
+    },
 
     { path: '/unlock', component: Unlock },
     {
