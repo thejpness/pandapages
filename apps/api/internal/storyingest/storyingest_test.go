@@ -75,6 +75,28 @@ func TestIngestRejectsFrontmatterOnlyStory(t *testing.T) {
 	}
 }
 
+func TestIngestRejectsBodiesWithoutReadableRenderedContent(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		markdown string
+	}{
+		{name: "raw HTML only", markdown: "<script>alert(1)</script>\n"},
+		{name: "thematic break only", markdown: "***\n"},
+		{name: "HTML comment only", markdown: "<!-- editorial note -->\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			out, err := Ingest(Input{
+				Slug:     "unreadable-story",
+				Title:    "Unreadable story",
+				Markdown: test.markdown,
+			})
+			if err == nil || !strings.Contains(err.Error(), "at least one readable segment") {
+				t.Fatalf("Ingest error = %v, output = %#v; want readable-segment rejection", err, out)
+			}
+		})
+	}
+}
+
 func TestIngestOmitsUnsafeMarkdown(t *testing.T) {
 	markdown := "# Safe title\n\n[click](&#106;avascript:alert(1))\n\n" +
 		"<javascript:alert(document.domain)>\n\n" +
@@ -90,5 +112,37 @@ func TestIngestOmitsUnsafeMarkdown(t *testing.T) {
 		if strings.Contains(rendered, unsafe) {
 			t.Errorf("rendered HTML contains unsafe content %q: %s", unsafe, out.RenderedHTML)
 		}
+	}
+}
+
+func TestCanonicalizeStoredBodyDoesNotReparseFrontmatter(t *testing.T) {
+	storedBody := "---\nnot: frontmatter\n---\n\nReadable paragraph.\n"
+	presetFrontmatter := map[string]any{
+		"title":       "Stored thematic break",
+		"author":      "",
+		"language":    "en-GB",
+		"displayNote": "Preserved safe metadata",
+	}
+	out, err := CanonicalizeStoredBody(Input{
+		Slug:     "stored-thematic-break",
+		Title:    "Stored thematic break",
+		Language: "en-GB",
+		Markdown: storedBody,
+	}, presetFrontmatter)
+	if err != nil {
+		t.Fatalf("CanonicalizeStoredBody returned error: %v", err)
+	}
+	if out.Markdown != storedBody {
+		t.Fatalf("stored body was reparsed: got %q, want %q", out.Markdown, storedBody)
+	}
+	if !strings.Contains(out.RenderedHTML, "not: frontmatter") ||
+		!strings.Contains(out.RenderedHTML, "Readable paragraph") {
+		t.Fatalf("stored body did not use the normal renderer: %s", out.RenderedHTML)
+	}
+	if len(out.Segments) == 0 {
+		t.Fatal("stored body did not use the normal segmentation pipeline")
+	}
+	if out.Frontmatter["displayNote"] != "Preserved safe metadata" {
+		t.Fatalf("stored additive frontmatter was not preserved: %#v", out.Frontmatter)
 	}
 }

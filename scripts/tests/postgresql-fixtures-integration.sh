@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+# This harness deliberately handles disposable credentials and diagnostic probes.
+# Do not allow an inherited or explicit xtrace setting to print them before the
+# redaction boundary.
+set +x
 set -euo pipefail
 umask 077
 
@@ -24,6 +28,11 @@ readonly volume="$resource_prefix-data"
 readonly run_label="com.pandapages.fixture-run=$resource_prefix"
 controlled_goose_failure_status=${PP_FIXTURE_TEST_CONTROLLED_GOOSE_FAILURE_STATUS:-}
 controlled_diagnostic_secret=${PP_FIXTURE_TEST_CONTROLLED_DIAGNOSTIC_SECRET:-}
+controlled_diagnostic_password=${PP_FIXTURE_TEST_CONTROLLED_DIAGNOSTIC_PASSWORD:-}
+controlled_process_helper_mode=${PP_FIXTURE_TEST_PROCESS_HELPER_MODE:-}
+controlled_process_helper_ready=${PP_FIXTURE_TEST_PROCESS_HELPER_READY:-}
+controlled_process_helper_term_seen=${PP_FIXTURE_TEST_PROCESS_HELPER_TERM_SEEN:-}
+controlled_process_helper_marker=${PP_FIXTURE_TEST_PROCESS_HELPER_MARKER:-}
 
 if [[ -n "$controlled_goose_failure_status" ]] &&
   [[ ! "$controlled_goose_failure_status" =~ ^([1-9]|[1-9][0-9]|1[01][0-9]|12[0-5])$ ]]; then
@@ -37,12 +46,80 @@ if [[ -n "$controlled_diagnostic_secret" ]] &&
   exit 1
 fi
 
-for command_name in curl docker grep mktemp sed tail; do
+if [[ -n "$controlled_diagnostic_password" ]] &&
+  [[ ! "$controlled_diagnostic_password" =~ ^[a-zA-Z0-9._-]{16,120}$ ]]; then
+  printf 'Controlled diagnostic password must contain 16-120 safe characters\n' >&2
+  exit 1
+fi
+
+for command_name in curl docker grep mktemp ps sed setsid tail; do
   command -v "$command_name" >/dev/null 2>&1 || {
     printf 'Required command is unavailable: %s\n' "$command_name" >&2
     exit 1
   }
 done
+
+fixture_harness_pgid=$(ps -o pgid= -p "$$")
+fixture_harness_pgid=${fixture_harness_pgid//[[:space:]]/}
+[[ "$fixture_harness_pgid" =~ ^[1-9][0-9]*$ ]] || {
+  printf 'Could not determine the fixture harness process group\n' >&2
+  exit 1
+}
+readonly fixture_harness_pgid
+
+if [[ -n "$controlled_process_helper_mode" ]]; then
+  [[ -n "$controlled_process_helper_ready" &&
+    "$controlled_process_helper_ready" == "${TMPDIR:-/tmp}/"* ]] || {
+    printf 'Controlled process helper ready path is invalid\n' >&2
+    exit 1
+  }
+  case "$controlled_process_helper_mode" in
+    foreground)
+      trap 'exit 143' TERM
+      bash -c '
+        printf "%s\n" "$$" >"$1"
+        exec sleep 30
+      ' fixture-foreground-child "$controlled_process_helper_ready"
+      ;;
+    delayed-docker)
+      [[ -n "$controlled_process_helper_term_seen" &&
+        "$controlled_process_helper_term_seen" == "${TMPDIR:-/tmp}/"* &&
+        -n "$controlled_process_helper_marker" &&
+        "$controlled_process_helper_marker" == "${TMPDIR:-/tmp}/"* ]] || {
+        printf 'Controlled delayed-Docker helper paths are invalid\n' >&2
+        exit 1
+      }
+      trap 'exit 143' TERM
+      bash -c '
+        term_seen=$2
+        marker=$3
+        fake_docker_create() {
+          sleep 5
+          printf "com.pandapages.fixture-run=synthetic-delayed-docker\n" >"$marker"
+        }
+        handle_term() {
+          printf "TERM received before fake Docker create\n" >"$term_seen"
+          fake_docker_create
+        }
+        trap handle_term TERM
+        printf "%s\n" "$$" >"$1"
+        while :; do
+          sleep 30
+        done
+      ' fixture-delayed-docker \
+        "$controlled_process_helper_ready" \
+        "$controlled_process_helper_term_seen" \
+        "$controlled_process_helper_marker"
+      ;;
+    early-exit)
+      exit 41
+      ;;
+    *)
+      printf 'Controlled process helper mode is invalid\n' >&2
+      exit 1
+      ;;
+  esac
+fi
 
 [[ -x "$seed_script" ]] || {
   printf 'Test-seed command is unavailable\n' >&2
@@ -75,6 +152,19 @@ failure_line=''
 failure_signal=''
 controlled_pid=''
 controlled_child_status=''
+controlled_pgid=''
+controlled_sid=''
+controlled_sentinel_pid=''
+controlled_sentinel_start_time=''
+controlled_launching=0
+controlled_pending_signal=''
+controlled_pending_status=''
+controlled_termination_grace_seconds=10
+controlled_identity_root=''
+controlled_launch_test_signal=''
+controlled_launch_test_identity_file=''
+controlled_launch_test_identity_failure=0
+controlled_process_group_verify_failure=0
 controlled_prefix=''
 controlled_label=''
 controlled_root=''
@@ -83,18 +173,23 @@ controlled_stderr=''
 
 redact_diagnostics() {
   local escaped_controlled_secret
+  local escaped_controlled_password
+  local -a sed_arguments=(-E)
 
   if [[ -n "$controlled_diagnostic_secret" ]]; then
     escaped_controlled_secret=${controlled_diagnostic_secret//./\\.}
-    sed -E \
-      -e "s/$escaped_controlled_secret/[redacted-controlled-secret]/g" \
-      -e "s/$database_password/[redacted]/g" \
-      -e 's#postgres://[^[:space:]]+#[redacted-database-url]#g'
-  else
-    sed -E \
-      -e "s/$database_password/[redacted]/g" \
-      -e 's#postgres://[^[:space:]]+#[redacted-database-url]#g'
+    sed_arguments+=(-e "s/$escaped_controlled_secret/[redacted-controlled-secret]/g")
   fi
+  if [[ -n "$controlled_diagnostic_password" ]]; then
+    escaped_controlled_password=${controlled_diagnostic_password//./\\.}
+    sed_arguments+=(-e "s/$escaped_controlled_password/[redacted]/g")
+  fi
+  sed_arguments+=(
+    -e "s/$database_password/[redacted]/g"
+    -e 's#postgres(%3A|%3a)(%2F|%2f)(%2F|%2f)[^[:space:]]+#[redacted-database-url]#g'
+    -e 's#postgres://[^[:space:]]+#[redacted-database-url]#g'
+  )
+  sed "${sed_arguments[@]}"
 }
 
 docker_query() {
@@ -230,39 +325,337 @@ cleanup_labeled_resources() {
   return "$cleanup_failed"
 }
 
-terminate_controlled_child() {
+is_safe_isolated_pgid() {
+  local pgid=$1
+
+  [[ "$pgid" =~ ^[1-9][0-9]*$ ]] &&
+    ((pgid > 1)) &&
+    [[ "$pgid" != "$fixture_harness_pgid" ]]
+}
+
+read_process_start_time() {
+  local pid=$1
+  local process_stat
+  local -a stat_fields=()
+
+  [[ "$pid" =~ ^[1-9][0-9]*$ && -r "/proc/$pid/stat" ]] || return 1
+  IFS= read -r process_stat <"/proc/$pid/stat" || return 1
+  process_stat=${process_stat#*) }
+  read -r -a stat_fields <<<"$process_stat"
+  ((${#stat_fields[@]} > 19)) || return 1
+  printf '%s\n' "${stat_fields[19]}"
+}
+
+verify_controlled_process_group_identity() {
+  local pgid=$1
+  local sentinel_identity
+  local observed_pgid=''
+  local observed_sid=''
+  local observed_start_time=''
+
+  is_safe_isolated_pgid "$pgid" || return 1
+  [[ "$controlled_pgid" == "$pgid" &&
+    "$controlled_sid" == "$pgid" &&
+    "$controlled_sentinel_pid" =~ ^[1-9][0-9]*$ &&
+    -n "$controlled_sentinel_start_time" ]] || return 1
+  if sentinel_identity=$(ps -o pgid= -o sid= -p "$controlled_sentinel_pid" 2>/dev/null); then
+    read -r observed_pgid observed_sid <<<"$sentinel_identity"
+  fi
+  observed_start_time=$(read_process_start_time "$controlled_sentinel_pid") || return 1
+  [[ "$observed_pgid" == "$pgid" &&
+    "$observed_sid" == "$controlled_sid" &&
+    "$observed_start_time" == "$controlled_sentinel_start_time" ]]
+}
+
+process_group_exists() {
+  local pgid=$1
+
+  is_safe_isolated_pgid "$pgid" || return 2
+  kill -0 -- "-$pgid" 2>/dev/null
+}
+
+wait_for_process_group_exit() {
+  local pgid=$1
+  local attempt
+
+  is_safe_isolated_pgid "$pgid" || return 1
+  if ((controlled_process_group_verify_failure != 0)); then
+    printf 'Controlled process-group verification failure for harness regression\n' >&2
+    return 1
+  fi
+  for ((attempt = 0; attempt < 100; attempt++)); do
+    if ! process_group_exists "$pgid"; then
+      return 0
+    fi
+    sleep 0.05
+  done
+  return 1
+}
+
+remove_controlled_identity_root() {
+  if [[ -n "$controlled_identity_root" &&
+    "$controlled_identity_root" == "$test_root/"* &&
+    -e "$controlled_identity_root" ]]; then
+    rm -rf -- "$controlled_identity_root"
+  fi
+  controlled_identity_root=''
+}
+
+replay_controlled_pending_signal() {
+  local pending_signal
+  local pending_status
+
+  [[ -n "$controlled_pending_signal" ]] || return 0
+  pending_signal=$controlled_pending_signal
+  pending_status=$controlled_pending_status
+  controlled_pending_signal=''
+  controlled_pending_status=''
+  on_signal "$pending_signal" "$pending_status"
+}
+
+launch_controlled_process() {
+  local stdout_file=$1
+  local stderr_file=$2
+  local ready_file
+  local acknowledge_file
+  local ready_pid=''
+  local ready_sentinel_pid=''
+  local session_identity=''
+  local sentinel_identity=''
+  local observed_pgid=''
+  local observed_sid=''
+  local observed_sentinel_pgid=''
+  local observed_sentinel_sid=''
+  local sentinel_start_time=''
+  local current_sentinel_start_time=''
+  local group_was_verified=0
+  local cleanup_failed=0
+  local attempt
   local child_pid
-  local child_status
-  local watchdog_pid=''
+  shift 2
 
-  [[ -n "$controlled_pid" ]] || return 0
-  child_pid=$controlled_pid
-  controlled_pid=''
+  [[ -z "$controlled_pid" && -z "$controlled_pgid" ]] || {
+    printf 'A controlled fixture child is already owned\n' >&2
+    return 1
+  }
+  [[ -z "$controlled_launch_test_signal" || "$controlled_launch_test_signal" == TERM ]] || {
+    printf 'Controlled launch test signal is invalid\n' >&2
+    return 1
+  }
 
-  if kill -0 "$child_pid" 2>/dev/null; then
-    kill -TERM "$child_pid" 2>/dev/null || true
-    (
-      sleep 10
-      kill -KILL "$child_pid" 2>/dev/null || true
-    ) &
-    watchdog_pid=$!
+  controlled_identity_root=$(mktemp -d "$test_root/controlled-process.XXXXXX")
+  ready_file="$controlled_identity_root/ready"
+  acknowledge_file="$controlled_identity_root/acknowledge"
+  controlled_launching=1
+  setsid bash -c '
+    set -euo pipefail
+    ready_file=$1
+    acknowledge_file=$2
+    shift 2
+    bash -c '\''
+      trap "" HUP INT TERM
+      exec sleep 2147483647
+    '\'' fixture-controlled-sentinel &
+    sentinel_pid=$!
+    printf "%s %s\n" "$$" "$sentinel_pid" >"$ready_file"
+    while [[ ! -e "$acknowledge_file" ]]; do
+      sleep 0.01
+    done
+    exec "$@"
+  ' fixture-controlled-session "$ready_file" "$acknowledge_file" "$@" \
+    >"$stdout_file" 2>"$stderr_file" &
+  child_pid=$!
+  controlled_pid=$child_pid
+  if [[ "$controlled_launch_test_signal" == TERM ]]; then
+    kill -TERM "$BASHPID"
   fi
 
+  for ((attempt = 0; attempt < 1000; attempt++)); do
+    if [[ -s "$ready_file" ]]; then
+      read -r ready_pid ready_sentinel_pid <"$ready_file"
+      break
+    fi
+    if ! kill -0 "$child_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.01 || true
+  done
+
+  if session_identity=$(ps -o pgid= -o sid= -p "$child_pid" 2>/dev/null); then
+    read -r observed_pgid observed_sid <<<"$session_identity"
+  fi
+  if sentinel_identity=$(ps -o pgid= -o sid= -p "$ready_sentinel_pid" 2>/dev/null); then
+    read -r observed_sentinel_pgid observed_sentinel_sid <<<"$sentinel_identity"
+  fi
+  sentinel_start_time=$(read_process_start_time "$ready_sentinel_pid") || true
+  if ((controlled_launch_test_identity_failure != 0)) &&
+    [[ -n "$controlled_launch_test_identity_file" ]]; then
+    printf '%s %s %s\n' "$child_pid" "$child_pid" "$ready_sentinel_pid" \
+      >"$controlled_launch_test_identity_file"
+  fi
+  if [[ "$ready_pid" == "$child_pid" &&
+    "$observed_pgid" == "$child_pid" &&
+    "$observed_sid" == "$child_pid" &&
+    "$ready_sentinel_pid" =~ ^[1-9][0-9]*$ &&
+    "$observed_sentinel_pgid" == "$child_pid" &&
+    "$observed_sentinel_sid" == "$child_pid" &&
+    -n "$sentinel_start_time" &&
+    "$child_pid" != "$fixture_harness_pgid" &&
+    "$controlled_launch_test_identity_failure" == 0 ]]; then
+    controlled_pgid=$child_pid
+    controlled_sid=$child_pid
+    controlled_sentinel_pid=$ready_sentinel_pid
+    controlled_sentinel_start_time=$sentinel_start_time
+    if [[ -n "$controlled_launch_test_identity_file" ]]; then
+      printf '%s %s\n' "$controlled_pid" "$controlled_pgid" \
+        >"$controlled_launch_test_identity_file"
+    fi
+    : >"$acknowledge_file"
+    controlled_launching=0
+    replay_controlled_pending_signal
+    return 0
+  fi
+
+  controlled_launching=0
+  if [[ "$observed_pgid" == "$child_pid" && "$observed_sid" == "$child_pid" ]] ||
+    [[ "$ready_sentinel_pid" =~ ^[1-9][0-9]*$ &&
+      "$observed_sentinel_pgid" == "$child_pid" &&
+      "$observed_sentinel_sid" == "$child_pid" &&
+      -n "$sentinel_start_time" ]]; then
+    group_was_verified=1
+    if [[ "$observed_sentinel_pgid" == "$child_pid" &&
+      "$observed_sentinel_sid" == "$child_pid" &&
+      -n "$sentinel_start_time" ]]; then
+      controlled_pgid=$child_pid
+      controlled_sid=$child_pid
+      controlled_sentinel_pid=$ready_sentinel_pid
+      controlled_sentinel_start_time=$sentinel_start_time
+    fi
+    kill -KILL -- "-$child_pid" 2>/dev/null || true
+  else
+    kill -KILL "$child_pid" 2>/dev/null || true
+    current_sentinel_start_time=$(read_process_start_time "$ready_sentinel_pid") || true
+    if [[ -n "$sentinel_start_time" &&
+      "$current_sentinel_start_time" == "$sentinel_start_time" ]]; then
+      kill -KILL "$ready_sentinel_pid" 2>/dev/null || true
+    fi
+  fi
+  wait "$child_pid" 2>/dev/null || true
+  controlled_pid=''
+  if is_safe_isolated_pgid "$child_pid" &&
+    ! wait_for_process_group_exit "$child_pid"; then
+    cleanup_failed=1
+  fi
+  if ((cleanup_failed == 0)); then
+    controlled_pgid=''
+    controlled_sid=''
+    controlled_sentinel_pid=''
+    controlled_sentinel_start_time=''
+    remove_controlled_identity_root
+  elif ((group_was_verified == 0)); then
+    printf 'Could not verify failed-launch process cleanup\n' >&2
+  fi
+  if [[ -n "$controlled_pending_signal" ]]; then
+    replay_controlled_pending_signal
+  fi
+  printf 'Could not establish an isolated controlled fixture process group\n' >&2
+  return 1
+}
+
+finish_controlled_process_group() {
+  local child_pgid=$controlled_pgid
+
+  [[ -n "$child_pgid" ]] || {
+    remove_controlled_identity_root
+    return 0
+  }
+  if ! is_safe_isolated_pgid "$child_pgid"; then
+    printf 'Refusing to signal an unverified controlled fixture process group\n' >&2
+    return 1
+  fi
+  if process_group_exists "$child_pgid"; then
+    if ! verify_controlled_process_group_identity "$child_pgid"; then
+      printf 'Controlled fixture process-group identity changed before cleanup\n' >&2
+      return 1
+    fi
+    kill -KILL -- "-$child_pgid" 2>/dev/null || true
+  fi
+  if ! wait_for_process_group_exit "$child_pgid"; then
+    printf 'Failed to remove the controlled fixture process group\n' >&2
+    return 1
+  fi
+  controlled_pgid=''
+  controlled_sid=''
+  controlled_sentinel_pid=''
+  controlled_sentinel_start_time=''
+  remove_controlled_identity_root
+}
+
+wait_for_controlled_child() {
+  local child_pid=$controlled_pid
+  local child_status
+
+  [[ -n "$child_pid" ]] || return 0
   if wait "$child_pid" 2>/dev/null; then
     child_status=0
   else
     child_status=$?
   fi
   controlled_child_status=$child_status
+  controlled_pid=''
+  finish_controlled_process_group
+}
+
+terminate_controlled_child() {
+  local child_pid=$controlled_pid
+  local child_pgid=$controlled_pgid
+  local child_status
+  local watchdog_pid=''
+
+  [[ -n "$child_pid" || -n "$child_pgid" ]] || {
+    remove_controlled_identity_root
+    return 0
+  }
+  if [[ -n "$child_pgid" ]]; then
+    if ! is_safe_isolated_pgid "$child_pgid"; then
+      printf 'Refusing to signal an unverified controlled fixture process group\n' >&2
+      return 1
+    fi
+    if process_group_exists "$child_pgid"; then
+      if ! verify_controlled_process_group_identity "$child_pgid"; then
+        printf 'Controlled fixture process-group identity changed before termination\n' >&2
+        return 1
+      fi
+      kill -TERM -- "-$child_pgid" 2>/dev/null || true
+      (
+        sleep "$controlled_termination_grace_seconds"
+        if process_group_exists "$child_pgid" &&
+          verify_controlled_process_group_identity "$child_pgid"; then
+          kill -KILL -- "-$child_pgid" 2>/dev/null || true
+        fi
+      ) &
+      watchdog_pid=$!
+    fi
+  elif [[ -n "$child_pid" ]]; then
+    # Launch cleanup reaches this branch only before process-group validation.
+    kill -KILL "$child_pid" 2>/dev/null || true
+  fi
+
+  if [[ -n "$child_pid" ]]; then
+    if wait "$child_pid" 2>/dev/null; then
+      child_status=0
+    else
+      child_status=$?
+    fi
+    controlled_child_status=$child_status
+    controlled_pid=''
+  fi
   if [[ -n "$watchdog_pid" ]]; then
     kill "$watchdog_pid" 2>/dev/null || true
     wait "$watchdog_pid" 2>/dev/null || true
   fi
 
-  if kill -0 "$child_pid" 2>/dev/null; then
-    printf 'Failed to terminate and reap the controlled fixture child\n' >&2
-    return 1
-  fi
+  finish_controlled_process_group
 }
 
 cleanup() {
@@ -385,6 +778,13 @@ on_exit() {
 }
 
 on_signal() {
+  if ((controlled_launching != 0)); then
+    if [[ -z "$controlled_pending_signal" ]]; then
+      controlled_pending_signal=$1
+      controlled_pending_status=$2
+    fi
+    return 0
+  fi
   failure_signal=$1
   exit "$2"
 }
@@ -463,11 +863,19 @@ run_goose() {
   local status
 
   if [[ -n "$controlled_goose_failure_status" ]]; then
-    if [[ -n "$controlled_diagnostic_secret" ]]; then
+    if [[ -n "$controlled_diagnostic_secret" || -n "$controlled_diagnostic_password" ]]; then
       printf 'Controlled fixture diagnostic marker: disposable synthetic input\n' >&2
+    fi
+    if [[ -n "$controlled_diagnostic_secret" ]]; then
       printf 'Synthetic fixture secret: %s\n' "$controlled_diagnostic_secret" >&2
+    fi
+    if [[ -n "$controlled_diagnostic_password" ]]; then
+      printf 'Synthetic fixture password: %s\n' "$controlled_diagnostic_password" >&2
       printf 'Synthetic fixture database URL: postgres://fixture:%s@fixture.invalid:5432/disposable?sslmode=disable\n' \
-        "$controlled_diagnostic_secret" >&2
+        "$controlled_diagnostic_password" >&2
+      printf '%s\n' \
+        "Synthetic fixture encoded database URL: postgres%3A%2F%2Ffixture%3A${controlled_diagnostic_password}%40fixture.invalid%3A5432%2Fdisposable" \
+        >&2
     fi
     printf 'Controlled fixture migration failure for harness regression (status %s)\n' \
       "$controlled_goose_failure_status" >&2
@@ -1179,20 +1587,26 @@ controlled_root="$test_root/controlled-failure"
 controlled_stdout="$controlled_root/stdout"
 controlled_stderr="$controlled_root/stderr"
 controlled_diagnostic_secret="fixture-secret-${resource_suffix}-${RANDOM}-${RANDOM}"
+controlled_diagnostic_password="fixture-password-${resource_suffix}-${RANDOM}-${RANDOM}"
 mkdir -p "$controlled_root"
 
-PP_FIXTURE_TEST_RESOURCE_SUFFIX="$controlled_suffix" \
-PP_FIXTURE_TEST_CONTROLLED_GOOSE_FAILURE_STATUS=37 \
-PP_FIXTURE_TEST_CONTROLLED_DIAGNOSTIC_SECRET="$controlled_diagnostic_secret" \
-TMPDIR="$controlled_root" \
-  "${BASH_SOURCE[0]}" >"$controlled_stdout" 2>"$controlled_stderr" &
-controlled_pid=$!
-if wait "$controlled_pid"; then
-  controlled_status=0
-else
-  controlled_status=$?
+launch_controlled_process "$controlled_stdout" "$controlled_stderr" \
+  env \
+  -u PP_FIXTURE_TEST_PROCESS_HELPER_MODE \
+  -u PP_FIXTURE_TEST_PROCESS_HELPER_READY \
+  -u PP_FIXTURE_TEST_PROCESS_HELPER_TERM_SEEN \
+  -u PP_FIXTURE_TEST_PROCESS_HELPER_MARKER \
+  PP_FIXTURE_TEST_RESOURCE_SUFFIX="$controlled_suffix" \
+  PP_FIXTURE_TEST_CONTROLLED_GOOSE_FAILURE_STATUS=37 \
+  PP_FIXTURE_TEST_CONTROLLED_DIAGNOSTIC_SECRET="$controlled_diagnostic_secret" \
+  PP_FIXTURE_TEST_CONTROLLED_DIAGNOSTIC_PASSWORD="$controlled_diagnostic_password" \
+  TMPDIR="$controlled_root" \
+  bash -x "${BASH_SOURCE[0]}"
+if ! wait_for_controlled_child; then
+  printf 'Controlled fixture migration process-group cleanup was incomplete\n' >&2
+  exit 1
 fi
-controlled_pid=''
+controlled_status=$controlled_child_status
 
 if ! cleanup_labeled_resources "$controlled_label"; then
   printf 'Controlled fixture migration resource cleanup was incomplete\n' >&2
@@ -1208,12 +1622,17 @@ grep -q '^1\.\.18$' "$controlled_stdout"
 grep -q 'Fixture integration failed at line .* (status 37)' "$controlled_stderr"
 grep -q 'fresh-goose.err .*redacted' "$controlled_stderr"
 grep -q 'Controlled fixture migration failure for harness regression (status 37)' "$controlled_stderr"
+grep -Fq '+ set +x' "$controlled_stderr"
 grep -Fq 'Controlled fixture diagnostic marker: disposable synthetic input' "$controlled_stderr"
 grep -Fq '[redacted-controlled-secret]' "$controlled_stderr"
+grep -Fq 'Synthetic fixture password: [redacted]' "$controlled_stderr"
 grep -Fq '[redacted-database-url]' "$controlled_stderr"
 if grep -Fq "$controlled_diagnostic_secret" "$controlled_stdout" "$controlled_stderr" ||
+  grep -Fq "$controlled_diagnostic_password" "$controlled_stdout" "$controlled_stderr" ||
   grep -Fq "$database_password" "$controlled_stdout" "$controlled_stderr" ||
-  grep -Eq 'postgres://[^[:space:]]+' "$controlled_stdout" "$controlled_stderr"; then
+  grep -Eq 'postgres://[^[:space:]]+' "$controlled_stdout" "$controlled_stderr" ||
+  grep -Eiq 'postgres(%3A|%3a)(%2F|%2f)(%2F|%2f)[^[:space:]]+' \
+    "$controlled_stdout" "$controlled_stderr"; then
   printf 'Controlled fixture diagnostics exposed credentials or a database URL\n' >&2
   exit 1
 fi
@@ -1328,8 +1747,171 @@ grep -Fq 'Fixture integration cleanup was incomplete' "$fake_cleanup_stderr"
 [[ $(combined_exit_status 143 71) == 143 ]]
 [[ $(combined_exit_status 0 71) == 71 ]]
 
+launch_process_helper() {
+  local mode=$1
+  local ready_file=$2
+  local stdout_file=$3
+  local stderr_file=$4
+  local term_seen_file=${5:-}
+  local marker_file=${6:-}
+
+  launch_controlled_process "$stdout_file" "$stderr_file" \
+    env \
+    -u PP_FIXTURE_TEST_CONTROLLED_GOOSE_FAILURE_STATUS \
+    -u PP_FIXTURE_TEST_CONTROLLED_DIAGNOSTIC_SECRET \
+    -u PP_FIXTURE_TEST_CONTROLLED_DIAGNOSTIC_PASSWORD \
+    PP_FIXTURE_TEST_PROCESS_HELPER_MODE="$mode" \
+    PP_FIXTURE_TEST_PROCESS_HELPER_READY="$ready_file" \
+    PP_FIXTURE_TEST_PROCESS_HELPER_TERM_SEEN="$term_seen_file" \
+    PP_FIXTURE_TEST_PROCESS_HELPER_MARKER="$marker_file" \
+    TMPDIR="$test_root" \
+    "${BASH_SOURCE[0]}"
+}
+
+wait_for_process_helper_ready() {
+  local ready_file=$1
+  local pgid=$2
+  local attempt
+
+  helper_descendant_pid=''
+  for ((attempt = 0; attempt < 1000; attempt++)); do
+    if [[ -s "$ready_file" ]]; then
+      IFS= read -r helper_descendant_pid <"$ready_file"
+      [[ "$helper_descendant_pid" =~ ^[1-9][0-9]*$ ]] && return 0
+      break
+    fi
+    if ! process_group_exists "$pgid"; then
+      break
+    fi
+    sleep 0.01
+  done
+  printf 'Controlled fixture process helper did not become ready\n' >&2
+  return 1
+}
+
+assert_controlled_processes_absent() {
+  local leader_pid=$1
+  local pgid=$2
+  local descendant_pid=${3:-}
+  local description=$4
+  local group_status
+
+  if process_group_exists "$pgid"; then
+    printf '%s left its isolated process group running\n' "$description" >&2
+    return 1
+  else
+    group_status=$?
+  fi
+  if ((group_status != 1)); then
+    printf '%s had an invalid isolated process-group identity\n' "$description" >&2
+    return 1
+  fi
+  if kill -0 "$leader_pid" 2>/dev/null; then
+    printf '%s left its controlled leader running\n' "$description" >&2
+    return 1
+  fi
+  if [[ -n "$descendant_pid" ]] && kill -0 "$descendant_pid" 2>/dev/null; then
+    printf '%s left its foreground descendant running\n' "$description" >&2
+    return 1
+  fi
+}
+
+launch_identity_root="$controlled_root/launch-identity-root"
+launch_identity_file="$controlled_root/launch-identity.identity"
+launch_identity_stderr="$controlled_root/launch-identity.stderr"
+if (
+  trap - EXIT ERR HUP INT TERM
+  test_root="$launch_identity_root"
+  controlled_root="$test_root/recursive-child"
+  controlled_label='com.pandapages.fixture-run=synthetic-launch-identity-child'
+  controlled_pid=''
+  controlled_pgid=''
+  controlled_sid=''
+  controlled_sentinel_pid=''
+  controlled_sentinel_start_time=''
+  controlled_identity_root=''
+  controlled_launching=0
+  controlled_pending_signal=''
+  controlled_pending_status=''
+  controlled_launch_test_signal=''
+  controlled_launch_test_identity_failure=1
+  controlled_launch_test_identity_file="$launch_identity_file"
+  docker() {
+    return 0
+  }
+  mkdir -p "$controlled_root"
+  launch_identity_ready="$test_root/unused.ready"
+  if launch_process_helper early-exit "$launch_identity_ready" \
+    "$test_root/early.stdout" "$test_root/early.stderr"; then
+    printf 'Controlled launch-identity failure unexpectedly succeeded\n' >&2
+    exit 1
+  else
+    launch_identity_status=$?
+  fi
+  [[ "$launch_identity_status" == 1 ]]
+  controlled_launch_test_identity_failure=0
+  controlled_launch_test_identity_file=''
+  cleanup
+  cleanup
+) 2>"$launch_identity_stderr"; then
+  launch_identity_test_status=0
+else
+  launch_identity_test_status=$?
+fi
+[[ "$launch_identity_test_status" == 0 ]]
+grep -Fq 'Could not establish an isolated controlled fixture process group' \
+  "$launch_identity_stderr"
+read -r launch_identity_leader launch_identity_pgid launch_identity_sentinel \
+  <"$launch_identity_file"
+assert_controlled_processes_absent \
+  "$launch_identity_leader" "$launch_identity_pgid" "$launch_identity_sentinel" \
+  'Launch-identity failure regression'
+[[ ! -e "$launch_identity_root" ]]
+
+launch_signal_root="$controlled_root/launch-signal-root"
+launch_signal_identity_file="$controlled_root/launch-signal.identity"
+launch_signal_stderr="$controlled_root/launch-signal.stderr"
+if (
+  trap - EXIT ERR HUP INT TERM
+  test_root="$launch_signal_root"
+  controlled_root="$test_root/recursive-child"
+  controlled_label='com.pandapages.fixture-run=synthetic-launch-signal-child'
+  controlled_pid=''
+  controlled_pgid=''
+  controlled_identity_root=''
+  controlled_launching=0
+  controlled_pending_signal=''
+  controlled_pending_status=''
+  controlled_launch_test_signal=TERM
+  controlled_launch_test_identity_file="$launch_signal_identity_file"
+  failure_line=''
+  failure_signal=''
+  docker() {
+    return 0
+  }
+  mkdir -p "$controlled_root"
+  trap on_exit EXIT
+  trap 'on_signal TERM 143' TERM
+  launch_signal_ready="$test_root/foreground.ready"
+  launch_process_helper foreground "$launch_signal_ready" \
+    "$test_root/foreground.stdout" "$test_root/foreground.stderr"
+  printf 'Launch-window TERM regression unexpectedly resumed after signal replay\n' >&2
+  exit 1
+) >/dev/null 2>"$launch_signal_stderr"; then
+  launch_signal_status=0
+else
+  launch_signal_status=$?
+fi
+[[ "$launch_signal_status" == 143 ]]
+grep -Fq 'Fixture integration interrupted by TERM (status 143)' "$launch_signal_stderr"
+read -r launch_signal_leader launch_signal_pgid <"$launch_signal_identity_file"
+assert_controlled_processes_absent \
+  "$launch_signal_leader" "$launch_signal_pgid" '' \
+  'Launch-window TERM regression'
+[[ ! -e "$launch_signal_root" ]]
+
 parent_term_root="$controlled_root/parent-term-root"
-parent_term_pid_file="$controlled_root/parent-term.pid"
+parent_term_identity_file="$controlled_root/parent-term.identity"
 parent_term_stderr="$controlled_root/parent-term.stderr"
 if (
   trap - EXIT ERR HUP INT TERM
@@ -1337,19 +1919,30 @@ if (
   controlled_root="$test_root/recursive-child"
   controlled_label='com.pandapages.fixture-run=synthetic-parent-term-child'
   controlled_pid=''
+  controlled_pgid=''
+  controlled_identity_root=''
+  controlled_launching=0
+  controlled_pending_signal=''
+  controlled_pending_status=''
+  controlled_termination_grace_seconds=1
   failure_line=''
   failure_signal=''
   docker() {
     return 0
   }
   mkdir -p "$controlled_root"
-  sleep 30 &
-  controlled_pid=$!
-  printf '%s\n' "$controlled_pid" >"$parent_term_pid_file"
   trap on_exit EXIT
   trap 'on_signal TERM 143' TERM
+  parent_term_ready="$test_root/foreground.ready"
+  launch_process_helper foreground "$parent_term_ready" \
+    "$test_root/foreground.stdout" "$test_root/foreground.stderr"
+  parent_term_leader=$controlled_pid
+  parent_term_pgid=$controlled_pgid
+  wait_for_process_helper_ready "$parent_term_ready" "$parent_term_pgid"
+  printf '%s %s %s\n' \
+    "$parent_term_leader" "$parent_term_pgid" "$helper_descendant_pid" \
+    >"$parent_term_identity_file"
   kill -TERM "$BASHPID"
-  sleep 1
 ) >/dev/null 2>"$parent_term_stderr"; then
   parent_term_status=0
 else
@@ -1357,29 +1950,95 @@ else
 fi
 [[ "$parent_term_status" == 143 ]]
 grep -Fq 'Fixture integration interrupted by TERM (status 143)' "$parent_term_stderr"
-IFS= read -r parent_term_child_pid <"$parent_term_pid_file"
-if kill -0 "$parent_term_child_pid" 2>/dev/null; then
-  printf 'Parent TERM regression left its controlled child running\n' >&2
-  exit 1
-fi
+read -r parent_term_leader parent_term_pgid parent_term_descendant \
+  <"$parent_term_identity_file"
+assert_controlled_processes_absent \
+  "$parent_term_leader" "$parent_term_pgid" "$parent_term_descendant" \
+  'Parent TERM regression'
 [[ ! -e "$parent_term_root" ]]
 
+delayed_docker_root="$controlled_root/delayed-docker-root"
+delayed_docker_identity_file="$controlled_root/delayed-docker.identity"
+(
+  trap - EXIT ERR HUP INT TERM
+  test_root="$delayed_docker_root"
+  controlled_root="$test_root/recursive-child"
+  controlled_label='com.pandapages.fixture-run=synthetic-delayed-docker-child'
+  controlled_pid=''
+  controlled_pgid=''
+  controlled_sid=''
+  controlled_sentinel_pid=''
+  controlled_sentinel_start_time=''
+  controlled_child_status=''
+  controlled_identity_root=''
+  controlled_launching=0
+  controlled_pending_signal=''
+  controlled_pending_status=''
+  controlled_termination_grace_seconds=1
+  docker() {
+    return 0
+  }
+  mkdir -p "$controlled_root"
+  delayed_docker_ready="$test_root/delayed-docker.ready"
+  delayed_docker_term_seen="$test_root/delayed-docker.term-seen"
+  delayed_docker_marker="$test_root/delayed-docker.resource"
+  launch_process_helper delayed-docker "$delayed_docker_ready" \
+    "$test_root/delayed-docker.stdout" "$test_root/delayed-docker.stderr" \
+    "$delayed_docker_term_seen" "$delayed_docker_marker"
+  delayed_docker_leader=$controlled_pid
+  delayed_docker_pgid=$controlled_pgid
+  wait_for_process_helper_ready "$delayed_docker_ready" "$delayed_docker_pgid"
+  printf '%s %s %s\n' \
+    "$delayed_docker_leader" "$delayed_docker_pgid" "$helper_descendant_pid" \
+    >"$delayed_docker_identity_file"
+  terminate_controlled_child
+  [[ "$controlled_child_status" == 137 ]] || {
+    printf 'Delayed fake-Docker child status = %s, want 137\n' \
+      "$controlled_child_status" >&2
+    exit 1
+  }
+  grep -Fq 'TERM received before fake Docker create' "$delayed_docker_term_seen"
+  [[ ! -e "$delayed_docker_marker" ]] || {
+    printf 'Delayed fake Docker created a labelled resource after group cleanup\n' >&2
+    exit 1
+  }
+  cleanup
+  cleanup
+)
+read -r delayed_docker_leader delayed_docker_pgid delayed_docker_descendant \
+  <"$delayed_docker_identity_file"
+assert_controlled_processes_absent \
+  "$delayed_docker_leader" "$delayed_docker_pgid" "$delayed_docker_descendant" \
+  'Delayed fake-Docker regression'
+[[ ! -e "$delayed_docker_root" ]]
+
 terminated_child_root="$controlled_root/terminated-child-root"
-terminated_child_pid_file="$controlled_root/terminated-child.pid"
+terminated_child_identity_file="$controlled_root/terminated-child.identity"
 (
   trap - EXIT ERR HUP INT TERM
   test_root="$terminated_child_root"
   controlled_root="$test_root/recursive-child"
   controlled_label='com.pandapages.fixture-run=synthetic-terminated-child'
   controlled_pid=''
+  controlled_pgid=''
   controlled_child_status=''
+  controlled_identity_root=''
+  controlled_launching=0
+  controlled_pending_signal=''
+  controlled_pending_status=''
   docker() {
     return 0
   }
   mkdir -p "$controlled_root"
-  sleep 30 &
-  controlled_pid=$!
-  printf '%s\n' "$controlled_pid" >"$terminated_child_pid_file"
+  terminated_child_ready="$test_root/foreground.ready"
+  launch_process_helper foreground "$terminated_child_ready" \
+    "$test_root/foreground.stdout" "$test_root/foreground.stderr"
+  terminated_child_leader=$controlled_pid
+  terminated_child_pgid=$controlled_pgid
+  wait_for_process_helper_ready "$terminated_child_ready" "$terminated_child_pgid"
+  printf '%s %s %s\n' \
+    "$terminated_child_leader" "$terminated_child_pgid" "$helper_descendant_pid" \
+    >"$terminated_child_identity_file"
   terminate_controlled_child
   [[ "$controlled_child_status" == 143 ]] || {
     printf 'Terminated-child status = %s, want 143\n' "$controlled_child_status" >&2
@@ -1388,79 +2047,163 @@ terminated_child_pid_file="$controlled_root/terminated-child.pid"
   cleanup
   cleanup
 )
-IFS= read -r terminated_child_pid <"$terminated_child_pid_file"
-if kill -0 "$terminated_child_pid" 2>/dev/null; then
-  printf 'Terminated-child regression did not reap its controlled child\n' >&2
-  exit 1
-fi
+read -r terminated_child_leader terminated_child_pgid terminated_child_descendant \
+  <"$terminated_child_identity_file"
+assert_controlled_processes_absent \
+  "$terminated_child_leader" "$terminated_child_pgid" "$terminated_child_descendant" \
+  'Terminated-child regression'
 [[ ! -e "$terminated_child_root" ]]
 
+group_verify_root="$controlled_root/group-verify-root"
+group_verify_identity_file="$controlled_root/group-verify.identity"
+group_verify_stderr="$controlled_root/group-verify.stderr"
+if (
+  trap - EXIT ERR HUP INT TERM
+  test_root="$group_verify_root"
+  controlled_root="$test_root/recursive-child"
+  controlled_label='com.pandapages.fixture-run=synthetic-group-verify-child'
+  controlled_pid=''
+  controlled_pgid=''
+  controlled_sid=''
+  controlled_sentinel_pid=''
+  controlled_sentinel_start_time=''
+  controlled_child_status=''
+  controlled_identity_root=''
+  controlled_launching=0
+  controlled_pending_signal=''
+  controlled_pending_status=''
+  controlled_process_group_verify_failure=0
+  docker() {
+    return 0
+  }
+  mkdir -p "$controlled_root"
+  group_verify_ready="$test_root/foreground.ready"
+  launch_process_helper foreground "$group_verify_ready" \
+    "$test_root/foreground.stdout" "$test_root/foreground.stderr"
+  group_verify_leader=$controlled_pid
+  group_verify_pgid=$controlled_pgid
+  wait_for_process_helper_ready "$group_verify_ready" "$group_verify_pgid"
+  printf '%s %s %s\n' \
+    "$group_verify_leader" "$group_verify_pgid" "$helper_descendant_pid" \
+    >"$group_verify_identity_file"
+  controlled_process_group_verify_failure=1
+  if terminate_controlled_child; then
+    printf 'Controlled process-group verification failure unexpectedly passed\n' >&2
+    exit 1
+  else
+    group_verify_status=$?
+  fi
+  [[ "$group_verify_status" == 1 ]]
+  [[ "$controlled_child_status" == 143 ]]
+  controlled_process_group_verify_failure=0
+  terminate_controlled_child
+  cleanup
+  cleanup
+) 2>"$group_verify_stderr"; then
+  group_verify_test_status=0
+else
+  group_verify_test_status=$?
+fi
+[[ "$group_verify_test_status" == 0 ]]
+grep -Fq 'Controlled process-group verification failure for harness regression' \
+  "$group_verify_stderr"
+read -r group_verify_leader group_verify_pgid group_verify_descendant \
+  <"$group_verify_identity_file"
+assert_controlled_processes_absent \
+  "$group_verify_leader" "$group_verify_pgid" "$group_verify_descendant" \
+  'Process-group verification-failure regression'
+[[ ! -e "$group_verify_root" ]]
+
 killed_child_root="$controlled_root/killed-child-root"
-killed_child_pid_file="$controlled_root/killed-child.pid"
+killed_child_identity_file="$controlled_root/killed-child.identity"
 (
   trap - EXIT ERR HUP INT TERM
   test_root="$killed_child_root"
   controlled_root="$test_root/recursive-child"
   controlled_label='com.pandapages.fixture-run=synthetic-killed-child'
   controlled_pid=''
+  controlled_pgid=''
   controlled_child_status=''
+  controlled_identity_root=''
+  controlled_launching=0
+  controlled_pending_signal=''
+  controlled_pending_status=''
   docker() {
     return 0
   }
   mkdir -p "$controlled_root"
-  sleep 30 &
-  controlled_pid=$!
-  printf '%s\n' "$controlled_pid" >"$killed_child_pid_file"
+  killed_child_ready="$test_root/foreground.ready"
+  launch_process_helper foreground "$killed_child_ready" \
+    "$test_root/foreground.stdout" "$test_root/foreground.stderr"
+  killed_child_leader=$controlled_pid
+  killed_child_pgid=$controlled_pgid
+  wait_for_process_helper_ready "$killed_child_ready" "$killed_child_pgid"
+  printf '%s %s %s\n' \
+    "$killed_child_leader" "$killed_child_pgid" "$helper_descendant_pid" \
+    >"$killed_child_identity_file"
   kill -KILL "$controlled_pid"
-  cleanup
+  wait_for_controlled_child
   [[ "$controlled_child_status" == 137 ]] || {
     printf 'Killed-child status = %s, want 137\n' "$controlled_child_status" >&2
     exit 1
   }
   cleanup
+  cleanup
 )
-IFS= read -r killed_child_pid <"$killed_child_pid_file"
-if kill -0 "$killed_child_pid" 2>/dev/null; then
-  printf 'Killed-child regression did not reap its controlled child\n' >&2
-  exit 1
-fi
+read -r killed_child_leader killed_child_pgid killed_child_descendant \
+  <"$killed_child_identity_file"
+assert_controlled_processes_absent \
+  "$killed_child_leader" "$killed_child_pgid" "$killed_child_descendant" \
+  'Killed-child regression'
 [[ ! -e "$killed_child_root" ]]
 
 early_child_root="$controlled_root/early-child-root"
-early_child_pid_file="$controlled_root/early-child.pid"
+early_child_identity_file="$controlled_root/early-child.identity"
 (
   trap - EXIT ERR HUP INT TERM
   test_root="$early_child_root"
   controlled_root="$test_root/recursive-child"
   controlled_label='com.pandapages.fixture-run=synthetic-early-child'
   controlled_pid=''
+  controlled_pgid=''
   controlled_child_status=''
+  controlled_identity_root=''
+  controlled_launching=0
+  controlled_pending_signal=''
+  controlled_pending_status=''
   docker() {
     return 0
   }
   mkdir -p "$controlled_root"
-  bash -c 'exit 41' &
-  controlled_pid=$!
-  printf '%s\n' "$controlled_pid" >"$early_child_pid_file"
-  if wait "$controlled_pid"; then
-    early_child_status=0
-  else
-    early_child_status=$?
-  fi
-  controlled_pid=''
-  [[ "$early_child_status" == 41 ]] || {
-    printf 'Early-child status = %s, want 41\n' "$early_child_status" >&2
+  early_child_ready="$test_root/unused.ready"
+  launch_process_helper early-exit "$early_child_ready" \
+    "$test_root/early.stdout" "$test_root/early.stderr"
+  early_child_leader=$controlled_pid
+  early_child_pgid=$controlled_pgid
+  printf '%s %s\n' "$early_child_leader" "$early_child_pgid" \
+    >"$early_child_identity_file"
+  wait_for_controlled_child
+  [[ "$controlled_child_status" == 41 ]] || {
+    printf 'Early-child status = %s, want 41\n' "$controlled_child_status" >&2
     exit 1
   }
   cleanup
   cleanup
 )
-IFS= read -r early_child_pid <"$early_child_pid_file"
-if kill -0 "$early_child_pid" 2>/dev/null; then
-  printf 'Early-exit regression did not reap its controlled child\n' >&2
+read -r early_child_leader early_child_pgid <"$early_child_identity_file"
+assert_controlled_processes_absent \
+  "$early_child_leader" "$early_child_pgid" '' 'Early-exit regression'
+[[ ! -e "$early_child_root" ]]
+
+if grep -RFq "$controlled_diagnostic_secret" "$controlled_root" ||
+  grep -RFq "$controlled_diagnostic_password" "$controlled_root" ||
+  grep -RFq "$database_password" "$controlled_root" ||
+  grep -REq 'postgres://[^[:space:]]+' "$controlled_root" ||
+  grep -REiq 'postgres(%3A|%3a)(%2F|%2f)(%2F|%2f)[^[:space:]]+' \
+    "$controlled_root"; then
+  printf 'A surviving controlled fixture artifact exposed a credential or database URL\n' >&2
   exit 1
 fi
-[[ ! -e "$early_child_root" ]]
 
 printf 'ok 17 - controlled failures preserve status and redacted diagnostics while abnormal children and Docker query failures clean up fail-closed\n'
 

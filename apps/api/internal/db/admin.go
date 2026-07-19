@@ -1,11 +1,14 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
+	"reflect"
 	"strings"
 	"unicode/utf8"
 
@@ -21,30 +24,124 @@ type storedVersionQueryer interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
 
+type storedReaderVersionSnapshot struct {
+	Version         int
+	FrontmatterJSON []byte
+	Markdown        string
+	RenderedHTML    string
+	ContentHash     string
+	SegmentCount    int
+}
+
+type normalizedStoredFrontmatter struct {
+	Values   map[string]any
+	JSON     []byte
+	Title    string
+	Author   *string
+	Language string
+}
+
+func normalizeStoredFrontmatter(raw []byte) (normalizedStoredFrontmatter, error) {
+	title, author, language, err := libraryVersionMetadata(raw)
+	if err != nil {
+		return normalizedStoredFrontmatter{}, err
+	}
+	decoded, ok := decodeJSONDocument(raw)
+	if !ok {
+		return normalizedStoredFrontmatter{}, fmt.Errorf("frontmatter must be valid JSON")
+	}
+	values, ok := decoded.(map[string]any)
+	if !ok {
+		return normalizedStoredFrontmatter{}, fmt.Errorf("frontmatter must be an object")
+	}
+
+	rawTitle, ok := values["title"].(string)
+	if !ok || rawTitle != title {
+		return normalizedStoredFrontmatter{}, fmt.Errorf("frontmatter title is not canonical")
+	}
+	rawLanguage, ok := values["language"].(string)
+	if !ok || rawLanguage != language {
+		return normalizedStoredFrontmatter{}, fmt.Errorf("frontmatter language is not canonical")
+	}
+	authorValue := ""
+	if author != nil {
+		authorValue = *author
+	}
+	if rawAuthor, exists := values["author"]; exists && rawAuthor != nil {
+		value, ok := rawAuthor.(string)
+		if !ok {
+			return normalizedStoredFrontmatter{}, fmt.Errorf("frontmatter author is not canonical")
+		}
+		trimmed := strings.TrimSpace(value)
+		if (trimmed != "" && trimmed != authorValue) || (trimmed == "" && authorValue != "") {
+			return normalizedStoredFrontmatter{}, fmt.Errorf("frontmatter author is not canonical")
+		}
+		if trimmed != "" && value != trimmed {
+			return normalizedStoredFrontmatter{}, fmt.Errorf("frontmatter author is not canonical")
+		}
+	}
+
+	normalizedValues := make(map[string]any, len(values)+1)
+	for key, value := range values {
+		normalizedValues[key] = value
+	}
+	normalizedValues["title"] = title
+	normalizedValues["author"] = authorValue
+	normalizedValues["language"] = language
+	normalizedJSON, err := json.Marshal(normalizedValues)
+	if err != nil {
+		return normalizedStoredFrontmatter{}, err
+	}
+	return normalizedStoredFrontmatter{
+		Values:   normalizedValues,
+		JSON:     normalizedJSON,
+		Title:    title,
+		Author:   author,
+		Language: language,
+	}, nil
+}
+
 // validateStoredReaderVersion applies the immutable metadata and structural
 // Reader 2 contract to one exact story-owned version. It deliberately does not
 // mutate a corrupt version: published versions remain immutable and repair is
 // an explicit operational action.
-func validateStoredReaderVersion(ctx context.Context, queryer storedVersionQueryer, storyID, versionID string) (int, error) {
+func validateStoredReaderVersion(
+	ctx context.Context,
+	queryer storedVersionQueryer,
+	storyID string,
+	versionID string,
+	slug string,
+) (storedReaderVersionSnapshot, error) {
 	var (
 		version         int64
 		frontmatterJSON string
+		markdown        string
+		renderedHTML    string
+		contentHash     string
 	)
 	if err := queryer.QueryRowContext(ctx, `
-		SELECT version, frontmatter::text
+		SELECT version, frontmatter::text, markdown, rendered_html, content_hash
 		FROM story_versions
 		WHERE id = $1
 		  AND story_id = $2
 		FOR UPDATE
-	`, versionID, storyID).Scan(&version, &frontmatterJSON); err != nil {
-		return 0, err
+	`, versionID, storyID).Scan(&version, &frontmatterJSON, &markdown, &renderedHTML, &contentHash); err != nil {
+		return storedReaderVersionSnapshot{}, err
 	}
 	versionValue := int(version)
 	if version <= 0 || int64(versionValue) != version {
-		return 0, fmt.Errorf("%w: version number", errStoredVersionInvalid)
+		return storedReaderVersionSnapshot{}, fmt.Errorf("%w: version number", errStoredVersionInvalid)
 	}
-	if _, _, _, err := libraryVersionMetadata([]byte(frontmatterJSON)); err != nil {
-		return 0, fmt.Errorf("%w: immutable metadata", errStoredVersionInvalid)
+	frontmatter, err := normalizeStoredFrontmatter([]byte(frontmatterJSON))
+	if err != nil {
+		return storedReaderVersionSnapshot{}, fmt.Errorf("%w: immutable metadata", errStoredVersionInvalid)
+	}
+	snapshot := storedReaderVersionSnapshot{
+		Version:         versionValue,
+		FrontmatterJSON: frontmatter.JSON,
+		Markdown:        markdown,
+		RenderedHTML:    renderedHTML,
+		ContentHash:     contentHash,
 	}
 
 	// The version-row update lock blocks new FK-backed segment inserts while
@@ -70,7 +167,7 @@ func validateStoredReaderVersion(ctx context.Context, queryer storedVersionQuery
 		FOR SHARE OF segment
 	`, versionID)
 	if err != nil {
-		return 0, err
+		return storedReaderVersionSnapshot{}, err
 	}
 	defer rows.Close()
 
@@ -101,14 +198,14 @@ func validateStoredReaderVersion(ctx context.Context, queryer storedVersionQuery
 			&segmentWordCount,
 			&renderedHTML,
 		); err != nil {
-			return 0, err
+			return storedReaderVersionSnapshot{}, err
 		}
 		if strings.TrimSpace(segmentID.String) == "" || !ordinal.Valid || !kind.Valid ||
 			!contentKey.Valid || !contentOccurrence.Valid || !segmentWordCount.Valid || !renderedHTML.Valid {
-			return 0, fmt.Errorf("%w: incomplete segment identity", errStoredVersionInvalid)
+			return storedReaderVersionSnapshot{}, fmt.Errorf("%w: incomplete segment identity", errStoredVersionInvalid)
 		}
 		if !utf8.ValidString(renderedHTML.String) || strings.TrimSpace(renderedHTML.String) == "" {
-			return 0, fmt.Errorf("%w: unreadable segment content", errStoredVersionInvalid)
+			return storedReaderVersionSnapshot{}, fmt.Errorf("%w: unreadable segment content", errStoredVersionInvalid)
 		}
 
 		ordinalValue := int(ordinal.Int64)
@@ -116,7 +213,7 @@ func validateStoredReaderVersion(ctx context.Context, queryer storedVersionQuery
 		if ordinal.Int64 <= 0 || int64(ordinalValue) != ordinal.Int64 ||
 			contentOccurrence.Int64 <= 0 || int64(contentOccurrenceValue) != contentOccurrence.Int64 ||
 			segmentWordCount.Int64 < 0 || segmentWordCount.Int64 > maxSafeJSONInteger-wordCount {
-			return 0, fmt.Errorf("%w: segment numeric value", errStoredVersionInvalid)
+			return storedReaderVersionSnapshot{}, fmt.Errorf("%w: segment numeric value", errStoredVersionInvalid)
 		}
 
 		identity := readercontract.StoredSegmentIdentity{
@@ -128,17 +225,17 @@ func validateStoredReaderVersion(ctx context.Context, queryer storedVersionQuery
 		if headingLevel.Valid {
 			value := int(headingLevel.Int64)
 			if int64(value) != headingLevel.Int64 {
-				return 0, fmt.Errorf("%w: heading level", errStoredVersionInvalid)
+				return storedReaderVersionSnapshot{}, fmt.Errorf("%w: heading level", errStoredVersionInvalid)
 			}
 			identity.HeadingLevel = &value
 		}
 		if chapterKey.Valid != chapterOccurrence.Valid {
-			return 0, fmt.Errorf("%w: incomplete chapter identity", errStoredVersionInvalid)
+			return storedReaderVersionSnapshot{}, fmt.Errorf("%w: incomplete chapter identity", errStoredVersionInvalid)
 		}
 		if chapterKey.Valid {
 			value := int(chapterOccurrence.Int64)
 			if chapterOccurrence.Int64 <= 0 || int64(value) != chapterOccurrence.Int64 {
-				return 0, fmt.Errorf("%w: chapter occurrence", errStoredVersionInvalid)
+				return storedReaderVersionSnapshot{}, fmt.Errorf("%w: chapter occurrence", errStoredVersionInvalid)
 			}
 			key := chapterKey.String
 			identity.ChapterKey = &key
@@ -148,15 +245,44 @@ func validateStoredReaderVersion(ctx context.Context, queryer storedVersionQuery
 		identities = append(identities, identity)
 	}
 	if err := rows.Err(); err != nil {
-		return 0, err
+		return storedReaderVersionSnapshot{}, err
 	}
 	if len(identities) == 0 {
-		return 0, fmt.Errorf("%w: no readable segments", errStoredVersionInvalid)
+		return storedReaderVersionSnapshot{}, fmt.Errorf("%w: no readable segments", errStoredVersionInvalid)
 	}
 	if _, err := readercontract.ValidateStoredSegmentIdentities(identities); err != nil {
-		return 0, fmt.Errorf("%w: segment identities", errStoredVersionInvalid)
+		return storedReaderVersionSnapshot{}, fmt.Errorf("%w: segment identities", errStoredVersionInvalid)
 	}
-	return len(identities), nil
+
+	authorValue := ""
+	if frontmatter.Author != nil {
+		authorValue = *frontmatter.Author
+	}
+	canonical, err := storyingest.CanonicalizeStoredBody(storyingest.Input{
+		Slug:     slug,
+		Title:    frontmatter.Title,
+		Author:   authorValue,
+		Markdown: markdown,
+		Language: frontmatter.Language,
+	}, frontmatter.Values)
+	if err != nil {
+		return storedReaderVersionSnapshot{}, fmt.Errorf("%w: canonical story body", errStoredVersionInvalid)
+	}
+	segmentsMatch, err := storedReaderSegmentsMatch(ctx, queryer, versionID, canonical.Segments)
+	if err != nil {
+		return storedReaderVersionSnapshot{}, err
+	}
+	canonicalFrontmatterJSON, err := json.Marshal(canonical.Frontmatter)
+	if err != nil {
+		return storedReaderVersionSnapshot{}, err
+	}
+	if !jsonDocumentsEqual(canonicalFrontmatterJSON, frontmatter.JSON) ||
+		canonical.Markdown != markdown || canonical.RenderedHTML != renderedHTML ||
+		canonical.ContentHash != contentHash || !segmentsMatch {
+		return storedReaderVersionSnapshot{}, fmt.Errorf("%w: noncanonical persisted content", errStoredVersionInvalid)
+	}
+	snapshot.SegmentCount = len(identities)
+	return snapshot, nil
 }
 
 // storedReaderSegmentsMatch compares the immutable persisted sequence with the
@@ -257,6 +383,67 @@ func nullableStringMatches(stored sql.NullString, expected *string) bool {
 	return stored.Valid && stored.String == *expected
 }
 
+func decodeJSONDocument(raw []byte) (any, bool) {
+	if !json.Valid(raw) {
+		return nil, false
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, false
+	}
+	return value, true
+}
+
+func jsonDocumentsEqual(left, right []byte) bool {
+	leftValue, leftOK := decodeJSONDocument(left)
+	rightValue, rightOK := decodeJSONDocument(right)
+	if !leftOK || !rightOK {
+		return false
+	}
+	leftValue, leftOK = normalizeJSONNumbers(leftValue)
+	rightValue, rightOK = normalizeJSONNumbers(rightValue)
+	return leftOK && rightOK && reflect.DeepEqual(leftValue, rightValue)
+}
+
+type canonicalJSONNumber string
+
+func normalizeJSONNumbers(value any) (any, bool) {
+	switch typed := value.(type) {
+	case json.Number:
+		number, ok := new(big.Rat).SetString(typed.String())
+		if !ok {
+			return nil, false
+		}
+		return canonicalJSONNumber(number.RatString()), true
+	case map[string]any:
+		normalized := make(map[string]any, len(typed))
+		for key, child := range typed {
+			value, ok := normalizeJSONNumbers(child)
+			if !ok {
+				return nil, false
+			}
+			normalized[key] = value
+		}
+		return normalized, true
+	case []any:
+		normalized := make([]any, len(typed))
+		for index, child := range typed {
+			value, ok := normalizeJSONNumbers(child)
+			if !ok {
+				return nil, false
+			}
+			normalized[index] = value
+		}
+		return normalized, true
+	case nil, string, bool:
+		return typed, true
+	default:
+		return nil, false
+	}
+}
+
 func (s *Store) AdminPreview(req model.AdminPreviewRequest) (model.AdminPreviewResponse, error) {
 	out, err := storyingest.Ingest(storyingest.Input{
 		Slug:     "preview",
@@ -290,7 +477,9 @@ func (s *Store) AdminPreview(req model.AdminPreviewRequest) (model.AdminPreviewR
 	}, nil
 }
 
-// AdminDraftUpsert is account-scoped and idempotent on (story_id, content_hash).
+// AdminDraftUpsert is account-scoped. Body hashes retain their historical role
+// as idempotency candidate keys, but reuse succeeds only when the complete
+// locked immutable version still matches the canonical incoming story.
 func (s *Store) AdminDraftUpsert(accountID string, req model.AdminDraftUpsertRequest) (model.AdminDraftUpsertResponse, error) {
 	accountID = strings.TrimSpace(accountID)
 	if accountID == "" {
@@ -328,6 +517,10 @@ func (s *Store) AdminDraftUpsert(accountID string, req model.AdminDraftUpsertReq
 	if err != nil {
 		return model.AdminDraftUpsertResponse{}, err
 	}
+	frontmatterJSON, err := json.Marshal(ing.Frontmatter)
+	if err != nil {
+		return model.AdminDraftUpsertResponse{}, err
+	}
 
 	ctx, cancel := s.ctx()
 	defer cancel()
@@ -359,22 +552,50 @@ func (s *Store) AdminDraftUpsert(accountID string, req model.AdminDraftUpsertReq
 		return model.AdminDraftUpsertResponse{}, err
 	}
 
-	// ---- Idempotency: if this exact content already exists for this story, reuse it ----
-	var existingVersionID string
-	var existingVersion int
-	var existingRendered string
-
-	err = tx.QueryRowContext(ctx, `
-		SELECT id, version, rendered_html
+	// Body hashes identify possible idempotency targets for compatibility with
+	// existing versions. Reuse still requires the complete locked immutable
+	// version to equal this request. Metadata-only changes therefore return the
+	// explicit repair-required conflict instead of silently reusing old metadata
+	// or changing the established body-hash identity policy.
+	candidateRows, err := tx.QueryContext(ctx, `
+		SELECT id
 		FROM story_versions
-		WHERE story_id = $1 AND content_hash = $2
-		LIMIT 1
-	`, storyID, ing.ContentHash).Scan(&existingVersionID, &existingVersion, &existingRendered)
+		WHERE story_id = $1
+		  AND (content_hash = $2 OR markdown = $3)
+		ORDER BY version ASC, id ASC
+		FOR UPDATE
+	`, storyID, ing.ContentHash, ing.Markdown)
+	if err != nil {
+		return model.AdminDraftUpsertResponse{}, err
+	}
+	existingVersionIDs := make([]string, 0, 2)
+	for candidateRows.Next() {
+		var candidateID string
+		if err := candidateRows.Scan(&candidateID); err != nil {
+			_ = candidateRows.Close()
+			return model.AdminDraftUpsertResponse{}, err
+		}
+		if strings.TrimSpace(candidateID) == "" {
+			_ = candidateRows.Close()
+			return model.AdminDraftUpsertResponse{}, fmt.Errorf("%w", model.ErrAdminVersionRepairRequired)
+		}
+		existingVersionIDs = append(existingVersionIDs, candidateID)
+	}
+	if err := candidateRows.Err(); err != nil {
+		_ = candidateRows.Close()
+		return model.AdminDraftUpsertResponse{}, err
+	}
+	if err := candidateRows.Close(); err != nil {
+		return model.AdminDraftUpsertResponse{}, err
+	}
+	if len(existingVersionIDs) > 1 {
+		return model.AdminDraftUpsertResponse{}, fmt.Errorf("%w", model.ErrAdminVersionRepairRequired)
+	}
 
-	if err == nil && strings.TrimSpace(existingVersionID) != "" {
-		storedSegmentCount, validationErr := validateStoredReaderVersion(ctx, tx, storyID, existingVersionID)
-		if errors.Is(validationErr, errStoredVersionInvalid) || errors.Is(validationErr, sql.ErrNoRows) ||
-			validationErr == nil && storedSegmentCount != len(ing.Segments) {
+	if len(existingVersionIDs) == 1 {
+		existingVersionID := existingVersionIDs[0]
+		storedVersion, validationErr := validateStoredReaderVersion(ctx, tx, storyID, existingVersionID, ing.Slug)
+		if errors.Is(validationErr, errStoredVersionInvalid) || errors.Is(validationErr, sql.ErrNoRows) {
 			return model.AdminDraftUpsertResponse{}, fmt.Errorf("%w", model.ErrAdminVersionRepairRequired)
 		}
 		if validationErr != nil {
@@ -384,7 +605,10 @@ func (s *Store) AdminDraftUpsert(accountID string, req model.AdminDraftUpsertReq
 		if matchErr != nil {
 			return model.AdminDraftUpsertResponse{}, matchErr
 		}
-		if !segmentsMatch || existingRendered != ing.RenderedHTML {
+		if !segmentsMatch || storedVersion.SegmentCount != len(ing.Segments) ||
+			storedVersion.Markdown != ing.Markdown || storedVersion.RenderedHTML != ing.RenderedHTML ||
+			storedVersion.ContentHash != ing.ContentHash ||
+			!jsonDocumentsEqual(storedVersion.FrontmatterJSON, frontmatterJSON) {
 			return model.AdminDraftUpsertResponse{}, fmt.Errorf("%w", model.ErrAdminVersionRepairRequired)
 		}
 
@@ -427,14 +651,10 @@ func (s *Store) AdminDraftUpsert(accountID string, req model.AdminDraftUpsertReq
 			StoryID:        storyID,
 			StoryVersionID: existingVersionID,
 			Slug:           ing.Slug,
-			Version:        existingVersion,
-			SegmentsCount:  storedSegmentCount,
-			RenderedHTML:   existingRendered,
+			Version:        storedVersion.Version,
+			SegmentsCount:  storedVersion.SegmentCount,
+			RenderedHTML:   storedVersion.RenderedHTML,
 		}, nil
-	}
-
-	if err != nil && err != sql.ErrNoRows {
-		return model.AdminDraftUpsertResponse{}, err
 	}
 
 	// next version number (only for new content)
@@ -447,14 +667,12 @@ func (s *Store) AdminDraftUpsert(accountID string, req model.AdminDraftUpsertReq
 		return model.AdminDraftUpsertResponse{}, err
 	}
 
-	fmJSON, _ := json.Marshal(ing.Frontmatter)
-
 	var versionID string
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO story_versions (story_id, version, frontmatter, markdown, rendered_html, content_hash)
 		VALUES ($1,$2,$3::jsonb,$4,$5,$6)
 		RETURNING id
-	`, storyID, nextVersion, string(fmJSON), ing.Markdown, ing.RenderedHTML, ing.ContentHash).Scan(&versionID)
+	`, storyID, nextVersion, string(frontmatterJSON), ing.Markdown, ing.RenderedHTML, ing.ContentHash).Scan(&versionID)
 	if err != nil {
 		return model.AdminDraftUpsertResponse{}, err
 	}
@@ -652,7 +870,7 @@ func (s *Store) AdminPublish(accountID string, slug string, versionID string) er
 		return err
 	}
 
-	if _, err := validateStoredReaderVersion(ctx, tx, storyID, versionID); err != nil {
+	if _, err := validateStoredReaderVersion(ctx, tx, storyID, versionID, slug); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("%w", model.ErrAdminPublishNotFound)
 		}

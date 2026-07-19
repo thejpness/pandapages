@@ -431,6 +431,73 @@ async function expectQuery(page: Page, query: string | null): Promise<void> {
     .toBe(query)
 }
 
+type HistoryDirection = 'back' | 'forward'
+type HistoryTraversalResult = { popCount: number; settledCount: number }
+
+async function pushAppRoute(page: Page, path: string): Promise<void> {
+  await page.evaluate(async (nextPath) => {
+    type AppRouter = { push: (location: string) => Promise<unknown> }
+    type VueAppHost = HTMLElement & {
+      __vue_app__?: { config: { globalProperties: { $router: AppRouter } } }
+    }
+    const app = document.querySelector<VueAppHost>('#app')?.__vue_app__
+    if (!app) throw new Error('Vue application was not mounted')
+    await app.config.globalProperties.$router.push(nextPath)
+  }, path)
+}
+
+function beginRapidHistoryTraversal(
+  page: Page,
+  directions: readonly HistoryDirection[],
+): Promise<HistoryTraversalResult> {
+  if (directions.length === 0) {
+    throw new Error('History traversal needs a direction')
+  }
+  return page.evaluate(
+    (steps) =>
+      new Promise<HistoryTraversalResult>((resolve) => {
+        type AppRouter = { afterEach: (guard: () => void) => () => void }
+        type VueAppHost = HTMLElement & {
+          __vue_app__?: { config: { globalProperties: { $router: AppRouter } } }
+        }
+        const app = document.querySelector<VueAppHost>('#app')?.__vue_app__
+        if (!app) throw new Error('Vue application was not mounted')
+        let popCount = 0
+        let settledCount = 0
+        let finished = false
+        let removeAfterEach: () => void = () => undefined
+        const onPopState = () => {
+          popCount += 1
+          if (popCount < steps.length) window.history[steps[popCount]]()
+          finish()
+        }
+        const cleanup = () => {
+          window.removeEventListener('popstate', onPopState)
+          removeAfterEach()
+        }
+        const finish = () => {
+          if (
+            finished ||
+            popCount < steps.length ||
+            settledCount < steps.length
+          ) {
+            return
+          }
+          finished = true
+          cleanup()
+          resolve({ popCount, settledCount })
+        }
+        removeAfterEach = app.config.globalProperties.$router.afterEach(() => {
+          settledCount += 1
+          finish()
+        })
+        window.addEventListener('popstate', onPopState)
+        window.history[steps[0]]()
+      }),
+    [...directions],
+  )
+}
+
 async function expectNoHorizontalOverflow(page: Page): Promise<void> {
   await expect
     .poll(() =>
@@ -674,6 +741,126 @@ test.describe('Library 2 bookshelf', () => {
     await search.fill('history ownership released')
     await page.clock.fastForward(220)
     await expectQuery(page, 'history ownership released')
+  })
+
+  test('overlapping protected Back then Forward releases the latest query owner', async ({
+    page,
+    api,
+  }) => {
+    await page.clock.install()
+    await gotoReadyLibrary(page)
+    await pushAppRoute(page, `/read/${CURRENT_STORY.slug}`)
+    await expectPath(page, `/read/${CURRENT_STORY.slug}`)
+    await pushAppRoute(page, '/library')
+    await expect(page.locator('.bookshelf-card')).toHaveCount(READY_STORIES.length)
+
+    await page.clock.fastForward(6_000)
+    const auth = api.deferAuthStatus()
+    const search = page.getByRole('searchbox', { name: 'Search the library' })
+    await search.fill('stale overlapping Back search')
+    const traversal = beginRapidHistoryTraversal(page, ['back', 'forward'])
+    await auth.started
+    await page.clock.fastForward(220)
+    await expectQuery(page, null)
+    auth.fulfill()
+    await expect(traversal).resolves.toEqual({ popCount: 2, settledCount: 2 })
+    await expectPath(page, '/library')
+
+    await search.fill('Back then Forward released')
+    await page.clock.fastForward(220)
+    await expectQuery(page, 'Back then Forward released')
+  })
+
+  test('overlapping protected Forward then Back releases the latest query owner', async ({
+    page,
+    api,
+  }) => {
+    await page.clock.install()
+    await gotoReadyLibrary(page)
+    await pushAppRoute(page, `/read/${CURRENT_STORY.slug}`)
+    await expectPath(page, `/read/${CURRENT_STORY.slug}`)
+    await page.goBack()
+    await expectPath(page, '/library')
+    await expect(page.locator('.bookshelf-card')).toHaveCount(READY_STORIES.length)
+
+    await page.clock.fastForward(6_000)
+    const auth = api.deferAuthStatus()
+    const search = page.getByRole('searchbox', { name: 'Search the library' })
+    await search.fill('stale overlapping Forward search')
+    const traversal = beginRapidHistoryTraversal(page, ['forward', 'back'])
+    await auth.started
+    await page.clock.fastForward(220)
+    await expectQuery(page, null)
+    auth.fulfill()
+    await expect(traversal).resolves.toEqual({ popCount: 2, settledCount: 2 })
+    await expectPath(page, '/library')
+
+    await search.fill('Forward then Back released')
+    await page.clock.fastForward(220)
+    await expectQuery(page, 'Forward then Back released')
+  })
+
+  test('repeated rapid protected history cancellation settles only the newest generation', async ({
+    page,
+    api,
+  }) => {
+    await page.clock.install()
+    await gotoReadyLibrary(page)
+    await pushAppRoute(page, `/read/${CURRENT_STORY.slug}`)
+    await pushAppRoute(page, '/library')
+    await expect(page.locator('.bookshelf-card')).toHaveCount(READY_STORIES.length)
+
+    await page.clock.fastForward(6_000)
+    const auth = api.deferAuthStatus()
+    const search = page.getByRole('searchbox', { name: 'Search the library' })
+    await search.fill('stale repeated traversal')
+    const traversal = beginRapidHistoryTraversal(page, [
+      'back',
+      'forward',
+      'back',
+      'forward',
+    ])
+    await auth.started
+    await page.clock.fastForward(220)
+    await expectQuery(page, null)
+    auth.fulfill()
+    await expect(traversal).resolves.toEqual({ popCount: 4, settledCount: 4 })
+    await expectPath(page, '/library')
+
+    await search.fill('latest generation released')
+    await page.clock.fastForward(220)
+    await expectQuery(page, 'latest generation released')
+  })
+
+  test('route unmount removes navigation ownership before a fresh Library mount', async ({
+    page,
+    api,
+  }) => {
+    await page.clock.install()
+    await gotoReadyLibrary(page)
+    await page.clock.fastForward(6_000)
+    const auth = api.deferAuthStatus()
+    const search = page.getByRole('searchbox', { name: 'Search the library' })
+    await search.fill('Moonlit')
+    await storyCard(page, CURRENT_STORY.title)
+      .getByRole('link', { name: `Continue at 42%: ${CURRENT_STORY.title}` })
+      .click()
+    await auth.started
+    await search.fill('typed while leaving')
+    await page.clock.fastForward(220)
+    await expectQuery(page, null)
+    auth.fulfill()
+    await expectPath(page, `/read/${CURRENT_STORY.slug}`)
+
+    await page.goBack()
+    await expectPath(page, '/library')
+    const returnedSearch = page.getByRole('searchbox', {
+      name: 'Search the library',
+    })
+    await expect(returnedSearch).toHaveValue('')
+    await returnedSearch.fill('fresh mount owns its query')
+    await page.clock.fastForward(220)
+    await expectQuery(page, 'fresh mount owns its query')
   })
 
   test('articles have deterministic unique names when story titles are identical', async ({

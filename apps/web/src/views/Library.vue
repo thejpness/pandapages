@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
+import {
+  onBeforeRouteLeave,
+  onBeforeRouteUpdate,
+  useRoute,
+  useRouter,
+} from 'vue-router'
 import LibraryAppHeader from '../components/library/LibraryAppHeader.vue'
 import ContinueReadingHero from '../components/library/ContinueReadingHero.vue'
 import BookshelfGrid from '../components/library/BookshelfGrid.vue'
@@ -31,6 +36,8 @@ import { navigationDidFail, runLockTransition } from '../lib/session-transitions
 
 type HeaderExpose = { focusSearch: () => void }
 type LoadErrorKind = 'server-error' | 'malformed' | null
+type NavigationLocation = { fullPath: string }
+type QuerySyncNavigationOwner = { token: number; destination: string }
 
 const router = useRouter()
 const route = useRoute()
@@ -53,9 +60,13 @@ let sortWasChosen = false
 let queryTimer: number | null = null
 let queryGeneration = 0
 let loadGeneration = 0
-let querySyncNavigationOwners = 0
+let nextQuerySyncNavigationToken = 0
+let querySyncNavigationOwner: QuerySyncNavigationOwner | null = null
+let pendingHistoryNavigation: QuerySyncNavigationOwner | null = null
+const querySyncNavigationTokens = new WeakMap<object, number>()
 let componentActive = false
 let removeNavigationSettledHook: (() => void) | null = null
+let removeNavigationErrorHook: (() => void) | null = null
 
 watch(
   () => route.query.q,
@@ -77,12 +88,50 @@ function cancelQuerySync() {
 }
 
 function querySyncIsOwned() {
-  return querySyncNavigationOwners > 0 || locking.value || sessionLeaving.value
+  return querySyncNavigationOwner !== null || locking.value || sessionLeaving.value
 }
 
-function acquireQuerySyncNavigation() {
-  querySyncNavigationOwners += 1
+function beginQuerySyncNavigation(destination: string) {
+  const owner = {
+    token: ++nextQuerySyncNavigationToken,
+    destination,
+  }
+  querySyncNavigationOwner = owner
   cancelQuerySync()
+  return owner
+}
+
+function currentBrowserFullPath() {
+  return router.resolve(
+    `${window.location.pathname}${window.location.search}${window.location.hash}`,
+  ).fullPath
+}
+
+function claimRouteLeaveNavigation(to: NavigationLocation) {
+  const pending = pendingHistoryNavigation
+  const owner =
+    pending !== null &&
+    querySyncNavigationOwner?.token === pending.token &&
+    pending.destination === to.fullPath
+      ? pending
+      : beginQuerySyncNavigation(to.fullPath)
+
+  querySyncNavigationTokens.set(to, owner.token)
+  pendingHistoryNavigation = null
+}
+
+function claimRouteUpdateNavigation(to: NavigationLocation) {
+  const pending = pendingHistoryNavigation
+  if (
+    pending === null ||
+    querySyncNavigationOwner?.token !== pending.token ||
+    pending.destination !== to.fullPath
+  ) {
+    return
+  }
+
+  querySyncNavigationTokens.set(to, pending.token)
+  pendingHistoryNavigation = null
 }
 
 function resynchroniseQueryWhenAvailable() {
@@ -104,14 +153,21 @@ function resynchroniseQueryWhenAvailable() {
   })
 }
 
-function releaseQuerySyncNavigation() {
-  if (querySyncNavigationOwners === 0) return
-  querySyncNavigationOwners -= 1
+function settleQuerySyncNavigation(to: NavigationLocation) {
+  const token = querySyncNavigationTokens.get(to)
+  if (token === undefined) return
+  querySyncNavigationTokens.delete(to)
+  if (querySyncNavigationOwner?.token !== token) return
+
+  querySyncNavigationOwner = null
+  if (pendingHistoryNavigation?.token === token) {
+    pendingHistoryNavigation = null
+  }
   resynchroniseQueryWhenAvailable()
 }
 
 function handleHistoryNavigation() {
-  acquireQuerySyncNavigation()
+  pendingHistoryNavigation = beginQuerySyncNavigation(currentBrowserFullPath())
 }
 
 function scheduleQuerySync(value: string) {
@@ -299,14 +355,11 @@ async function loadLibrary() {
 onMounted(() => {
   componentActive = true
   window.addEventListener('popstate', handleHistoryNavigation)
-  removeNavigationSettledHook = router.afterEach(() => {
-    if (
-      querySyncNavigationOwners > 0 &&
-      router.currentRoute.value.path === '/library' &&
-      !sessionLeaving.value
-    ) {
-      releaseQuerySyncNavigation()
-    }
+  removeNavigationSettledHook = router.afterEach((to) => {
+    settleQuerySyncNavigation(to)
+  })
+  removeNavigationErrorHook = router.onError((_error, to) => {
+    settleQuerySyncNavigation(to)
   })
   const savedSort = readLibrarySortPreference()
   if (savedSort !== null) {
@@ -323,10 +376,18 @@ onBeforeUnmount(() => {
   window.removeEventListener('popstate', handleHistoryNavigation)
   removeNavigationSettledHook?.()
   removeNavigationSettledHook = null
+  removeNavigationErrorHook?.()
+  removeNavigationErrorHook = null
+  querySyncNavigationOwner = null
+  pendingHistoryNavigation = null
 })
 
-onBeforeRouteLeave(() => {
-  acquireQuerySyncNavigation()
+onBeforeRouteLeave((to) => {
+  claimRouteLeaveNavigation(to)
+})
+
+onBeforeRouteUpdate((to) => {
+  claimRouteUpdateNavigation(to)
 })
 
 function navigateFromLibrary(path: string) {
