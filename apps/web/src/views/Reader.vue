@@ -32,6 +32,7 @@ import {
 import type { ReaderLocatorV2 } from '../lib/reader-locator-v2'
 import { planReaderModeTransition } from '../lib/reader-mode-transition'
 import {
+  READER_PREFERENCES_V2_DEFAULTS,
   validateReaderPreferencesV2,
   type ReaderMode,
   type ReaderPreferencesV2,
@@ -57,43 +58,94 @@ type ReaderView = {
   focusContent: () => void
 }
 
-type ReaderWorkBarrier = {
-  owners: Set<symbol>
-  waiters: Set<() => void>
-  pending: Ref<boolean>
+type ReaderPlacementKind = 'preference' | 'chapter' | 'decision'
+
+type ReaderPlacementOwner = {
+  token: symbol
+  kind: ReaderPlacementKind
 }
 
-function createReaderWorkBarrier(): ReaderWorkBarrier {
+type ReaderPlacementWaiter = {
+  kind: ReaderPlacementKind
+  valid: () => boolean
+  resolve: (release: (() => void) | null) => void
+}
+
+type ReaderPlacementQueue = {
+  owner: ReaderPlacementOwner | null
+  waiters: ReaderPlacementWaiter[]
+  preferencePending: Ref<boolean>
+  chapterPending: Ref<boolean>
+}
+
+function createReaderPlacementQueue(): ReaderPlacementQueue {
   return {
-    owners: new Set<symbol>(),
-    waiters: new Set<() => void>(),
-    pending: ref(false),
+    owner: null,
+    waiters: [],
+    preferencePending: ref(false),
+    chapterPending: ref(false),
   }
 }
 
-function settleReaderWorkBarrier(barrier: ReaderWorkBarrier) {
-  barrier.pending.value = barrier.owners.size > 0
-  if (barrier.pending.value) return
-  for (const resolve of barrier.waiters) resolve()
-  barrier.waiters.clear()
+function updateReaderPlacementPending(queue: ReaderPlacementQueue) {
+  const pendingKinds = [
+    queue.owner?.kind,
+    ...queue.waiters.map(({ kind }) => kind),
+  ]
+  queue.preferencePending.value = pendingKinds.includes('preference')
+  queue.chapterPending.value = pendingKinds.includes('chapter')
 }
 
-function beginReaderWork(barrier: ReaderWorkBarrier): () => void {
-  const owner = Symbol('reader-work')
-  barrier.owners.add(owner)
-  barrier.pending.value = true
+function claimReaderPlacement(
+  queue: ReaderPlacementQueue,
+  kind: ReaderPlacementKind,
+): () => void {
+  const owner = { token: Symbol('reader-placement'), kind }
+  queue.owner = owner
+  updateReaderPlacementPending(queue)
   let released = false
   return () => {
     if (released) return
     released = true
-    barrier.owners.delete(owner)
-    settleReaderWorkBarrier(barrier)
+    if (queue.owner?.token !== owner.token) return
+    queue.owner = null
+
+    while (queue.waiters.length > 0) {
+      const waiter = queue.waiters.shift()
+      if (!waiter) break
+      if (!waiter.valid()) {
+        waiter.resolve(null)
+        continue
+      }
+
+      // Ownership is transferred before this one waiter resumes.
+      const releaseNext = claimReaderPlacement(queue, waiter.kind)
+      waiter.resolve(releaseNext)
+      return
+    }
+    updateReaderPlacementPending(queue)
   }
 }
 
-function resetReaderWorkBarrier(barrier: ReaderWorkBarrier) {
-  barrier.owners.clear()
-  settleReaderWorkBarrier(barrier)
+function acquireReaderPlacement(
+  queue: ReaderPlacementQueue,
+  kind: ReaderPlacementKind,
+  valid: () => boolean,
+): Promise<(() => void) | null> {
+  if (!valid()) return Promise.resolve(null)
+  if (!queue.owner) {
+    return Promise.resolve(claimReaderPlacement(queue, kind))
+  }
+  return new Promise((resolve) => {
+    queue.waiters.push({ kind, valid, resolve })
+    updateReaderPlacementPending(queue)
+  })
+}
+
+function resetReaderPlacementQueue(queue: ReaderPlacementQueue) {
+  queue.owner = null
+  for (const waiter of queue.waiters.splice(0)) waiter.resolve(null)
+  updateReaderPlacementPending(queue)
 }
 
 const route = useRoute()
@@ -109,17 +161,12 @@ const activeOrdinal = ref(1)
 const percent = ref(0)
 const navigationMessage = ref('')
 let preferenceGeneration = 0
+let preferenceDraftGeneration = 0
 let readerGeneration = 0
 let resumeFocusPending = false
-const captureSuppressionOwners = new Set<symbol>()
-const preferenceWorkBarrier = createReaderWorkBarrier()
-const chapterNavigationBarrier = createReaderWorkBarrier()
+const readerPlacementQueue = createReaderPlacementQueue()
 
-const {
-  preferences,
-  fontStack,
-  reset: resetStoredPreferences,
-} = useReaderPreferences()
+const { preferences, fontStack } = useReaderPreferences()
 const settingsPreferences = ref<ReaderPreferencesV2>({ ...preferences.value })
 
 async function moveToUnlock(storySlug: string) {
@@ -147,11 +194,13 @@ async function waitForMountedReaderView(
   mode: ReaderMode,
   previousInstanceId: symbol | null,
   operation: number,
+  draft: number,
   expectedReaderGeneration: number,
 ): Promise<ReaderView | null> {
   const targetRef = mode === 'scroll' ? scrollReaderView : pagedReaderView
   const valid = (view: ReaderView | null) =>
     operation === preferenceGeneration &&
+    draft === preferenceDraftGeneration &&
     expectedReaderGeneration === readerGeneration &&
     view?.mode === mode &&
     view.instanceId !== previousInstanceId
@@ -159,9 +208,18 @@ async function waitForMountedReaderView(
 
   return new Promise<ReaderView | null>((resolve) => {
     const stop = watch(
-      [targetRef, () => preferenceGeneration, () => readerGeneration],
+      [
+        targetRef,
+        () => preferenceGeneration,
+        () => preferenceDraftGeneration,
+        () => readerGeneration,
+      ],
       ([view]) => {
-        if (operation !== preferenceGeneration || expectedReaderGeneration !== readerGeneration) {
+        if (
+          operation !== preferenceGeneration ||
+          draft !== preferenceDraftGeneration ||
+          expectedReaderGeneration !== readerGeneration
+        ) {
           stop()
           resolve(null)
           return
@@ -192,66 +250,17 @@ const progress = useReaderProgress({
 })
 
 function suppressProgressCapture(): () => void {
-  const owner = Symbol('reader-capture-suppression')
-  captureSuppressionOwners.add(owner)
-  progress.captureSuppressed.value = true
-  let released = false
-  return () => {
-    if (released) return
-    released = true
-    captureSuppressionOwners.delete(owner)
-    progress.captureSuppressed.value = captureSuppressionOwners.size > 0
-  }
+  return progress.suppressCapture()
 }
 
 function clearProgressCaptureSuppressions() {
-  captureSuppressionOwners.clear()
-  progress.captureSuppressed.value = false
-}
-
-async function waitForReaderWork(
-  barrier: ReaderWorkBarrier,
-  expectedReaderGeneration: number,
-): Promise<boolean> {
-  while (
-    expectedReaderGeneration === readerGeneration &&
-    barrier.owners.size > 0
-  ) {
-    await new Promise<void>((resolve) => barrier.waiters.add(resolve))
-  }
-  return expectedReaderGeneration === readerGeneration
-}
-
-async function waitForStableReaderPlacement(
-  expectedReaderGeneration: number,
-): Promise<boolean> {
-  while (expectedReaderGeneration === readerGeneration) {
-    if (
-      !(await waitForReaderWork(
-        preferenceWorkBarrier,
-        expectedReaderGeneration,
-      )) ||
-      !(await waitForReaderWork(
-        chapterNavigationBarrier,
-        expectedReaderGeneration,
-      ))
-    ) {
-      return false
-    }
-    if (
-      !preferenceWorkBarrier.pending.value &&
-      !chapterNavigationBarrier.pending.value
-    ) {
-      return true
-    }
-  }
-  return false
+  progress.clearCaptureSuppressions()
 }
 
 function invalidateReaderPlacementWork() {
   preferenceGeneration += 1
-  resetReaderWorkBarrier(preferenceWorkBarrier)
-  resetReaderWorkBarrier(chapterNavigationBarrier)
+  preferenceDraftGeneration += 1
+  resetReaderPlacementQueue(readerPlacementQueue)
 }
 
 const story = useReaderStory({
@@ -288,8 +297,8 @@ const resumeOpen = computed(
     progress.decision.value !== null &&
     !settingsOpen.value &&
     !chaptersOpen.value &&
-    !preferenceWorkBarrier.pending.value &&
-    !chapterNavigationBarrier.pending.value,
+    !readerPlacementQueue.preferencePending.value &&
+    !readerPlacementQueue.chapterPending.value,
 )
 const resumeKind = computed(() => progress.decision.value?.kind ?? 'resume')
 const resumePercent = computed(() =>
@@ -337,15 +346,28 @@ async function moveToBeginning(): Promise<ReaderCapturedPosition | null> {
   return position ?? null
 }
 
-async function applyPreferences(candidate: ReaderPreferencesV2) {
+async function applyPreferences(
+  candidate: ReaderPreferencesV2,
+  draft: number,
+) {
   const validated = validateReaderPreferencesV2(candidate)
   if (!validated) return
   const activeGeneration = readerGeneration
-  if (!(await waitForReaderWork(preferenceWorkBarrier, activeGeneration))) return
-  const releasePreferenceWork = beginReaderWork(preferenceWorkBarrier)
+  const releasePreferenceWork = await acquireReaderPlacement(
+    readerPlacementQueue,
+    'preference',
+    () => activeGeneration === readerGeneration,
+  )
+  if (!releasePreferenceWork) return
   let releaseCaptureSuppression: (() => void) | null = null
   try {
-    if (!(await waitForReaderWork(chapterNavigationBarrier, activeGeneration))) return
+    // FIFO acquisition is retained, but obsolete drafts are coalesced before
+    // they enter the expensive view transition. The latest validated draft is
+    // therefore the final operation that can apply and publish.
+    if (
+      activeGeneration !== readerGeneration ||
+      draft !== preferenceDraftGeneration
+    ) return
 
     const previous = preferences.value
     const sourceView = readerViewForMode(previous.mode)
@@ -356,7 +378,9 @@ async function applyPreferences(candidate: ReaderPreferencesV2) {
     const anchor = transition.anchor
     const operation = ++preferenceGeneration
     const operationIsCurrent = () =>
-      operation === preferenceGeneration && activeGeneration === readerGeneration
+      operation === preferenceGeneration &&
+      draft === preferenceDraftGeneration &&
+      activeGeneration === readerGeneration
     const modeChanged = previous.mode !== validated.mode
     const previousTargetInstanceId = modeChanged
       ? readerViewForMode(validated.mode)?.instanceId ?? null
@@ -377,6 +401,7 @@ async function applyPreferences(candidate: ReaderPreferencesV2) {
           validated.mode,
           previousTargetInstanceId,
           operation,
+          draft,
           activeGeneration,
         )
       : sourceView
@@ -427,7 +452,10 @@ async function applyPreferences(candidate: ReaderPreferencesV2) {
       activeOrdinal.value = current.locator.segment.ordinal
     }
   } catch {
-    if (activeGeneration === readerGeneration) {
+    if (
+      activeGeneration === readerGeneration &&
+      draft === preferenceDraftGeneration
+    ) {
       navigationMessage.value =
         'Your reading place could not be restored after that settings change.'
     }
@@ -437,34 +465,39 @@ async function applyPreferences(candidate: ReaderPreferencesV2) {
   }
 }
 
-function updatePreferences(candidate: ReaderPreferencesV2) {
+function queuePreferenceDraft(candidate: ReaderPreferencesV2) {
   if (!readerInitialized.value) return
   const validated = validateReaderPreferencesV2(candidate)
   if (!validated) return
   settingsPreferences.value = validated
-  void applyPreferences(validated)
+  const draft = ++preferenceDraftGeneration
+  void applyPreferences(validated, draft)
+}
+
+function updatePreferences(candidate: ReaderPreferencesV2) {
+  queuePreferenceDraft(candidate)
 }
 
 function changeMode(mode: ReaderMode) {
   if (!readerInitialized.value) return
   if (settingsPreferences.value.mode === mode) return
-  const candidate = { ...settingsPreferences.value, mode }
-  settingsPreferences.value = candidate
-  void applyPreferences(candidate)
+  queuePreferenceDraft({ ...settingsPreferences.value, mode })
 }
 
 function resetPreferences() {
-  if (!readerInitialized.value) return
-  const defaults = resetStoredPreferences()
-  settingsPreferences.value = defaults
-  void applyPreferences(defaults)
+  queuePreferenceDraft({ ...READER_PREFERENCES_V2_DEFAULTS })
 }
 
 async function selectChapter(selected: ReaderChapter) {
   if (!readerInitialized.value) return
   const activeGeneration = readerGeneration
-  const releaseChapterNavigation = beginReaderWork(chapterNavigationBarrier)
   chaptersOpen.value = false
+  const releaseChapterNavigation = await acquireReaderPlacement(
+    readerPlacementQueue,
+    'chapter',
+    () => activeGeneration === readerGeneration,
+  )
+  if (!releaseChapterNavigation) return
   try {
     await nextTick()
     await new Promise<void>((resolve) => {
@@ -472,12 +505,7 @@ async function selectChapter(selected: ReaderChapter) {
         window.requestAnimationFrame(() => resolve()),
       )
     })
-    if (
-      !(await waitForReaderWork(
-        preferenceWorkBarrier,
-        activeGeneration,
-      ))
-    ) return
+    if (activeGeneration !== readerGeneration) return
     preferenceGeneration += 1
     const releaseCaptureSuppression = suppressProgressCapture()
     try {
@@ -503,25 +531,59 @@ async function selectChapter(selected: ReaderChapter) {
 
 async function resumeCurrentVersion() {
   const activeGeneration = readerGeneration
-  if (!(await waitForStableReaderPlacement(activeGeneration))) return
-  preferenceGeneration += 1
-  const releaseCaptureSuppression = suppressProgressCapture()
+  const releasePlacement = await acquireReaderPlacement(
+    readerPlacementQueue,
+    'decision',
+    () => activeGeneration === readerGeneration,
+  )
+  if (!releasePlacement) return
+  let placementReleased = false
+  const releasePlacementOnce = () => {
+    if (placementReleased) return
+    placementReleased = true
+    releasePlacement()
+  }
   try {
-    await progress.resume(restore)
+    if (activeGeneration !== readerGeneration) return
+    preferenceGeneration += 1
+    await progress.resume(async (locator) => {
+      try {
+        return await restore(locator)
+      } finally {
+        releasePlacementOnce()
+      }
+    })
   } finally {
-    releaseCaptureSuppression()
+    releasePlacementOnce()
   }
 }
 
 async function startCurrentVersion() {
   const activeGeneration = readerGeneration
-  if (!(await waitForStableReaderPlacement(activeGeneration))) return
-  preferenceGeneration += 1
-  const releaseCaptureSuppression = suppressProgressCapture()
+  const releasePlacement = await acquireReaderPlacement(
+    readerPlacementQueue,
+    'decision',
+    () => activeGeneration === readerGeneration,
+  )
+  if (!releasePlacement) return
+  let placementReleased = false
+  const releasePlacementOnce = () => {
+    if (placementReleased) return
+    placementReleased = true
+    releasePlacement()
+  }
   try {
-    await progress.startCurrentVersion(moveToBeginning)
+    if (activeGeneration !== readerGeneration) return
+    preferenceGeneration += 1
+    await progress.startCurrentVersion(async () => {
+      try {
+        return await moveToBeginning()
+      } finally {
+        releasePlacementOnce()
+      }
+    })
   } finally {
-    releaseCaptureSuppression()
+    releasePlacementOnce()
   }
 }
 
@@ -545,6 +607,7 @@ async function goLibraryWithoutProgress() {
 async function routeChanged(nextSlug: string) {
   readerGeneration += 1
   invalidateReaderPlacementWork()
+  settingsPreferences.value = { ...preferences.value }
   progress.pageHide()
   progress.dispose()
   clearProgressCaptureSuppressions()
@@ -628,7 +691,7 @@ onBeforeUnmount(() => {
   <div
     class="reader-shell"
     :class="themeClass"
-    :data-reader-preference-pending="preferenceWorkBarrier.pending.value ? 'true' : 'false'"
+    :data-reader-preference-pending="readerPlacementQueue.preferencePending.value ? 'true' : 'false'"
   >
     <ReaderStoryState
       v-if="story.contentState.value.status !== 'ready' || !story.story.value"
@@ -646,7 +709,7 @@ onBeforeUnmount(() => {
         :retry-kind="progress.retryKind.value"
         :retry-disabled="progress.retryDisabled.value"
         :chapters-available="chapters.length > 0"
-        :reader-ready="readerInitialized && !preferenceWorkBarrier.pending.value"
+        :reader-ready="readerInitialized && !readerPlacementQueue.preferencePending.value"
         :settings-open="settingsOpen"
         :chapters-open="chaptersOpen"
         :navigating="progress.navigatingToLibrary.value"
@@ -693,6 +756,8 @@ onBeforeUnmount(() => {
           :title="story.story.value.title"
           :author="story.story.value.author"
           :language="story.story.value.language"
+          :story-slug="story.story.value.slug"
+          :story-version="story.story.value.version"
           :segments="story.story.value.segments"
           :font-family="fontStack"
           :font-size="preferences.fontSize"

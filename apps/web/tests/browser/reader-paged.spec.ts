@@ -1,12 +1,14 @@
 import type { Page } from '@playwright/test'
 import {
   expect,
+  makeMeasuredOverflowReaderStory,
   makeOversizedReaderStory,
   makePagedReaderStory,
   makeReaderStory,
   progressFor,
   READER_SLUG,
   test,
+  type ReaderStoryFixture,
 } from './support/reader-api'
 import {
   beginPagedAnnouncementCapture,
@@ -24,6 +26,7 @@ import {
   previousReaderPage,
   readerPageCount,
   scrollOversizedPageTo,
+  scrollToSegment,
   seedReaderPreferences,
   waitForPagedReady,
   waitForReaderPage,
@@ -43,6 +46,102 @@ async function chooseMode(page: Page, mode: 'Scroll' | 'Paged') {
   await expect(
     page.locator(`[data-reader-view-mode="${targetMode}"]`),
   ).toBeVisible()
+}
+
+function fixtureSemanticPercent(
+  story: ReaderStoryFixture,
+  ordinal: number,
+  offset: number,
+): number {
+  const total = story.segments.reduce(
+    (sum, segment) => sum + Math.max(1, segment.wordCount),
+    0,
+  )
+  const completed = story.segments
+    .filter((segment) => segment.ordinal < ordinal)
+    .reduce((sum, segment) => sum + Math.max(1, segment.wordCount), 0)
+  const active = story.segments.find((segment) => segment.ordinal === ordinal)
+  if (!active || total <= 0) return 0
+  return (
+    completed +
+    Math.max(1, active.wordCount) * Math.max(0, Math.min(1, offset))
+  ) / total
+}
+
+async function currentScrollReadingAnchor(page: Page) {
+  return page.locator('[data-reader-scroll-view]').evaluate((view) => {
+    const headerBottom =
+      document
+        .querySelector<HTMLElement>('[data-reader-header]')
+        ?.getBoundingClientRect().bottom ?? 0
+    const readingLine =
+      headerBottom + (window.innerHeight - headerBottom) * 0.35
+    const segment = [
+      ...view.querySelectorAll<HTMLElement>('[data-reader-scroll-segment]'),
+    ].find((candidate) => {
+      const rect = candidate.getBoundingClientRect()
+      return rect.top <= readingLine && rect.bottom >= readingLine
+    })
+    if (!segment) throw new Error('No segment intersects the reading line')
+    const rect = segment.getBoundingClientRect()
+    return {
+      key: segment.dataset.readerContentKey,
+      occurrence: Number(segment.dataset.readerContentOccurrence),
+      ordinal: Number(segment.dataset.readerSegmentOrdinal),
+      offset: (readingLine - rect.top) / Math.max(1, rect.height),
+    }
+  })
+}
+
+function measuredOverflowPage(page: Page) {
+  return pagedReader(page)
+    .locator('[data-reader-page-oversized="true"]')
+    .filter({
+      has: page.locator(
+        '[data-reader-paged-segment][data-reader-segment-ordinal="2"]',
+      ),
+    })
+}
+
+async function expectMeasuredOverflowIsolation(
+  page: Page,
+  story: ReaderStoryFixture,
+) {
+  const oversized = measuredOverflowPage(page)
+  await expect(oversized).toHaveCount(1)
+  await expect(oversized.locator('[data-reader-paged-segment]')).toHaveCount(1)
+  await expect(
+    oversized.locator('[data-reader-segment-ordinal="2"]'),
+  ).toHaveAttribute('data-reader-content-key', story.segments[1]?.contentKey ?? '')
+  await expect(
+    pagedReader(page).locator('[data-reader-paged-segment]'),
+  ).toHaveCount(story.segments.length)
+  expect(
+    await pagedReader(page)
+      .locator('[data-reader-paged-segment]')
+      .evaluateAll((elements) =>
+        elements.map((element) =>
+          Number(element.getAttribute('data-reader-segment-ordinal')),
+        ),
+      ),
+  ).toEqual(story.segments.map(({ ordinal }) => ordinal))
+}
+
+async function expectPagedReflowSettled(page: Page) {
+  await expect(pagedReader(page)).toHaveAttribute(
+    'data-reader-reflow-pending',
+    'false',
+  )
+}
+
+async function readerMeasurementCounts(page: Page) {
+  const reader = pagedReader(page)
+  return {
+    passes: Number(await reader.getAttribute('data-reader-measurement-pass-count')),
+    corrections: Number(
+      await reader.getAttribute('data-reader-measured-correction-count'),
+    ),
+  }
 }
 
 async function scrollWebKitPagedViewportTo(
@@ -688,6 +787,318 @@ test.describe('Reader paged reading', () => {
       .toBeCloseTo(0.55, 1)
     await expectNoProgressPut(page, api, READER_SLUG)
     expect(api.progressPuts()).toHaveLength(writes)
+  })
+
+  test('atomic preference ownership coalesces Paged to Scroll to Paged to Scroll to the latest mode', async ({
+    page,
+    api,
+  }) => {
+    await seedReaderPreferences(page)
+    const story = makeReaderStory()
+    const expectedOffset = 0.4
+    const expectedPercent = fixtureSemanticPercent(story, 4, expectedOffset)
+    api.setStory(story)
+    api.setProgress(
+      READER_SLUG,
+      progressFor(story, 4, expectedOffset, expectedPercent),
+    )
+    const consoleErrors: string[] = []
+    page.on('console', (message) => {
+      if (message.type() === 'error') consoleErrors.push(message.text())
+    })
+
+    await gotoReader(page, api, READER_SLUG)
+    await page.getByRole('dialog', { name: 'Continue reading?' })
+      .getByRole('button', { name: 'Resume' })
+      .click()
+    await expectCurrentPageContainsOrdinal(page, 4)
+
+    await page.getByRole('button', { name: 'Reading settings' }).click()
+    const settings = page.getByRole('dialog', { name: 'Reading settings' })
+    await settings.locator('input[name="reader-mode"]').evaluateAll((inputs) => {
+      const byValue = new Map(
+        inputs.map((element) => [
+          (element as HTMLInputElement).value,
+          element as HTMLInputElement,
+        ]),
+      )
+      for (const mode of ['scroll', 'paged', 'scroll']) {
+        const input = byValue.get(mode)
+        if (!input) throw new Error('Missing Reader mode input')
+        input.checked = true
+        input.dispatchEvent(new Event('change', { bubbles: true }))
+      }
+    })
+    await expect(
+      page.locator('[data-reader-preference-pending]'),
+    ).toHaveAttribute('data-reader-preference-pending', 'true')
+    await settings.getByRole('button', { name: 'Close' }).click()
+    await expect(
+      page.locator('[data-reader-preference-pending]'),
+    ).toHaveAttribute('data-reader-preference-pending', 'false')
+
+    await expect(page.locator('[data-reader-view-mode="scroll"]')).toBeVisible()
+    const stored = await page.evaluate(() =>
+      JSON.parse(localStorage.getItem('pp_reader_prefs_v2') ?? 'null'),
+    ) as { mode?: string }
+    expect(stored.mode).toBe('scroll')
+    const anchor = await currentScrollReadingAnchor(page)
+    expect(anchor).toEqual(
+      expect.objectContaining({
+        key: story.segments[3]?.contentKey,
+        occurrence: story.segments[3]?.contentOccurrence,
+        ordinal: 4,
+      }),
+    )
+    expect(anchor.offset).toBeCloseTo(expectedOffset, 1)
+    expect(
+      fixtureSemanticPercent(story, anchor.ordinal, anchor.offset),
+    ).toBeCloseTo(expectedPercent, 2)
+
+    await expectNoProgressPut(page, api, READER_SLUG)
+    await expect(page.locator('[data-reader-view-mode="scroll"]')).toBeVisible()
+    expect(
+      await page.evaluate(() =>
+        JSON.parse(localStorage.getItem('pp_reader_prefs_v2') ?? 'null')
+          ?.mode,
+      ),
+    ).toBe('scroll')
+
+    // A later intentional movement must save, proving capture suppression has
+    // no leaked owner after all coalesced preference leases release.
+    const movementPut = api.deferProgressPut(READER_SLUG)
+    await scrollToSegment(page, 6, 0.4)
+    const movementRequest = await movementPut.started
+    expectLocatorV2Request(movementRequest, { ordinal: 6 })
+    expect((movementRequest.body as { locator: { segment: { ordinal: number } } })
+      .locator.segment.ordinal).not.toBe(1)
+    movementPut.fulfill({ ok: true })
+    expect(consoleErrors).toEqual([])
+  })
+
+  test('atomic preference ownership makes the final rapid typography draft win', async ({
+    page,
+    api,
+  }) => {
+    await seedReaderPreferences(page)
+    const story = makeReaderStory()
+    api.setStory(story)
+    api.setProgress(READER_SLUG, progressFor(story, 4, 0.4, 0.55))
+    const consoleErrors: string[] = []
+    page.on('console', (message) => {
+      if (message.type() === 'error') consoleErrors.push(message.text())
+    })
+
+    await gotoReader(page, api, READER_SLUG)
+    await page.getByRole('dialog', { name: 'Continue reading?' })
+      .getByRole('button', { name: 'Resume' })
+      .click()
+    await expectCurrentPageContainsOrdinal(page, 4)
+
+    await page.getByRole('button', { name: 'Reading settings' }).click()
+    const settings = page.getByRole('dialog', { name: 'Reading settings' })
+    await settings.getByRole('slider', { name: 'Text size' }).evaluate((element) => {
+      const input = element as HTMLInputElement
+      for (const fontSize of [24, 30, 26]) {
+        input.value = String(fontSize)
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+      }
+    })
+    await expect(
+      page.locator('[data-reader-preference-pending]'),
+    ).toHaveAttribute('data-reader-preference-pending', 'true')
+    await settings.getByRole('button', { name: 'Close' }).click()
+    await expect(
+      page.locator('[data-reader-preference-pending]'),
+    ).toHaveAttribute('data-reader-preference-pending', 'false')
+    await waitForPagedReady(page)
+    await expectPagedReflowSettled(page)
+
+    const stored = await page.evaluate(() =>
+      JSON.parse(localStorage.getItem('pp_reader_prefs_v2') ?? 'null'),
+    ) as { fontSize?: number; mode?: string }
+    expect(stored).toEqual(expect.objectContaining({ fontSize: 26, mode: 'paged' }))
+    await expect(
+      pagedReader(page).locator('[data-reader-paged-segment]').first(),
+    ).toHaveCSS('font-size', '26px')
+    await expectCurrentPageContainsOrdinal(page, 4)
+    await expectNoProgressPut(page, api, READER_SLUG)
+    await expect(
+      pagedReader(page).locator('[data-reader-paged-segment]').first(),
+    ).toHaveCSS('font-size', '26px')
+    expect(api.progressPuts()).toHaveLength(0)
+    expect(consoleErrors).toEqual([])
+  })
+
+  test('measured overflow cache survives Resume, same-key reflow, and one independent new-key pass', async ({
+    page,
+    api,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 720 })
+    await seedReaderPreferences(page)
+    const story = makeMeasuredOverflowReaderStory()
+    const expectedPercent = fixtureSemanticPercent(story, 2, 0.35)
+    api.setStory(story)
+    api.setProgress(READER_SLUG, progressFor(story, 2, 0.35, expectedPercent))
+    const consoleErrors: string[] = []
+    page.on('console', (message) => {
+      if (message.type() === 'error') consoleErrors.push(message.text())
+    })
+
+    await gotoReader(page, api, READER_SLUG)
+    await expectMeasuredOverflowIsolation(page, story)
+    const initialCounts = await readerMeasurementCounts(page)
+    expect(initialCounts.passes).toBeGreaterThanOrEqual(1)
+    expect(initialCounts.corrections).toBeGreaterThanOrEqual(1)
+
+    // Establish a settled key whose genuinely overflowing segment requires a
+    // measured correction, then prove forced and ordinary rebuilds reuse it.
+    await page.setViewportSize({ width: 430, height: 720 })
+    await expect(pagedReader(page)).toHaveAttribute(
+      'data-reader-reflow-pending',
+      'true',
+    )
+    await expectPagedReflowSettled(page)
+    await expectMeasuredOverflowIsolation(page, story)
+    const knownKeyCounts = await readerMeasurementCounts(page)
+    expect(knownKeyCounts.passes).toBeGreaterThan(initialCounts.passes)
+    expect(knownKeyCounts.corrections).toBeGreaterThan(
+      initialCounts.corrections,
+    )
+
+    await page.getByRole('dialog', { name: 'Continue reading?' })
+      .getByRole('button', { name: 'Resume' })
+      .click()
+    await expectPagedReflowSettled(page)
+    await expectMeasuredOverflowIsolation(page, story)
+    await expect(measuredOverflowPage(page)).toHaveAttribute(
+      'data-reader-page-current',
+      'true',
+    )
+    const restoredOffset = await measuredOverflowPage(page).evaluate((element) => {
+      const segment = element.querySelector<HTMLElement>(
+        '[data-reader-segment-ordinal="2"]',
+      )
+      if (!segment) throw new Error('Missing measured-overflow segment')
+      const pageRect = element.getBoundingClientRect()
+      const segmentRect = segment.getBoundingClientRect()
+      const segmentTop = segmentRect.top - pageRect.top + element.scrollTop
+      return (
+        element.scrollTop + element.clientHeight * 0.35 - segmentTop
+      ) / Math.max(1, segmentRect.height)
+    })
+    expect(restoredOffset).toBeCloseTo(0.35, 2)
+    expect(await readerMeasurementCounts(page)).toEqual(knownKeyCounts)
+
+    await page.evaluate(() => window.dispatchEvent(new Event('resize')))
+    await expect(pagedReader(page)).toHaveAttribute(
+      'data-reader-reflow-pending',
+      'true',
+    )
+    await expectPagedReflowSettled(page)
+    await expectMeasuredOverflowIsolation(page, story)
+    expect(await readerMeasurementCounts(page)).toEqual(knownKeyCounts)
+
+    await page.getByRole('button', { name: 'Reading settings' }).click()
+    const settings = page.getByRole('dialog', { name: 'Reading settings' })
+    await settings.getByRole('slider', { name: 'Content width' }).fill('680')
+    await settings.getByRole('button', { name: 'Close' }).click()
+    await expect(
+      page.locator('[data-reader-preference-pending]'),
+    ).toHaveAttribute('data-reader-preference-pending', 'false')
+    await expectPagedReflowSettled(page)
+    await expectMeasuredOverflowIsolation(page, story)
+    const independentKeyCounts = await readerMeasurementCounts(page)
+    expect(independentKeyCounts).toEqual({
+      passes: knownKeyCounts.passes + 1,
+      corrections: knownKeyCounts.corrections + 1,
+    })
+
+    await page.evaluate(() => window.dispatchEvent(new Event('resize')))
+    await expect(pagedReader(page)).toHaveAttribute(
+      'data-reader-reflow-pending',
+      'true',
+    )
+    await expectPagedReflowSettled(page)
+    await expectMeasuredOverflowIsolation(page, story)
+    expect(await readerMeasurementCounts(page)).toEqual(independentKeyCounts)
+    await expectNoProgressPut(page, api, READER_SLUG)
+    expect(api.progressPuts()).toHaveLength(0)
+    expect(consoleErrors).toEqual([])
+  })
+
+  test('measured overflow cache survives Start Over and a return to the corrected segment', async ({
+    page,
+    api,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 720 })
+    await seedReaderPreferences(page)
+    const story = makeMeasuredOverflowReaderStory()
+    api.setStory(story)
+    api.setProgress(READER_SLUG, progressFor(story, 2, 0.35, 0.5))
+    const startPut = api.deferProgressPut(READER_SLUG)
+    const consoleErrors: string[] = []
+    page.on('console', (message) => {
+      if (message.type() === 'error') consoleErrors.push(message.text())
+    })
+
+    await gotoReader(page, api, READER_SLUG)
+    await expectMeasuredOverflowIsolation(page, story)
+    const initialCounts = await readerMeasurementCounts(page)
+    expect(initialCounts.passes).toBeGreaterThanOrEqual(1)
+    expect(initialCounts.corrections).toBeGreaterThanOrEqual(1)
+
+    await page.setViewportSize({ width: 430, height: 720 })
+    await expect(pagedReader(page)).toHaveAttribute(
+      'data-reader-reflow-pending',
+      'true',
+    )
+    await expectPagedReflowSettled(page)
+    await expectMeasuredOverflowIsolation(page, story)
+    const knownKeyCounts = await readerMeasurementCounts(page)
+    expect(knownKeyCounts.passes).toBeGreaterThan(initialCounts.passes)
+    expect(knownKeyCounts.corrections).toBeGreaterThan(
+      initialCounts.corrections,
+    )
+
+    await page.getByRole('dialog', { name: 'Continue reading?' })
+      .getByRole('button', { name: 'Start over' })
+      .click()
+    const startRequest = await startPut.started
+    expectLocatorV2Request(startRequest, { ordinal: 1 })
+    expect(startRequest.body).toEqual(
+      expect.objectContaining({
+        percent: 0,
+        locator: expect.objectContaining({
+          segment: expect.objectContaining({ ordinal: 1, offset: 0 }),
+        }),
+      }),
+    )
+    expect(api.progressPuts()).toHaveLength(1)
+    await waitForReaderPage(page, 1)
+    await expectPagedReflowSettled(page)
+    await expectMeasuredOverflowIsolation(page, story)
+    expect(await readerMeasurementCounts(page)).toEqual(knownKeyCounts)
+    startPut.fulfill({ ok: true })
+    await expect(page.locator('.reader-save-status')).toContainText('Saved')
+
+    const correctedPageNumber =
+      Number(await measuredOverflowPage(page).getAttribute('data-reader-page-index')) + 1
+    expect(correctedPageNumber).toBe(2)
+    const returnPut = api.deferProgressPut(READER_SLUG)
+    await nextReaderPage(page)
+    await expect(measuredOverflowPage(page)).toHaveAttribute(
+      'data-reader-page-current',
+      'true',
+    )
+    await expectMeasuredOverflowIsolation(page, story)
+    const returnRequest = await returnPut.started
+    expectLocatorV2Request(returnRequest, { ordinal: 2 })
+    returnPut.fulfill({ ok: true })
+    await expect(page.locator('.reader-save-status')).toContainText('Saved')
+    await expectNoProgressPut(page, api, READER_SLUG)
+    expect(api.progressPuts()).toHaveLength(2)
+    expect(consoleErrors).toEqual([])
   })
 
   test('baseline unavailability permits paging and recovery saves no beginning locator', async ({
