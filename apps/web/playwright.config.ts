@@ -41,6 +41,13 @@ export default defineConfig({
         ...devices['iPhone 13'],
       },
     },
+    {
+      name: 'webkit-library',
+      grep: /@webkit-library/,
+      use: {
+        ...devices['Desktop Safari'],
+      },
+    },
   ],
   webServer: {
     command: 'npm run dev -- --host 127.0.0.1 --port 4173 --strictPort',

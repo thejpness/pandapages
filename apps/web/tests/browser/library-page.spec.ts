@@ -180,8 +180,10 @@ class LibraryApiMock {
   items: LibraryResponseItemFixture[] = READY_STORIES.map((story) => ({
     ...story,
   }))
+  unavailableItemCount = 0
   authUnlocked = true
 
+  private readonly authResponses: QueuedResponse[] = []
   private readonly libraryResponses: QueuedResponse[] = []
   private readonly logoutResponses: QueuedResponse[] = []
   private readonly page: Page
@@ -204,8 +206,17 @@ class LibraryApiMock {
     this.logoutResponses.push(response)
   }
 
+  deferAuthStatus(): ResponseGate {
+    const gate = createGate({ unlocked: true })
+    this.authResponses.push(gate)
+    return gate.publicGate
+  }
+
   deferLibrary(): ResponseGate {
-    const gate = createGate({ items: this.items })
+    const gate = createGate({
+      items: this.items,
+      unavailableItemCount: this.unavailableItemCount,
+    })
     this.libraryResponses.push(gate)
     return gate.publicGate
   }
@@ -248,7 +259,11 @@ class LibraryApiMock {
       request.method() === 'GET' &&
       url.pathname === '/api/v1/auth/status'
     ) {
-      await fulfillJson(route, { body: { unlocked: this.authUnlocked } })
+      const response = await this.resolveResponse(
+        this.authResponses.shift(),
+        { body: { unlocked: this.authUnlocked } },
+      )
+      await fulfillJson(route, response)
       return
     }
 
@@ -281,7 +296,12 @@ class LibraryApiMock {
     ) {
       const response = await this.resolveResponse(
         this.libraryResponses.shift(),
-        { body: { items: this.items } },
+        {
+          body: {
+            items: this.items,
+            unavailableItemCount: this.unavailableItemCount,
+          },
+        },
       )
       if ((response.status ?? 200) === 401) this.authUnlocked = false
       await fulfillJson(route, response)
@@ -336,6 +356,14 @@ class LibraryApiMock {
       url.pathname.startsWith('/api/v1/progress/')
     ) {
       await fulfillJson(route, { body: { progress: null } })
+      return
+    }
+
+    if (
+      request.method() === 'GET' &&
+      url.pathname === '/api/v1/admin/stories'
+    ) {
+      await fulfillJson(route, { body: { items: [] } })
       return
     }
 
@@ -476,26 +504,37 @@ test.describe('Library 2 bookshelf', () => {
     await expect(hero).toContainText('by Mara Bell')
     await expect(hero).toContainText('42% read')
     await expect(
-      hero.getByRole('progressbar', { name: 'Reading progress' }),
+      hero.getByRole('progressbar', {
+        name: `Reading progress for ${CURRENT_STORY.title}`,
+      }),
     ).toHaveAttribute('aria-valuenow', '42')
 
     const current = storyCard(page, CURRENT_STORY.title)
     await expect(current).toContainText('1,200 words')
     await expect(current).toContainText('4 chapters')
     await expect(
-      current.getByRole('link', { name: 'Continue at 42%', exact: true }),
+      current.getByRole('link', {
+        name: `Continue at 42%: ${CURRENT_STORY.title}`,
+        exact: true,
+      }),
     ).toBeVisible()
 
     const completed = storyCard(page, COMPLETED_STORY.title)
     await expect(completed).toContainText('Finished')
     await expect(
-      completed.getByRole('link', { name: 'Read again', exact: true }),
+      completed.getByRole('link', {
+        name: `Read again: ${COMPLETED_STORY.title}`,
+        exact: true,
+      }),
     ).toBeVisible()
 
     const updated = storyCard(page, UPDATED_STORY.title)
     await expect(updated).toContainText('Story updated since you last read')
     await expect(
-      updated.getByRole('link', { name: 'Open updated story', exact: true }),
+      updated.getByRole('link', {
+        name: `Open updated story: ${UPDATED_STORY.title}`,
+        exact: true,
+      }),
     ).toBeVisible()
     await expect(updated.getByRole('progressbar')).toHaveCount(0)
 
@@ -572,6 +611,141 @@ test.describe('Library 2 bookshelf', () => {
     await expectQuery(page, null)
     await expect(search).toHaveValue('')
     await expect(page.locator('.bookshelf-card')).toHaveCount(READY_STORIES.length)
+  })
+
+  test('a newer same-route history query cancels pending search ownership', async ({
+    page,
+  }) => {
+    await page.clock.install()
+    await page.goto('/library?q=Mara')
+    const search = page.getByRole('searchbox', { name: 'Search the library' })
+    await expect(search).toHaveValue('Mara')
+
+    await page.evaluate(async () => {
+      type AppRouter = {
+        push: (location: {
+          path: string
+          query: Record<string, string>
+        }) => Promise<unknown>
+      }
+      type VueAppHost = HTMLElement & {
+        __vue_app__?: {
+          config: { globalProperties: { $router: AppRouter } }
+        }
+      }
+
+      const app = document.querySelector<VueAppHost>('#app')?.__vue_app__
+      if (!app) throw new Error('Vue application was not mounted')
+      await app.config.globalProperties.$router.push({
+        path: '/library',
+        query: { q: 'Moonlit' },
+      })
+    })
+    await expectQuery(page, 'Moonlit')
+    await expect(search).toHaveValue('Moonlit')
+
+    await search.fill('stale search')
+    await page.goBack()
+    await expectQuery(page, 'Mara')
+    await expect(search).toHaveValue('Mara')
+
+    await page.clock.fastForward(220)
+    await expectQuery(page, 'Mara')
+    await expect(search).toHaveValue('Mara')
+    await expect(storyCard(page, CURRENT_STORY.title)).toBeVisible()
+  })
+
+  test('a pending search query cannot supersede delayed protected navigation', async ({
+    page,
+    api,
+  }) => {
+    await page.clock.install()
+    await gotoReadyLibrary(page)
+    await page.clock.fastForward(6_000)
+    const auth = api.deferAuthStatus()
+
+    await page
+      .getByRole('searchbox', { name: 'Search the library' })
+      .fill('Moon')
+    await storyCard(page, CURRENT_STORY.title)
+      .getByRole('link', {
+        name: `Continue at 42%: ${CURRENT_STORY.title}`,
+      })
+      .click()
+    await auth.started
+
+    await page.clock.fastForward(220)
+    await expectPath(page, '/library')
+    expect(new URL(page.url()).searchParams.get('q')).toBeNull()
+
+    auth.fulfill()
+    await expectPath(page, `/read/${CURRENT_STORY.slug}`)
+  })
+
+  test('pending search ownership is released for Surprise navigation', async ({
+    page,
+    api,
+  }) => {
+    await page.clock.install()
+    await gotoReadyLibrary(page)
+    await page.clock.fastForward(6_000)
+    const auth = api.deferAuthStatus()
+    await page
+      .getByRole('searchbox', { name: 'Search the library' })
+      .fill('Moon')
+    await page.evaluate(() => {
+      Math.random = () => 0
+    })
+    await page.locator('.surprise-button').click()
+    await auth.started
+    await page.clock.fastForward(220)
+    await expectPath(page, '/library')
+    expect(new URL(page.url()).searchParams.get('q')).toBeNull()
+    auth.fulfill()
+    await expectPath(page, `/read/${CURRENT_STORY.slug}`)
+  })
+
+  for (const destination of [
+    { action: 'Reading profile', path: '/journey' },
+    { action: 'Admin', path: '/admin/upload' },
+  ]) {
+    test(`pending search ownership is released for ${destination.action} navigation`, async ({
+      page,
+      api,
+    }) => {
+      await page.clock.install()
+      await gotoReadyLibrary(page)
+      await page.clock.fastForward(6_000)
+      const auth = api.deferAuthStatus()
+      await page
+        .getByRole('searchbox', { name: 'Search the library' })
+        .fill('Moon')
+      await page.getByRole('button', { name: 'Parent options' }).click()
+      const action = page
+        .getByRole('dialog', { name: 'Parent options' })
+        .getByRole('button', { name: destination.action })
+      await action.focus()
+      await action.press('Enter')
+      await auth.started
+      await page.clock.fastForward(220)
+      await expectPath(page, '/library')
+      expect(new URL(page.url()).searchParams.get('q')).toBeNull()
+      auth.fulfill()
+      await expectPath(page, destination.path)
+    })
+  }
+
+  test('pending search ownership is released for a public route link', async ({
+    page,
+  }) => {
+    await page.clock.install()
+    await gotoReadyLibrary(page)
+    await page
+      .getByRole('searchbox', { name: 'Search the library' })
+      .fill('Moon')
+    await page.getByRole('link', { name: 'Panda Pages home' }).click()
+    await page.clock.fastForward(220)
+    await expectPath(page, '/')
   })
 
   test('supports all four sort modes and validates the stored preference', async ({
@@ -667,7 +841,7 @@ test.describe('Library 2 bookshelf', () => {
 
     const close = dialog.getByRole('button', { name: 'Close story details' })
     const action = dialog.getByRole('link', {
-      name: 'Continue at 42%',
+      name: `Continue at 42%: ${CURRENT_STORY.title}`,
       exact: true,
     })
     await action.focus()
@@ -695,26 +869,25 @@ test.describe('Library 2 bookshelf', () => {
     ).not.toBe('hidden')
   })
 
-  test('the story dialog stays above an open parent disclosure and the skip layer', async ({
+  test('opening story details dismisses the parent popover before isolating the dialog', async ({
     page,
   }) => {
     await gotoReadyLibrary(page)
-    const parent = page.locator('details.parent-options')
-    await parent.locator('summary').click()
-    await expect(parent).toHaveAttribute('open', '')
-    const menuBox = await page.locator('.parent-menu').boundingBox()
-    expect(menuBox).not.toBeNull()
+    const parent = page.getByRole('button', { name: 'Parent options' })
+    await parent.click()
+    await expect(page.locator('.parent-menu')).toBeVisible()
 
     await storyCard(page, CURRENT_STORY.title)
       .getByRole('button', { name: `Details for ${CURRENT_STORY.title}` })
       .click()
+    await expect(page.locator('.parent-menu')).toBeHidden()
     const dialog = page.getByRole('dialog', { name: CURRENT_STORY.title })
     await expect(dialog).toBeVisible()
 
     const dialogBox = await dialog.boundingBox()
     expect(dialogBox).not.toBeNull()
     const topTargets = await page.evaluate(
-      ({ dialogPoint, menuPoint }) => {
+      ({ dialogPoint }) => {
         const belongsToDialogLayer = (x: number, y: number) => {
           const target = document.elementFromPoint(x, y)
           return Boolean(
@@ -725,7 +898,6 @@ test.describe('Library 2 bookshelf', () => {
         }
         return {
           dialog: belongsToDialogLayer(dialogPoint.x, dialogPoint.y),
-          menu: belongsToDialogLayer(menuPoint.x, menuPoint.y),
           viewportCorner: belongsToDialogLayer(8, 8),
         }
       },
@@ -734,22 +906,12 @@ test.describe('Library 2 bookshelf', () => {
           x: Number(dialogBox?.x) + Number(dialogBox?.width) / 2,
           y: Number(dialogBox?.y) + Number(dialogBox?.height) / 2,
         },
-        menuPoint: {
-          x: Number(menuBox?.x) + Number(menuBox?.width) / 2,
-          y: Number(menuBox?.y) + Number(menuBox?.height) / 2,
-        },
       },
     )
     expect(topTargets).toEqual({
       dialog: true,
-      menu: true,
       viewportCorner: true,
     })
-    expect(
-      await page.locator('.parent-menu').evaluate((element) =>
-        Boolean(element.closest('[aria-hidden="true"]')),
-      ),
-    ).toBe(true)
     await expect(page.locator('.library-skip-link')).toHaveAttribute(
       'aria-hidden',
       'true',
@@ -851,10 +1013,76 @@ test.describe('Library 2 bookshelf', () => {
     await expect(card).toBeVisible()
     await expect(card).toContainText('Progress unavailable')
     await expect(
-      card.getByRole('link', { name: 'Read', exact: true }),
+      card.getByRole('link', {
+        name: `Read: ${UNAVAILABLE_PROGRESS_STORY.title}`,
+        exact: true,
+      }),
     ).toBeVisible()
     await expect(card.getByRole('progressbar')).toHaveCount(0)
     await expect(page.locator('.continue-card')).toHaveCount(0)
+  })
+
+  test('corrupt published stories are omitted with a truthful partial-library warning', async ({
+    page,
+    api,
+  }) => {
+    api.unavailableItemCount = 1
+    await gotoReadyLibrary(page)
+
+    const warning = page.getByRole('status', {
+      name: 'Some stories could not be shown safely',
+    })
+    await expect(warning).toContainText('One story could not be shown safely')
+    await expect(page.locator('.bookshelf-card')).toHaveCount(READY_STORIES.length)
+    await expect(
+      page.getByRole('heading', { name: 'No published stories yet' }),
+    ).toHaveCount(0)
+  })
+
+  test('an entirely quarantined shelf never claims that no stories were published', async ({
+    page,
+    api,
+  }) => {
+    api.items = []
+    api.unavailableItemCount = 2
+    await page.goto('/library')
+
+    await expect(
+      page.getByRole('heading', { name: 'Stories could not be shown safely' }),
+    ).toBeVisible()
+    await expect(page.getByText('2 published stories could')).toBeVisible()
+    await expect(page.getByText('A parent needs to review')).toBeVisible()
+    await expect(
+      page.getByRole('heading', { name: 'No published stories yet' }),
+    ).toHaveCount(0)
+  })
+
+  test('displayed progress stays below completion until the exact 0.98 threshold', async ({
+    page,
+    api,
+  }) => {
+    api.items = [
+      {
+        ...CURRENT_STORY,
+        progress: { ...CURRENT_STORY.progress!, percent: 0.979 },
+      },
+      {
+        ...COMPLETED_STORY,
+        progress: { ...COMPLETED_STORY.progress!, percent: 0.98 },
+      },
+    ]
+    await page.goto('/library')
+
+    await expect(
+      storyCard(page, CURRENT_STORY.title).getByRole('link', {
+        name: `Continue at 97%: ${CURRENT_STORY.title}`,
+      }),
+    ).toBeVisible()
+    await expect(
+      storyCard(page, COMPLETED_STORY.title).getByRole('link', {
+        name: `Read again: ${COMPLETED_STORY.title}`,
+      }),
+    ).toBeVisible()
   })
 
   test('a definitive library 401 clears the shelf and transitions safely to Unlock', async ({
@@ -873,15 +1101,15 @@ test.describe('Library 2 bookshelf', () => {
     expect(api.count('GET', '/api/v1/library')).toBe(1)
   })
 
-  test('the parent menu keeps profile and admin controls secondary and routes truthfully', async ({
+  test('the parent popover supports WebKit Tab order, reverse traversal, Escape, restoration, and onward focus @webkit-library', async ({
     page,
   }) => {
     await gotoReadyLibrary(page)
-    const trigger = page.locator('details.parent-options > summary')
+    const trigger = page.getByRole('button', { name: 'Parent options' })
     await expect(trigger).toContainText('Parent options')
     await trigger.click()
 
-    const menu = page.locator('.parent-menu')
+    const menu = page.getByRole('dialog', { name: 'Parent options' })
     await expect(menu).toBeVisible()
     await expect(
       menu.getByRole('button', { name: 'Reading profile' }),
@@ -890,16 +1118,32 @@ test.describe('Library 2 bookshelf', () => {
     await expect(menu.getByRole('button')).toHaveCount(2)
     await expect(page.locator('.surprise-button')).toBeVisible()
 
-    await trigger.press('Tab')
-    await expect(
-      menu.getByRole('button', { name: 'Reading profile' }),
-    ).toBeFocused()
+    const profile = menu.getByRole('button', { name: 'Reading profile' })
+    const admin = menu.getByRole('button', { name: 'Admin' })
+    const lock = page.getByRole('button', { name: 'Lock Panda Pages' })
+
+    await page.keyboard.press('Tab')
+    await expect(profile).toBeFocused()
+    await page.keyboard.press('Tab')
+    await expect(admin).toBeFocused()
     await page.keyboard.press('Shift+Tab')
+    await expect(profile).toBeFocused()
+    await page.keyboard.press('Shift+Tab')
+    await expect(menu).toBeHidden()
     await expect(trigger).toBeFocused()
 
+    await trigger.click()
+    await page.keyboard.press('Tab')
     await page.keyboard.press('Escape')
     await expect(menu).toBeHidden()
     await expect(trigger).toBeFocused()
+
+    await trigger.click()
+    await page.keyboard.press('Tab')
+    await page.keyboard.press('Tab')
+    await page.keyboard.press('Tab')
+    await expect(menu).toBeHidden()
+    await expect(lock).toBeFocused()
 
     await trigger.click()
     await menu.getByRole('button', { name: 'Reading profile' }).click()
@@ -941,12 +1185,18 @@ test.describe('Library 2 bookshelf', () => {
     page,
     api,
   }) => {
+    await page.clock.install()
     const logout = api.deferLogout()
     await gotoReadyLibrary(page)
+    await page
+      .getByRole('searchbox', { name: 'Search the library' })
+      .fill('Moon')
     await page.getByRole('button', { name: 'Lock Panda Pages' }).click()
     await logout.started
 
+    await page.clock.fastForward(220)
     await expectPath(page, '/library')
+    expect(new URL(page.url()).searchParams.get('q')).toBeNull()
     await expect(page.getByText(CURRENT_STORY.title).first()).toBeVisible()
     await expect(page.getByRole('button', { name: 'Lock Panda Pages' })).toContainText(
       'Locking…',
@@ -1010,7 +1260,7 @@ test.describe('Library 2 bookshelf', () => {
           page.getByRole('searchbox', { name: 'Search the library' }),
         ).toBeVisible()
         await expect(
-          page.locator('details.parent-options > summary'),
+          page.getByRole('button', { name: 'Parent options' }),
         ).toBeVisible()
         await expect(page.getByRole('button', { name: 'Lock Panda Pages' })).toBeVisible()
       })
@@ -1022,18 +1272,55 @@ test.describe('Library 2 bookshelf', () => {
     )
   })
 
+  test('primary Library controls provide 44px-class touch targets', async ({
+    page,
+  }) => {
+    await gotoReadyLibrary(page)
+    await page
+      .getByRole('searchbox', { name: 'Search the library' })
+      .fill('Moon')
+
+    const targets = [
+      storyCard(page, CURRENT_STORY.title).getByRole('link', {
+        name: `Continue at 42%: ${CURRENT_STORY.title}`,
+      }),
+      storyCard(page, LONG_UNAUTHORED_STORY.title).getByRole('link', {
+        name: `Read: ${LONG_UNAUTHORED_STORY.title}`,
+      }),
+      storyCard(page, CURRENT_STORY.title).getByRole('button', {
+        name: `Details for ${CURRENT_STORY.title}`,
+      }),
+      page.getByRole('button', { name: 'Clear search' }),
+      page.getByRole('button', { name: 'Parent options' }),
+      page.getByRole('button', { name: 'Lock Panda Pages' }),
+      page.getByRole('button', { name: 'Surprise me' }),
+    ]
+
+    for (const target of targets) {
+      const box = await target.boundingBox()
+      expect(box).not.toBeNull()
+      expect(box!.height).toBeGreaterThanOrEqual(44)
+      expect(box!.width).toBeGreaterThanOrEqual(44)
+    }
+  })
+
   test('long titles, missing authors, large text, and safe-area-aware layout remain contained', async ({
     page,
   }) => {
-    await page.setViewportSize({ width: 390, height: 844 })
+    await page.setViewportSize({ width: 390, height: 375 })
     await gotoReadyLibrary(page)
     await page.addStyleTag({
       content: 'html { font-size: 32px !important; }',
     })
 
+    const header = page.locator('.library-header')
     const brand = page.getByRole('link', { name: 'Panda Pages home' })
-    const parent = page.locator('details.parent-options > summary')
+    const parent = page.getByRole('button', { name: 'Parent options' })
     const lock = page.getByRole('button', { name: 'Lock Panda Pages' })
+    await expect(header).toHaveClass(/library-header--static/)
+    expect(await header.evaluate((element) => getComputedStyle(element).position)).not.toBe(
+      'sticky',
+    )
     await expect(brand).toBeVisible()
     await expect(parent).toBeVisible()
     await expect(lock).toBeVisible()
@@ -1048,7 +1335,14 @@ test.describe('Library 2 bookshelf', () => {
     expect(boxesOverlap(parentBox!, lockBox!)).toBe(false)
 
     await parent.click()
-    await expect(page.locator('.parent-menu')).toBeVisible()
+    const menu = page.locator('.parent-menu')
+    await expect(menu).toBeVisible()
+    const menuBox = await menu.boundingBox()
+    expect(menuBox).not.toBeNull()
+    expect(menuBox!.x).toBeGreaterThanOrEqual(0)
+    expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(390)
+    expect(menuBox!.y).toBeGreaterThanOrEqual(0)
+    expect(menuBox!.y + menuBox!.height).toBeLessThanOrEqual(375)
     await page.keyboard.press('Escape')
     await expect(parent).toBeFocused()
 
@@ -1058,6 +1352,21 @@ test.describe('Library 2 bookshelf', () => {
       LONG_UNAUTHORED_STORY.title,
     )
     await expect(card.locator('.bookshelf-card__author')).toHaveCount(0)
+    const read = card.getByRole('link', {
+      name: `Read: ${LONG_UNAUTHORED_STORY.title}`,
+    })
+    await read.scrollIntoViewIfNeeded()
+    const readBox = await read.boundingBox()
+    expect(readBox).not.toBeNull()
+    expect(
+      await page.evaluate(({ x, y }) => {
+        const target = document.elementFromPoint(x, y)
+        return Boolean(target?.closest('.bookshelf-card__action'))
+      }, {
+        x: readBox!.x + readBox!.width / 2,
+        y: readBox!.y + readBox!.height / 2,
+      }),
+    ).toBe(true)
     await expectNoHorizontalOverflow(page)
   })
 

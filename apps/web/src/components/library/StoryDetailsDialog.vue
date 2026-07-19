@@ -14,6 +14,7 @@ import {
   classifyLibraryProgress,
   libraryActionLabel,
   libraryChapterLabel,
+  libraryDisplayPercent,
   libraryLengthLabel,
   libraryProgressLabel,
   type LibraryStory,
@@ -42,7 +43,7 @@ const chapterLabel = computed(() =>
   props.story ? libraryChapterLabel(props.story.chapterCount) : '',
 )
 const percent = computed(() =>
-  Math.round((props.story?.progress?.percent ?? 0) * 100),
+  props.story ? libraryDisplayPercent(props.story) : 0,
 )
 
 let returnFocus: HTMLElement | null = null
@@ -116,7 +117,7 @@ watch(
           <span
             class="story-dialog__progress-track"
             role="progressbar"
-            aria-label="Reading progress"
+            :aria-label="`Reading progress for ${story.title}`"
             aria-valuemin="0"
             aria-valuemax="100"
             :aria-valuenow="percent"
@@ -136,6 +137,7 @@ watch(
         <RouterLink
           class="story-dialog__action"
           :to="`/read/${encodeURIComponent(story.slug)}`"
+          :aria-label="`${actionLabel}: ${story.title}`"
         >
           {{ actionLabel }}
           <span aria-hidden="true">→</span>

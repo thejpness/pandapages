@@ -64,6 +64,7 @@ test('strict Library boundary accepts current, old-version, empty, and missing-a
   }
 
   const parsed = api.parseLibraryResponse(value)
+  assert.equal(parsed.unavailableItemCount, 0)
   assert.deepEqual(parsed.items[0], {
     ...value.items[0],
     progressAvailability: 'available',
@@ -140,8 +141,10 @@ test('strict Library boundary rejects malformed core fields and internal keys', 
     null,
     {},
     { items: null },
-    { items: [], internal: true },
     { items: [story(), story()] },
+    { items: [], unavailableItemCount: -1 },
+    { items: [], unavailableItemCount: 1.5 },
+    { items: [], unavailableItemCount: Number.MAX_SAFE_INTEGER + 1 },
   ]) {
     assert.throws(
       () => api.parseLibraryResponse(invalid),
@@ -161,7 +164,46 @@ test('zero aggregate counts remain valid and are not invented client-side', asyn
   })
   assert.deepEqual(api.parseLibraryResponse({ items: [emptyContent] }), {
     items: [{ ...emptyContent, progressAvailability: 'available' }],
+    unavailableItemCount: 0,
   })
+})
+
+test('Library boundary ignores harmless additive fields but rejects unsafe data at every level', async () => {
+  const { module: api } = await apiModule()
+  const additive = {
+    items: [
+      story({
+        editorialBadge: 'bedtime',
+        progress: progress({ futureProgressHint: 'harmless' }),
+      }),
+    ],
+    unavailableItemCount: 2,
+    futureEnvelope: { revision: 3 },
+  }
+  assert.deepEqual(api.parseLibraryResponse(additive), {
+    items: [
+      {
+        ...story(),
+        progressAvailability: 'available',
+      },
+    ],
+    unavailableItemCount: 2,
+  })
+
+  const unsafeValues = [
+    { items: [], accountId: 'private' },
+    { items: [story({ publishedVersionId: 'private' })] },
+    { items: [story({ future: { segments: [] } })] },
+    { items: [story({ progress: progress({ locator: {} }) })] },
+    { items: [story({ markdown: '# private' })] },
+    { items: [story({ rendered_html: '<p>private</p>' })] },
+  ]
+  for (const unsafe of unsafeValues) {
+    assert.throws(
+      () => api.parseLibraryResponse(unsafe),
+      (error) => api.isInvalidLibraryResponseError(error),
+    )
+  }
 })
 
 test('getLibrary uses the fixed credentialed route and rejects malformed success bodies', async (t) => {
@@ -183,6 +225,7 @@ test('getLibrary uses the fixed credentialed route and rejects malformed success
 
   assert.deepEqual(await api.getLibrary(), {
     items: [{ ...payload.items[0], progressAvailability: 'available' }],
+    unavailableItemCount: 0,
   })
   assert.deepEqual(
     requests.map(({ url, init }) => [url, init.credentials]),

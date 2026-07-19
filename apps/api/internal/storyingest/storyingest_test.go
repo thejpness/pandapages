@@ -59,6 +59,22 @@ func TestIngestRejectsMalformedFrontmatter(t *testing.T) {
 	}
 }
 
+func TestIngestRejectsFrontmatterOnlyStory(t *testing.T) {
+	for _, markdown := range []string{
+		"---\ntitle: Metadata only\nlanguage: en-GB\n---\n",
+		"---\ntitle: Whitespace body\nlanguage: en-GB\n---\n \n\t\n",
+	} {
+		_, err := Ingest(Input{
+			Slug:     "empty-story",
+			Title:    "Empty story",
+			Markdown: markdown,
+		})
+		if err == nil || !strings.Contains(err.Error(), "at least one readable segment") {
+			t.Fatalf("frontmatter-only Ingest error = %v", err)
+		}
+	}
+}
+
 func TestIngestOmitsUnsafeMarkdown(t *testing.T) {
 	markdown := "# Safe title\n\n[click](&#106;avascript:alert(1))\n\n" +
 		"<javascript:alert(document.domain)>\n\n" +

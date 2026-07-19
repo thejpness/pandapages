@@ -283,6 +283,9 @@ func Ingest(in Input) (Output, error) {
 			ordinal++
 		}
 	}
+	if len(segs) == 0 {
+		return Output{}, fmt.Errorf("story must contain at least one readable segment")
+	}
 
 	identityInputs := make([]readercontract.SegmentIdentityInput, 0, len(segs))
 	for _, segment := range segs {

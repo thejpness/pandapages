@@ -59,9 +59,15 @@ function progressDetails(input: ProgressInput): ProgressDetails {
   return { progress: input, unavailable: false }
 }
 
-function percentLabel(progress: LibraryProgress): number {
+export function libraryDisplayPercent(input: ProgressInput): number {
+  const { progress } = progressDetails(input)
+  if (progress === null) return 0
+
   const percent = Number.isFinite(progress.percent) ? progress.percent : 0
-  return Math.round(Math.max(0, Math.min(1, percent)) * 100)
+  const rounded = Math.round(Math.max(0, Math.min(1, percent)) * 100)
+  return classifyLibraryProgress(input) === 'in-progress'
+    ? Math.min(97, rounded)
+    : rounded
 }
 
 export function classifyLibraryProgress(
@@ -80,7 +86,7 @@ export function libraryActionLabel(input: ProgressInput): string {
   const { progress } = progressDetails(input)
   const kind = classifyLibraryProgress(input)
   if (kind === 'in-progress' && progress !== null) {
-    return `Continue at ${percentLabel(progress)}%`
+    return `Continue at ${libraryDisplayPercent(input)}%`
   }
   if (kind === 'completed') return 'Read again'
   if (kind === 'updated') return 'Open updated story'
@@ -93,7 +99,7 @@ export function libraryProgressLabel(input: ProgressInput): string {
   if (kind === 'unavailable') return 'Progress unavailable'
   if (kind === 'beginning') return 'At the beginning'
   if (kind === 'in-progress' && progress !== null) {
-    return `${percentLabel(progress)}% read`
+    return `${libraryDisplayPercent(input)}% read`
   }
   if (kind === 'completed') return 'Finished'
   if (kind === 'updated') return 'Story updated since you last read'

@@ -362,27 +362,28 @@ func (s *Store) AdminPublish(accountID string, slug string, versionID string) er
 		return fmt.Errorf("account, slug and versionId required")
 	}
 
-	var storyID string
-	if err := s.db.QueryRowContext(ctx, `
-		SELECT id FROM stories WHERE account_id=$1 AND slug=$2
-	`, accountID, slug).Scan(&storyID); err != nil {
-		return err
+	// One statement keeps ownership, version selection, the non-empty Reader
+	// invariant, and the publication pointer update atomic.
+	var publishedStoryID string
+	err := s.db.QueryRowContext(ctx, `
+		UPDATE stories AS story
+		SET published_version_id = version.id,
+		    is_published = true,
+		    updated_at = now()
+		FROM story_versions AS version
+		WHERE story.account_id = $1
+		  AND story.slug = $2
+		  AND version.id = $3
+		  AND version.story_id = story.id
+		  AND EXISTS (
+			SELECT 1
+			FROM story_segments AS segment
+			WHERE segment.story_version_id = version.id
+		  )
+		RETURNING story.id
+	`, accountID, slug, versionID).Scan(&publishedStoryID)
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("story version was not found or contains no readable segments")
 	}
-
-	var ok string
-	if err := s.db.QueryRowContext(ctx, `
-		SELECT id FROM story_versions WHERE id=$1 AND story_id=$2
-	`, versionID, storyID).Scan(&ok); err != nil {
-		return err
-	}
-
-	_, err := s.db.ExecContext(ctx, `
-		UPDATE stories
-		SET published_version_id=$2,
-		    is_published=true,
-		    updated_at=now()
-		WHERE id=$1
-	`, storyID, versionID)
-
 	return err
 }

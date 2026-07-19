@@ -6,6 +6,7 @@ import {
   libraryActionLabel,
   libraryChapterLabel,
   libraryCoverPresentation,
+  libraryDisplayPercent,
   libraryLengthLabel,
   libraryProgressLabel,
   type LibraryStory,
@@ -16,7 +17,7 @@ const emit = defineEmits<{ details: [story: LibraryStory] }>()
 
 const cover = computed(() => libraryCoverPresentation(props.story))
 const progressKind = computed(() => classifyLibraryProgress(props.story))
-const percent = computed(() => Math.round((props.story.progress?.percent ?? 0) * 100))
+const percent = computed(() => libraryDisplayPercent(props.story))
 const progressLabel = computed(() => libraryProgressLabel(props.story))
 const actionLabel = computed(() => libraryActionLabel(props.story))
 const lengthLabel = computed(() => libraryLengthLabel(props.story.wordCount))
@@ -63,7 +64,7 @@ const chapterLabel = computed(() => libraryChapterLabel(props.story.chapterCount
           v-if="progressKind === 'in-progress' || progressKind === 'completed'"
           class="bookshelf-card__progress"
           role="progressbar"
-          aria-label="Reading progress"
+          :aria-label="`Reading progress for ${story.title}`"
           aria-valuemin="0"
           aria-valuemax="100"
           :aria-valuenow="percent"
@@ -77,6 +78,7 @@ const chapterLabel = computed(() => libraryChapterLabel(props.story.chapterCount
       <RouterLink
         class="bookshelf-card__action"
         :to="`/read/${encodeURIComponent(story.slug)}`"
+        :aria-label="`${actionLabel}: ${story.title}`"
       >
         {{ actionLabel }}
         <span aria-hidden="true">→</span>
@@ -288,17 +290,21 @@ const chapterLabel = computed(() => libraryChapterLabel(props.story.chapterCount
 
 .bookshelf-card__action,
 .bookshelf-card__details {
+  min-width: 2.75rem;
+  min-height: 2.75rem;
   color: inherit;
   font-size: 0.8rem;
   font-weight: 900;
 }
 
 .bookshelf-card__action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
   text-decoration: none;
 }
 
 .bookshelf-card__details {
-  min-height: 2.25rem;
   border: 0;
   border-radius: 999px;
   padding: 0.35rem 0.7rem;

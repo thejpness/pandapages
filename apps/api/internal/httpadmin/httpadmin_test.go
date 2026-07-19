@@ -32,6 +32,8 @@ type fakeAdminStore struct {
 	draftRequest   model.AdminDraftUpsertRequest
 	draftCalls     int
 	draftAccount   string
+	publishErr     error
+	publishCalls   int
 }
 
 func (s *fakeAdminStore) AccountExists(accountID string) (bool, error) {
@@ -56,8 +58,9 @@ func (s *fakeAdminStore) AdminDraftUpsert(accountID string, req model.AdminDraft
 	}, nil
 }
 
-func (*fakeAdminStore) AdminPublish(_, _, _ string) error {
-	return nil
+func (s *fakeAdminStore) AdminPublish(_, _, _ string) error {
+	s.publishCalls++
+	return s.publishErr
 }
 
 func (*fakeAdminStore) AdminPreview(req model.AdminPreviewRequest) (model.AdminPreviewResponse, error) {
@@ -166,6 +169,27 @@ func TestAdminListStoriesAuthorised(t *testing.T) {
 	}
 	if item["slug"] != "safe-story" || item["title"] != "Safe Story" || item["isPublished"] != true {
 		t.Fatalf("unexpected safe list shape: %#v", item)
+	}
+}
+
+func TestAdminPublishReturnsSafeValidationFailure(t *testing.T) {
+	store := &fakeAdminStore{publishErr: errors.New("story version was not found or contains no readable segments")}
+	rec := serveAdmin(
+		t,
+		store,
+		http.MethodPost,
+		"/api/v1/admin/stories/empty-story/publish",
+		[]byte(`{"versionId":"11111111-1111-4111-8111-111111111111"}`),
+		"valid",
+		testAdminKey,
+	)
+
+	if rec.Code != http.StatusBadRequest || store.publishCalls != 1 {
+		t.Fatalf("publish response/calls = %d/%d; body = %s", rec.Code, store.publishCalls, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"code":"publish_failed"`) ||
+		!strings.Contains(rec.Body.String(), "contains no readable segments") {
+		t.Fatalf("safe publish validation response = %s", rec.Body.String())
 	}
 }
 

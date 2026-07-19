@@ -190,6 +190,7 @@ export type LibraryItem = LibraryStory
 
 export type LibraryResponse = {
   items: LibraryStory[]
+  unavailableItemCount: number
 }
 
 export class InvalidLibraryResponseError extends Error {
@@ -217,12 +218,6 @@ const libraryStoryRequiredKeys = [
   'chapterCount',
 ] as const
 
-const libraryStoryAllowedKeys = [
-  ...libraryStoryRequiredKeys,
-  'author',
-  'progress',
-] as const
-
 const libraryProgressKeys = [
   'version',
   'percent',
@@ -234,15 +229,52 @@ const librarySlugPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const rfc3339Pattern =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:Z|([+-])(\d{2}):(\d{2}))$/
 
-function hasRequiredAllowedKeys(
-  record: Record<string, unknown>,
-  required: readonly string[],
-  allowed: readonly string[],
-): boolean {
-  const allowedKeys = new Set(allowed)
+const unsafeLibraryKeys = new Set([
+  'account',
+  'accountdata',
+  'accountemail',
+  'accountid',
+  'accounts',
+  'html',
+  'id',
+  'locator',
+  'markdown',
+  'profile',
+  'profiledata',
+  'profileid',
+  'profiles',
+  'publishedversionid',
+  'renderedhtml',
+  'segment',
+  'segments',
+  'storyid',
+  'versionid',
+])
+
+function isUnsafeLibraryKey(key: string): boolean {
+  const compact = key.replaceAll(/[_-]/g, '').toLocaleLowerCase('en-GB')
   return (
-    required.every((key) => Object.hasOwn(record, key)) &&
-    Object.keys(record).every((key) => allowedKeys.has(key))
+    unsafeLibraryKeys.has(compact) ||
+    /(?:^|[_-])ids?$/iu.test(key) ||
+    /(?:Id|ID|Ids|IDs)$/u.test(key)
+  )
+}
+
+function hasUnsafeLibraryFields(
+  value: unknown,
+  seen: WeakSet<object> = new WeakSet(),
+): boolean {
+  if (Array.isArray(value)) {
+    if (seen.has(value)) return false
+    seen.add(value)
+    return value.some((item) => hasUnsafeLibraryFields(item, seen))
+  }
+  if (!isRecord(value)) return false
+  if (seen.has(value)) return false
+  seen.add(value)
+  return Object.entries(value).some(
+    ([key, child]) =>
+      isUnsafeLibraryKey(key) || hasUnsafeLibraryFields(child, seen),
   )
 }
 
@@ -309,10 +341,6 @@ function parseLibraryProgress(
     return { progress: null, progressAvailability: 'unavailable' }
   }
 
-  const allowedKeys = new Set<string>(libraryProgressKeys)
-  if (Object.keys(value).some((key) => !allowedKeys.has(key))) {
-    return invalidLibraryResponse()
-  }
   if (
     !libraryProgressKeys.every((key) => Object.hasOwn(value, key)) ||
     !isPositiveSafeInteger(value.version) ||
@@ -341,11 +369,7 @@ function parseLibraryProgress(
 function parseLibraryStory(value: unknown): LibraryStory {
   if (
     !isRecord(value) ||
-    !hasRequiredAllowedKeys(
-      value,
-      libraryStoryRequiredKeys,
-      libraryStoryAllowedKeys,
-    ) ||
+    !libraryStoryRequiredKeys.every((key) => Object.hasOwn(value, key)) ||
     typeof value.slug !== 'string' ||
     !librarySlugPattern.test(value.slug) ||
     typeof value.title !== 'string' ||
@@ -386,9 +410,17 @@ function parseLibraryStory(value: unknown): LibraryStory {
 export function parseLibraryResponse(value: unknown): LibraryResponse {
   if (
     !isRecord(value) ||
-    !hasRequiredAllowedKeys(value, ['items'], ['items']) ||
+    hasUnsafeLibraryFields(value) ||
+    !Object.hasOwn(value, 'items') ||
     !Array.isArray(value.items)
   ) {
+    return invalidLibraryResponse()
+  }
+
+  const unavailableItemCount = Object.hasOwn(value, 'unavailableItemCount')
+    ? value.unavailableItemCount
+    : 0
+  if (!isNonNegativeInteger(unavailableItemCount)) {
     return invalidLibraryResponse()
   }
 
@@ -398,7 +430,7 @@ export function parseLibraryResponse(value: unknown): LibraryResponse {
     if (slugs.has(item.slug)) return invalidLibraryResponse()
     slugs.add(item.slug)
   }
-  return { items }
+  return { items, unavailableItemCount }
 }
 
 export async function getLibrary(): Promise<LibraryResponse> {

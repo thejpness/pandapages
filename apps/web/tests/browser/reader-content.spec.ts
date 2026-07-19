@@ -133,13 +133,13 @@ test.describe('Reader content and route states', () => {
     await page.goto('/library')
     await expect(storyCard(storyA.title)).toBeVisible()
     await storyCard(storyA.title)
-      .getByRole('link', { name: 'Read', exact: true })
+      .getByRole('link', { name: `Read: ${storyA.title}`, exact: true })
       .click()
     await stale.started
     await page.goBack()
     await expect(page).toHaveURL('/library')
     await storyCard(storyB.title)
-      .getByRole('link', { name: 'Read', exact: true })
+      .getByRole('link', { name: `Read: ${storyB.title}`, exact: true })
       .click()
     await expect(page.getByRole('heading', { level: 1, name: storyB.title })).toBeVisible()
 

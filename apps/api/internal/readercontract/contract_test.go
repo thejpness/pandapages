@@ -105,6 +105,69 @@ func TestAssignSegmentIdentitiesUsesStableOccurrencesAndH2Chapters(t *testing.T)
 	}
 }
 
+func TestValidateStoredSegmentIdentities(t *testing.T) {
+	inputs := []SegmentIdentityInput{
+		{Kind: SegmentKindHeading, HeadingLevel: intPointer(1), Markdown: "# Title"},
+		{Kind: SegmentKindParagraph, Markdown: "Repeated."},
+		{Kind: SegmentKindHeading, HeadingLevel: intPointer(2), Markdown: "## Chapter"},
+		{Kind: SegmentKindParagraph, Markdown: "Repeated."},
+		{Kind: SegmentKindHeading, HeadingLevel: intPointer(2), Markdown: "## Chapter"},
+	}
+	assigned, err := AssignSegmentIdentities(inputs)
+	if err != nil {
+		t.Fatalf("AssignSegmentIdentities: %v", err)
+	}
+	valid := make([]StoredSegmentIdentity, 0, len(assigned))
+	for index, identity := range assigned {
+		valid = append(valid, StoredSegmentIdentity{
+			Ordinal:           index + 1,
+			Kind:              identity.Kind,
+			HeadingLevel:      identity.HeadingLevel,
+			ContentKey:        identity.ContentKey,
+			ContentOccurrence: identity.ContentOccurrence,
+			ChapterKey:        identity.ChapterKey,
+			ChapterOccurrence: identity.ChapterOccurrence,
+		})
+	}
+
+	chapterCount, err := ValidateStoredSegmentIdentities(valid)
+	if err != nil || chapterCount != 2 {
+		t.Fatalf("valid stored identities = chapters %d / error %v", chapterCount, err)
+	}
+
+	for _, test := range []struct {
+		name   string
+		mutate func([]StoredSegmentIdentity)
+	}{
+		{name: "ordinal gap", mutate: func(segments []StoredSegmentIdentity) { segments[1].Ordinal = 3 }},
+		{name: "unsupported kind", mutate: func(segments []StoredSegmentIdentity) { segments[1].Kind = "image" }},
+		{name: "heading level on paragraph", mutate: func(segments []StoredSegmentIdentity) { segments[1].HeadingLevel = intPointer(2) }},
+		{name: "content key", mutate: func(segments []StoredSegmentIdentity) { segments[1].ContentKey = "unsafe" }},
+		{name: "content occurrence", mutate: func(segments []StoredSegmentIdentity) { segments[3].ContentOccurrence = 1 }},
+		{name: "chapter before H2", mutate: func(segments []StoredSegmentIdentity) {
+			key, occurrence := segments[2].ContentKey, 1
+			segments[1].ChapterKey, segments[1].ChapterOccurrence = &key, &occurrence
+		}},
+		{name: "H2 chapter self identity", mutate: func(segments []StoredSegmentIdentity) {
+			key := strings.Repeat("f", 64)
+			segments[2].ChapterKey = &key
+		}},
+		{name: "chapter propagation", mutate: func(segments []StoredSegmentIdentity) {
+			occurrence := 2
+			segments[3].ChapterOccurrence = &occurrence
+		}},
+		{name: "unpaired chapter", mutate: func(segments []StoredSegmentIdentity) { segments[3].ChapterOccurrence = nil }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			segments := append([]StoredSegmentIdentity(nil), valid...)
+			test.mutate(segments)
+			if _, err := ValidateStoredSegmentIdentities(segments); err == nil {
+				t.Fatalf("accepted malformed stored identities: %#v", segments)
+			}
+		})
+	}
+}
+
 func TestLocatorValidation(t *testing.T) {
 	valid := Locator{
 		Schema: 2,

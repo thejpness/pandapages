@@ -4,6 +4,7 @@ import { RouterLink } from 'vue-router'
 import {
   classifyLibraryProgress,
   libraryActionLabel,
+  libraryDisplayPercent,
   libraryProgressLabel,
   type LibraryStory,
 } from '../../lib/library-read-model'
@@ -13,9 +14,7 @@ const props = defineProps<{ story: LibraryStory }>()
 const progressKind = computed(() => classifyLibraryProgress(props.story))
 const actionLabel = computed(() => libraryActionLabel(props.story))
 const progressLabel = computed(() => libraryProgressLabel(props.story))
-const percent = computed(() =>
-  Math.round((props.story.progress?.percent ?? 0) * 100),
-)
+const percent = computed(() => libraryDisplayPercent(props.story))
 
 const eyebrow = computed(() => {
   if (progressKind.value === 'updated') return 'A new edition is waiting'
@@ -48,7 +47,7 @@ const eyebrow = computed(() => {
           v-if="progressKind === 'in-progress' || progressKind === 'completed'"
           class="continue-card__progress"
           role="progressbar"
-          aria-label="Reading progress"
+          :aria-label="`Reading progress for ${story.title}`"
           aria-valuemin="0"
           aria-valuemax="100"
           :aria-valuenow="percent"

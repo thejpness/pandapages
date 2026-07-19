@@ -1,6 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
+import {
+  PopoverContent,
+  PopoverPortal,
+  PopoverRoot,
+  PopoverTrigger,
+} from 'reka-ui'
 import type { LibrarySort } from '../../lib/library-sorting'
 
 const props = defineProps<{
@@ -22,7 +28,15 @@ const emit = defineEmits<{
 }>()
 
 const searchInput = ref<HTMLInputElement | null>(null)
-const parentMenu = ref<HTMLDetailsElement | null>(null)
+const headerRoot = ref<HTMLElement | null>(null)
+const parentMenuOpen = ref(false)
+const parentFirstAction = ref<HTMLButtonElement | null>(null)
+const parentLastAction = ref<HTMLButtonElement | null>(null)
+const lockButton = ref<HTMLButtonElement | null>(null)
+const stickyHeader = ref(true)
+
+let headerObserver: ResizeObserver | null = null
+let onwardFocus: HTMLElement | null = null
 
 const qModel = computed({
   get: () => props.q,
@@ -44,23 +58,71 @@ function focusSearch() {
 }
 
 function chooseParentAction(action: 'journey' | 'admin') {
-  if (parentMenu.value) parentMenu.value.open = false
+  parentMenuOpen.value = false
   if (action === 'journey') emit('journey')
   else emit('admin')
 }
 
-function closeParentMenu(event: KeyboardEvent) {
-  if (event.key !== 'Escape' || !parentMenu.value?.open) return
+function handleParentTriggerKeydown(event: KeyboardEvent) {
+  if (event.key !== 'Tab' || event.shiftKey || !parentMenuOpen.value) return
   event.preventDefault()
-  parentMenu.value.open = false
-  parentMenu.value.querySelector('summary')?.focus()
+  parentFirstAction.value?.focus()
 }
+
+function handleParentMenuKeydown(event: KeyboardEvent) {
+  if (event.key !== 'Tab') return
+  const active = document.activeElement
+
+  if (event.shiftKey && active === parentFirstAction.value) {
+    event.preventDefault()
+    parentMenuOpen.value = false
+    return
+  }
+
+  if (!event.shiftKey && active === parentLastAction.value) {
+    event.preventDefault()
+    onwardFocus = lockButton.value
+    parentMenuOpen.value = false
+  }
+}
+
+function handleParentCloseAutoFocus(event: Event) {
+  if (onwardFocus === null) return
+  event.preventDefault()
+  const target = onwardFocus
+  onwardFocus = null
+  void nextTick(() => target.focus({ preventScroll: true }))
+}
+
+function updateStickyHeader() {
+  if (headerRoot.value === null) return
+  const height = headerRoot.value.getBoundingClientRect().height
+  stickyHeader.value =
+    window.innerHeight >= 480 && height <= window.innerHeight * 0.42
+}
+
+onMounted(() => {
+  headerObserver = new ResizeObserver(updateStickyHeader)
+  if (headerRoot.value !== null) headerObserver.observe(headerRoot.value)
+  window.addEventListener('resize', updateStickyHeader)
+  updateStickyHeader()
+})
+
+onBeforeUnmount(() => {
+  headerObserver?.disconnect()
+  headerObserver = null
+  window.removeEventListener('resize', updateStickyHeader)
+})
 
 defineExpose({ focusSearch })
 </script>
 
 <template>
-  <header class="library-header">
+  <header
+    ref="headerRoot"
+    class="library-header"
+    :class="{ 'library-header--static': !stickyHeader }"
+  >
     <div class="library-header__inner">
       <div class="library-header__topline">
         <RouterLink class="library-brand" to="/" aria-label="Panda Pages home">
@@ -72,24 +134,58 @@ defineExpose({ focusSearch })
         </RouterLink>
 
         <div class="library-header__actions">
-          <details ref="parentMenu" class="parent-options" @keydown="closeParentMenu">
-            <summary class="header-button header-button--quiet">
-                <span aria-hidden="true">•••</span>
-                <span class="header-button__label">Parent options</span>
-            </summary>
-            <div class="parent-menu">
-              <button class="parent-menu__item" type="button" @click="chooseParentAction('journey')">
-                  <span aria-hidden="true">◌</span>
-                  Reading profile
-              </button>
-              <button class="parent-menu__item" type="button" @click="chooseParentAction('admin')">
-                  <span aria-hidden="true">⚙</span>
-                  Admin
-              </button>
+          <PopoverRoot v-model:open="parentMenuOpen">
+            <div class="parent-options">
+              <PopoverTrigger as-child>
+                <button
+                  class="header-button header-button--quiet"
+                  type="button"
+                  @keydown="handleParentTriggerKeydown"
+                >
+                  <span aria-hidden="true">•••</span>
+                  <span class="header-button__label">Parent options</span>
+                </button>
+              </PopoverTrigger>
+              <PopoverPortal>
+                <PopoverContent
+                  class="parent-menu"
+                  align="end"
+                  side="bottom"
+                  :side-offset="8"
+                  :collision-padding="16"
+                  :prioritize-position="true"
+                  position-strategy="fixed"
+                  sticky="always"
+                  style="position: relative; z-index: 80; max-height: 60dvh; overflow: auto"
+                  @open-auto-focus="$event.preventDefault()"
+                  @close-auto-focus="handleParentCloseAutoFocus"
+                  @keydown.capture="handleParentMenuKeydown"
+                >
+                  <button
+                    ref="parentFirstAction"
+                    class="parent-menu__item"
+                    type="button"
+                    @click="chooseParentAction('journey')"
+                  >
+                    <span aria-hidden="true">◌</span>
+                    Reading profile
+                  </button>
+                  <button
+                    ref="parentLastAction"
+                    class="parent-menu__item"
+                    type="button"
+                    @click="chooseParentAction('admin')"
+                  >
+                    <span aria-hidden="true">⚙</span>
+                    Admin
+                  </button>
+                </PopoverContent>
+              </PopoverPortal>
             </div>
-          </details>
+          </PopoverRoot>
 
           <button
+            ref="lockButton"
             class="header-button header-button--ink"
             type="button"
             :disabled="locking"
@@ -163,6 +259,10 @@ defineExpose({ focusSearch })
   background: color-mix(in srgb, var(--library-paper) 91%, transparent);
   color: var(--library-ink);
   backdrop-filter: blur(18px);
+}
+
+.library-header--static {
+  position: relative;
 }
 
 .library-header__inner {
@@ -298,7 +398,7 @@ defineExpose({ focusSearch })
 .library-search button {
   position: absolute;
   right: 0.45rem;
-  min-height: 2rem;
+  min-height: 2.75rem;
   border: 0;
   border-radius: 999px;
   padding-inline: 0.65rem;
@@ -381,7 +481,8 @@ defineExpose({ focusSearch })
 
 @media (max-width: 23rem) {
   .library-header__inner {
-    padding-inline: max(0.65rem, env(safe-area-inset-left));
+    padding-right: max(0.65rem, env(safe-area-inset-right));
+    padding-left: max(0.65rem, env(safe-area-inset-left));
   }
 
   .library-brand small {
@@ -392,6 +493,12 @@ defineExpose({ focusSearch })
     text-align: left;
   }
 }
+
+@media (max-height: 30rem) {
+  .library-header {
+    position: relative;
+  }
+}
 </style>
 
 <style scoped>
@@ -399,20 +506,17 @@ defineExpose({ focusSearch })
   position: relative;
 }
 
-.parent-options summary {
-  list-style: none;
-}
-
-.parent-options summary::-webkit-details-marker {
-  display: none;
-}
-
 .parent-menu {
-  position: absolute;
+  position: relative;
   z-index: 80;
-  top: calc(100% + 0.5rem);
-  right: 0;
-  min-width: 13rem;
+  box-sizing: border-box;
+  width: min(
+    13rem,
+    calc(100vw - 2rem - env(safe-area-inset-left) - env(safe-area-inset-right))
+  );
+  max-width: var(--reka-popover-content-available-width);
+  max-height: 60dvh;
+  overflow: auto;
   border: 1px solid rgba(17, 17, 15, 0.2);
   border-radius: 1rem;
   padding: 0.35rem;

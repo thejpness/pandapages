@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -396,9 +397,13 @@ func TestAccountStoreIntegration(t *testing.T) {
 			t.Fatalf("insert account-scoped progress: %v", err)
 		}
 
-		itemsA, err := store.Library(accountA)
+		libraryA, err := store.Library(accountA)
 		if err != nil {
 			t.Fatalf("Library(account A): %v", err)
+		}
+		itemsA := libraryA.Items
+		if libraryA.UnavailableItemCount != 0 {
+			t.Fatalf("Library(account A) unavailable count = %d, want 0", libraryA.UnavailableItemCount)
 		}
 		if len(itemsA) != 2 || itemsA[0].Slug != "no-progress" || itemsA[1].Slug != "shared-story" {
 			t.Fatalf("Library(account A) ordering/scope = %#v", itemsA)
@@ -420,9 +425,61 @@ func TestAccountStoreIntegration(t *testing.T) {
 			t.Fatalf("current-version progress = %#v", current.Progress)
 		}
 
+		// A historical version with no Reader segments is quarantined from the
+		// shelf and direct Reader access instead of producing a broken Read action.
+		const (
+			zeroStory   = "aaaaaaaa-0000-4000-8000-000000000009"
+			zeroVersion = "aaaaaaaa-1000-4000-8000-000000000009"
+		)
+		if _, err := adminDB.Exec(`
+			INSERT INTO stories (
+				id, account_id, slug, title, language, is_published, created_at, updated_at
+			) VALUES ($1, $2, 'historical-empty', 'Mutable draft title', 'fr', false, now(), now())
+		`, zeroStory, accountA); err != nil {
+			t.Fatalf("insert historical zero-segment publication: %v", err)
+		}
+		if _, err := adminDB.Exec(`
+			INSERT INTO story_versions (id, story_id, version, frontmatter, rendered_html)
+			VALUES ($1, $2, 1, '{"title":"Historical empty","language":"en-GB"}', '')
+		`, zeroVersion, zeroStory); err != nil {
+			t.Fatalf("insert historical zero-segment version: %v", err)
+		}
+		if err := store.AdminPublish(accountA, "historical-empty", zeroVersion); err == nil || !strings.Contains(err.Error(), "no readable segments") {
+			t.Fatalf("zero-segment AdminPublish error = %v", err)
+		}
+		var (
+			isPublished bool
+			publishedID sql.NullString
+		)
+		if err := adminDB.QueryRow(`SELECT is_published, published_version_id FROM stories WHERE id = $1`, zeroStory).Scan(&isPublished, &publishedID); err != nil {
+			t.Fatalf("read rejected zero-segment publication state: %v", err)
+		}
+		if isPublished || publishedID.Valid {
+			t.Fatalf("rejected zero-segment publication mutated story: published=%t pointer=%#v", isPublished, publishedID)
+		}
+		if _, err := adminDB.Exec(`UPDATE stories SET is_published = true, published_version_id = $2 WHERE id = $1`, zeroStory, zeroVersion); err != nil {
+			t.Fatalf("publish historical zero-segment version: %v", err)
+		}
+		emptyQuarantine, err := store.Library(accountA)
+		if err != nil {
+			t.Fatalf("Library(account A) with historical empty story: %v", err)
+		}
+		if emptyQuarantine.UnavailableItemCount != 1 || len(emptyQuarantine.Items) != 2 {
+			t.Fatalf("historical empty quarantine = %#v", emptyQuarantine)
+		}
+		if _, err := store.ReaderStory(accountA, "historical-empty"); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("historical empty ReaderStory error = %v, want sql.ErrNoRows", err)
+		}
+		if _, err := adminDB.Exec(`UPDATE stories SET published_version_id = NULL WHERE id = $1`, zeroStory); err != nil {
+			t.Fatalf("clear historical zero-segment pointer: %v", err)
+		}
+		if _, err := adminDB.Exec(`DELETE FROM stories WHERE id = $1`, zeroStory); err != nil {
+			t.Fatalf("remove historical zero-segment publication: %v", err)
+		}
+
 		// A newer draft already changed the mutable story columns above. If the
-		// immutable published version is incomplete, fail safely instead of
-		// exposing that draft metadata through the Library response.
+		// immutable published version is incomplete, quarantine only that item
+		// instead of exposing draft metadata or disabling the valid shelf.
 		if _, err := adminDB.Exec(`
 			UPDATE story_versions
 			SET frontmatter = '{"author":"Published author","language":"en-GB"}'::jsonb
@@ -430,8 +487,17 @@ func TestAccountStoreIntegration(t *testing.T) {
 		`, versionA1); err != nil {
 			t.Fatalf("make published metadata incomplete: %v", err)
 		}
-		if _, err := store.Library(accountA); err == nil || !strings.Contains(err.Error(), "title is missing") {
-			t.Fatalf("incomplete published metadata error = %v", err)
+		partial, err := store.Library(accountA)
+		if err != nil {
+			t.Fatalf("Library(account A) with corrupt immutable metadata: %v", err)
+		}
+		if partial.UnavailableItemCount != 1 || len(partial.Items) != 1 || partial.Items[0].Slug != "no-progress" {
+			t.Fatalf("partial Library with corrupt metadata = %#v", partial)
+		}
+		for _, item := range partial.Items {
+			if item.Title == "Unpublished draft title" || item.Author != nil && *item.Author == "Unpublished draft author" {
+				t.Fatalf("partial Library exposed mutable draft metadata: %#v", item)
+			}
 		}
 		if _, err := adminDB.Exec(`
 			UPDATE story_versions
@@ -441,9 +507,13 @@ func TestAccountStoreIntegration(t *testing.T) {
 			t.Fatalf("restore published metadata: %v", err)
 		}
 
-		itemsB, err := store.Library(accountB)
+		libraryB, err := store.Library(accountB)
 		if err != nil {
 			t.Fatalf("Library(account B): %v", err)
+		}
+		itemsB := libraryB.Items
+		if libraryB.UnavailableItemCount != 0 {
+			t.Fatalf("Library(account B) unavailable count = %d, want 0", libraryB.UnavailableItemCount)
 		}
 		if len(itemsB) != 1 || itemsB[0].Slug != "shared-story" || itemsB[0].Title != "Account B published" ||
 			itemsB[0].Progress == nil || itemsB[0].Progress.Version != 1 ||
@@ -458,9 +528,13 @@ func TestAccountStoreIntegration(t *testing.T) {
 		`, storyA, versionA2); err != nil {
 			t.Fatalf("republish account A story: %v", err)
 		}
-		updatedItems, err := store.Library(accountA)
+		updatedLibrary, err := store.Library(accountA)
 		if err != nil {
 			t.Fatalf("Library(account A) after republish: %v", err)
+		}
+		updatedItems := updatedLibrary.Items
+		if updatedLibrary.UnavailableItemCount != 0 {
+			t.Fatalf("republished Library unavailable count = %d, want 0", updatedLibrary.UnavailableItemCount)
 		}
 		updated := updatedItems[1]
 		if updated.Title != "Published version two" || updated.Author != nil || updated.Language != "en" ||
@@ -475,18 +549,34 @@ func TestAccountStoreIntegration(t *testing.T) {
 		if _, err := adminDB.Exec(`UPDATE story_segments SET word_count = -1 WHERE story_version_id = $1 AND ordinal = 1`, versionA2); err != nil {
 			t.Fatalf("corrupt aggregate fixture: %v", err)
 		}
-		if _, err := store.Library(accountA); err == nil || !strings.Contains(err.Error(), "word count") {
-			t.Fatalf("malformed aggregate error = %v", err)
+		invalidAggregate, err := store.Library(accountA)
+		if err != nil || invalidAggregate.UnavailableItemCount != 1 || len(invalidAggregate.Items) != 1 {
+			t.Fatalf("malformed aggregate quarantine = %#v / %v", invalidAggregate, err)
 		}
 		if _, err := adminDB.Exec(`UPDATE story_segments SET word_count = 4 WHERE story_version_id = $1 AND ordinal = 1`, versionA2); err != nil {
 			t.Fatalf("restore aggregate fixture: %v", err)
 		}
 
+		if _, err := adminDB.Exec(`UPDATE story_segments SET chapter_occurrence = 2 WHERE story_version_id = $1 AND ordinal = 4`, versionA2); err != nil {
+			t.Fatalf("corrupt chapter propagation fixture: %v", err)
+		}
+		invalidIdentity, err := store.Library(accountA)
+		if err != nil || invalidIdentity.UnavailableItemCount != 1 || len(invalidIdentity.Items) != 1 {
+			t.Fatalf("malformed identity quarantine = %#v / %v", invalidIdentity, err)
+		}
+		if _, err := store.ReaderStory(accountA, "shared-story"); err == nil || !strings.Contains(err.Error(), "segment identities") {
+			t.Fatalf("ReaderStory malformed identity error = %v", err)
+		}
+		if _, err := adminDB.Exec(`UPDATE story_segments SET chapter_occurrence = 1 WHERE story_version_id = $1 AND ordinal = 4`, versionA2); err != nil {
+			t.Fatalf("restore chapter propagation fixture: %v", err)
+		}
+
 		if _, err := adminDB.Exec(`UPDATE reading_progress SET percent = 1.5 WHERE profile_id = $1 AND story_id = $2`, profileA, storyA); err != nil {
 			t.Fatalf("corrupt progress fixture: %v", err)
 		}
-		if _, err := store.Library(accountA); err == nil || !strings.Contains(err.Error(), "progress") {
-			t.Fatalf("malformed progress error = %v", err)
+		invalidProgress, err := store.Library(accountA)
+		if err != nil || invalidProgress.UnavailableItemCount != 1 || len(invalidProgress.Items) != 1 {
+			t.Fatalf("malformed progress quarantine = %#v / %v", invalidProgress, err)
 		}
 		if _, err := adminDB.Exec(`UPDATE reading_progress SET percent = 0.42 WHERE profile_id = $1 AND story_id = $2`, profileA, storyA); err != nil {
 			t.Fatalf("restore progress fixture: %v", err)
@@ -495,8 +585,9 @@ func TestAccountStoreIntegration(t *testing.T) {
 		if _, err := adminDB.Exec(`UPDATE reading_progress SET story_version_id = $3 WHERE profile_id = $1 AND story_id = $2`, profileA, storyA, versionB); err != nil {
 			t.Fatalf("corrupt progress version fixture: %v", err)
 		}
-		if _, err := store.Library(accountA); err == nil || !strings.Contains(err.Error(), "progress") {
-			t.Fatalf("cross-story progress error = %v", err)
+		crossStoryProgress, err := store.Library(accountA)
+		if err != nil || crossStoryProgress.UnavailableItemCount != 1 || len(crossStoryProgress.Items) != 1 {
+			t.Fatalf("cross-story progress quarantine = %#v / %v", crossStoryProgress, err)
 		}
 		if _, err := adminDB.Exec(`UPDATE reading_progress SET story_version_id = $3 WHERE profile_id = $1 AND story_id = $2`, profileA, storyA, versionA1); err != nil {
 			t.Fatalf("restore progress version fixture: %v", err)
@@ -603,6 +694,7 @@ func setupAccountIntegrationSchema(t *testing.T, database *sql.DB) {
 			content_occurrence integer NOT NULL,
 			chapter_key text,
 			chapter_occurrence integer,
+			rendered_html text NOT NULL DEFAULT '',
 			word_count integer NOT NULL,
 			UNIQUE (story_version_id, ordinal)
 		)`,

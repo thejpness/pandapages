@@ -18,30 +18,33 @@ func TestLibraryEndpointReturnsEnrichedSafeReadModel(t *testing.T) {
 	updatedAt := time.Date(2026, time.July, 19, 12, 0, 0, 0, time.UTC)
 	store := &authTestStore{
 		accountExists: true,
-		libraryResponse: []model.StoryItem{
-			{
-				Slug:             "the-three-little-pigs",
-				Title:            "The Three Little Pigs",
-				Author:           &author,
-				Language:         "en",
-				PublishedVersion: 2,
-				WordCount:        1260,
-				ChapterCount:     4,
-				Progress: &model.LibraryProgressSummary{
-					Version:          2,
-					Percent:          0.42,
-					UpdatedAt:        updatedAt,
-					IsCurrentVersion: true,
+		libraryResponse: model.LibraryReadModel{
+			UnavailableItemCount: 1,
+			Items: []model.StoryItem{
+				{
+					Slug:             "the-three-little-pigs",
+					Title:            "The Three Little Pigs",
+					Author:           &author,
+					Language:         "en",
+					PublishedVersion: 2,
+					WordCount:        1260,
+					ChapterCount:     4,
+					Progress: &model.LibraryProgressSummary{
+						Version:          2,
+						Percent:          0.42,
+						UpdatedAt:        updatedAt,
+						IsCurrentVersion: true,
+					},
 				},
-			},
-			{
-				Slug:             "the-snow-queen",
-				Title:            "The Snow Queen",
-				Language:         "en-GB",
-				PublishedVersion: 3,
-				WordCount:        2450,
-				ChapterCount:     7,
-				Progress:         nil,
+				{
+					Slug:             "the-snow-queen",
+					Title:            "The Snow Queen",
+					Language:         "en-GB",
+					PublishedVersion: 3,
+					WordCount:        2450,
+					ChapterCount:     7,
+					Progress:         nil,
+				},
 			},
 		},
 	}
@@ -63,13 +66,17 @@ func TestLibraryEndpointReturnsEnrichedSafeReadModel(t *testing.T) {
 	}
 
 	var payload struct {
-		Items []map[string]any `json:"items"`
+		Items                []map[string]any `json:"items"`
+		UnavailableItemCount int64            `json:"unavailableItemCount"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 	if len(payload.Items) != 2 {
 		t.Fatalf("items = %#v", payload.Items)
+	}
+	if payload.UnavailableItemCount != 1 {
+		t.Fatalf("unavailableItemCount = %d, want 1", payload.UnavailableItemCount)
 	}
 	current := payload.Items[0]
 	if current["slug"] != "the-three-little-pigs" || current["publishedVersion"] != float64(2) ||
