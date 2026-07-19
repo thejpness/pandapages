@@ -36,12 +36,17 @@ const emit = defineEmits<{
   active: [ordinal: number]
 }>()
 
+const viewInstanceId = Symbol('scroll-reader-view')
 const articleRef = ref<HTMLElement | null>(null)
 const elements = new Map<number, HTMLElement>()
 let captureFrame: number | null = null
 let movementPending = false
 let programmaticRestore = false
 let disposed = false
+let resolveReady: () => void = () => undefined
+const readyPromise = new Promise<void>((resolve) => {
+  resolveReady = resolve
+})
 
 const firstSegmentIsHeading = computed(() => {
   const first = props.segments[0]
@@ -87,6 +92,10 @@ function layouts(): ReaderSegmentLayout[] {
     const rect = element.getBoundingClientRect()
     return [{ ordinal: segment.ordinal, top: rect.top, bottom: rect.bottom }]
   })
+}
+
+function whenReady(): Promise<void> {
+  return readyPromise
 }
 
 function capture(): ReaderScrollPosition | null {
@@ -240,8 +249,10 @@ function focusContent() {
 
 onMounted(async () => {
   await nextTick()
+  await document.fonts?.ready
   if (disposed) return
   scheduleCapture()
+  resolveReady()
 })
 
 onBeforeUnmount(() => {
@@ -252,9 +263,10 @@ onBeforeUnmount(() => {
   }
   movementPending = false
   programmaticRestore = false
+  resolveReady()
 })
 
-defineExpose({ capture, restore, moveToOrdinal, focusContent })
+defineExpose({ capture, whenReady, restore, moveToOrdinal, focusContent, mode: 'scroll', instanceId: viewInstanceId })
 </script>
 
 <template>
@@ -262,6 +274,7 @@ defineExpose({ capture, restore, moveToOrdinal, focusContent })
     ref="articleRef"
     class="reader-story reader-scroll-view"
     data-reader-scroll-view
+    data-reader-view-mode="scroll"
     :aria-labelledby="'reader-story-title'"
     :lang="language"
     :style="articleStyle"

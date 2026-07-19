@@ -41,8 +41,10 @@ import { safeNextPath } from '../lib/session-navigation'
 import { navigationDidFail } from '../lib/session-transitions'
 
 type ReaderView = {
+  mode: ReaderMode
+  instanceId: symbol
   capture: () => ReaderCapturedPosition | null
-  whenReady?: () => Promise<void>
+  whenReady: () => Promise<void>
   restore: (
     locator: ReaderLocatorV2,
     options?: { allowMotion?: boolean },
@@ -98,7 +100,8 @@ const route = useRoute()
 const router = useRouter()
 const reducedMotion = usePreferredReducedMotion()
 const slug = ref(String(route.params.slug))
-const readerView = ref<ReaderView | null>(null)
+const scrollReaderView = ref<ReaderView | null>(null)
+const pagedReaderView = ref<ReaderView | null>(null)
 const readerInitialized = ref(false)
 const settingsOpen = ref(false)
 const chaptersOpen = ref(false)
@@ -117,6 +120,7 @@ const {
   fontStack,
   reset: resetStoredPreferences,
 } = useReaderPreferences()
+const settingsPreferences = ref<ReaderPreferencesV2>({ ...preferences.value })
 
 async function moveToUnlock(storySlug: string) {
   authState.confirmLocked()
@@ -131,8 +135,49 @@ async function moveToUnlock(storySlug: string) {
   }
 }
 
+function readerViewForMode(mode: ReaderMode): ReaderView | null {
+  return mode === 'scroll' ? scrollReaderView.value : pagedReaderView.value
+}
+
+function currentReaderView(): ReaderView | null {
+  return readerViewForMode(preferences.value.mode)
+}
+
+async function waitForMountedReaderView(
+  mode: ReaderMode,
+  previousInstanceId: symbol | null,
+  operation: number,
+  expectedReaderGeneration: number,
+): Promise<ReaderView | null> {
+  const targetRef = mode === 'scroll' ? scrollReaderView : pagedReaderView
+  const valid = (view: ReaderView | null) =>
+    operation === preferenceGeneration &&
+    expectedReaderGeneration === readerGeneration &&
+    view?.mode === mode &&
+    view.instanceId !== previousInstanceId
+  if (valid(targetRef.value)) return targetRef.value
+
+  return new Promise<ReaderView | null>((resolve) => {
+    const stop = watch(
+      [targetRef, () => preferenceGeneration, () => readerGeneration],
+      ([view]) => {
+        if (operation !== preferenceGeneration || expectedReaderGeneration !== readerGeneration) {
+          stop()
+          resolve(null)
+          return
+        }
+        if (valid(view)) {
+          stop()
+          resolve(view)
+        }
+      },
+      { flush: 'post' },
+    )
+  })
+}
+
 function captureCurrent(): ReaderCapturedPosition | null {
-  return readerView.value?.capture() ?? null
+  return currentReaderView()?.capture() ?? null
 }
 
 const progress = useReaderProgress({
@@ -213,11 +258,11 @@ const story = useReaderStory({
   onSessionEnded: moveToUnlock,
   onReady: async (loaded) => {
     const activeGeneration = readerGeneration
-    await readerView.value?.whenReady?.()
+    await currentReaderView()?.whenReady()
     if (activeGeneration !== readerGeneration) return
     activeOrdinal.value = loaded.segments[0]?.ordinal ?? 1
     percent.value = captureCurrent()?.percent ?? 0
-    readerView.value?.focusContent()
+    currentReaderView()?.focusContent()
     progress.begin(loaded.slug, loaded.version, loaded.segments)
     readerInitialized.value = true
   },
@@ -264,7 +309,7 @@ function onActive(ordinal: number) {
 
 async function restore(locator: ReaderLocatorV2): Promise<boolean> {
   const activeGeneration = readerGeneration
-  const restored = await readerView.value?.restore(locator)
+  const restored = await currentReaderView()?.restore(locator)
   if (activeGeneration !== readerGeneration) return false
   const current = captureCurrent()
   if (current) {
@@ -279,7 +324,7 @@ async function moveToBeginning(): Promise<ReaderCapturedPosition | null> {
   const activeGeneration = readerGeneration
   const first = story.story.value?.segments[0]
   if (!first) return null
-  const position = await readerView.value?.moveToOrdinal(
+  const position = await currentReaderView()?.moveToOrdinal(
     first.ordinal,
     0,
     { allowMotion: false },
@@ -300,43 +345,83 @@ async function applyPreferences(candidate: ReaderPreferencesV2) {
   const releasePreferenceWork = beginReaderWork(preferenceWorkBarrier)
   let releaseCaptureSuppression: (() => void) | null = null
   try {
-    if (
-      !(await waitForReaderWork(
-        chapterNavigationBarrier,
-        activeGeneration,
-      ))
-    ) return
-    const transition = planReaderModeTransition(captureCurrent())
-    const anchor = transition.anchor?.locator ?? null
+    if (!(await waitForReaderWork(chapterNavigationBarrier, activeGeneration))) return
+
+    const previous = preferences.value
+    const sourceView = readerViewForMode(previous.mode)
+    if (!sourceView || sourceView.mode !== previous.mode) {
+      throw new Error('The source Reader view is unavailable.')
+    }
+    const transition = planReaderModeTransition(sourceView.capture())
+    const anchor = transition.anchor
     const operation = ++preferenceGeneration
     const operationIsCurrent = () =>
-      operation === preferenceGeneration &&
-      activeGeneration === readerGeneration
-    const previous = preferences.value
+      operation === preferenceGeneration && activeGeneration === readerGeneration
+    const modeChanged = previous.mode !== validated.mode
+    const previousTargetInstanceId = modeChanged
+      ? readerViewForMode(validated.mode)?.instanceId ?? null
+      : null
     const debouncePagedReflow =
+      !modeChanged &&
       previous.mode === 'paged' &&
-      validated.mode === 'paged' &&
       (previous.fontFamily !== validated.fontFamily ||
         previous.fontSize !== validated.fontSize ||
         previous.lineHeight !== validated.lineHeight ||
         previous.contentWidth !== validated.contentWidth)
+
     releaseCaptureSuppression = suppressProgressCapture()
     preferences.value = validated
-    await nextTick()
-    if (!operationIsCurrent()) return
+
+    const targetView = modeChanged
+      ? await waitForMountedReaderView(
+          validated.mode,
+          previousTargetInstanceId,
+          operation,
+          activeGeneration,
+        )
+      : sourceView
+    if (!targetView || !operationIsCurrent()) return
+
     if (debouncePagedReflow) {
       await new Promise<void>((resolve) => {
         window.setTimeout(resolve, 120)
       })
       if (!operationIsCurrent()) return
     }
-    await readerView.value?.whenReady?.()
-    if (!operationIsCurrent()) return
+
+    await targetView.whenReady()
+    if (
+      !operationIsCurrent() ||
+      targetView !== readerViewForMode(validated.mode) ||
+      targetView.mode !== validated.mode
+    ) return
+
     if (anchor) {
-      await readerView.value?.restore(anchor, { allowMotion: false })
-      if (!operationIsCurrent()) return
+      const restored = await targetView.restore(anchor.locator, { allowMotion: false })
+      if (!restored || !operationIsCurrent()) {
+        if (!restored) throw new Error('The target Reader view rejected the canonical location.')
+        return
+      }
     }
-    const current = captureCurrent()
+
+    const current = targetView.capture()
+    if (anchor && current) {
+      const expected = anchor.locator.segment
+      const actual = current.locator.segment
+      const sameIdentity =
+        actual.key === expected.key &&
+        actual.occurrence === expected.occurrence &&
+        actual.ordinal === expected.ordinal
+      const offsetStable = Math.abs(actual.offset - expected.offset) <= 0.08
+      const percentStable = Math.abs(current.percent - anchor.percent) <= 0.03
+      if (!sameIdentity || !offsetStable || !percentStable) {
+        throw new Error('The target Reader view did not preserve the canonical location.')
+      }
+    } else if (anchor) {
+      throw new Error('The target Reader view could not capture the restored location.')
+    }
+
+    if (!operationIsCurrent()) return
     if (current) {
       percent.value = current.percent
       activeOrdinal.value = current.locator.segment.ordinal
@@ -354,18 +439,24 @@ async function applyPreferences(candidate: ReaderPreferencesV2) {
 
 function updatePreferences(candidate: ReaderPreferencesV2) {
   if (!readerInitialized.value) return
-  void applyPreferences(candidate)
+  const validated = validateReaderPreferencesV2(candidate)
+  if (!validated) return
+  settingsPreferences.value = validated
+  void applyPreferences(validated)
 }
 
 function changeMode(mode: ReaderMode) {
   if (!readerInitialized.value) return
-  if (preferences.value.mode === mode) return
-  void applyPreferences({ ...preferences.value, mode })
+  if (settingsPreferences.value.mode === mode) return
+  const candidate = { ...settingsPreferences.value, mode }
+  settingsPreferences.value = candidate
+  void applyPreferences(candidate)
 }
 
 function resetPreferences() {
   if (!readerInitialized.value) return
   const defaults = resetStoredPreferences()
+  settingsPreferences.value = defaults
   void applyPreferences(defaults)
 }
 
@@ -390,7 +481,7 @@ async function selectChapter(selected: ReaderChapter) {
     preferenceGeneration += 1
     const releaseCaptureSuppression = suppressProgressCapture()
     try {
-      const position = await readerView.value?.moveToOrdinal(
+      const position = await currentReaderView()?.moveToOrdinal(
         selected.ordinal,
         0,
         { allowMotion: true },
@@ -494,7 +585,7 @@ watch(
     if (open || !wasOpen || !resumeFocusPending) return
     resumeFocusPending = false
     await nextTick()
-    readerView.value?.focusContent()
+    currentReaderView()?.focusContent()
   },
 )
 
@@ -582,7 +673,7 @@ onBeforeUnmount(() => {
       >
         <ReaderScrollView
           v-if="preferences.mode === 'scroll'"
-          ref="readerView"
+          ref="scrollReaderView"
           :title="story.story.value.title"
           :author="story.story.value.author"
           :language="story.story.value.language"
@@ -598,7 +689,7 @@ onBeforeUnmount(() => {
         />
         <ReaderPagedView
           v-else
-          ref="readerView"
+          ref="pagedReaderView"
           :title="story.story.value.title"
           :author="story.story.value.author"
           :language="story.story.value.language"
@@ -617,7 +708,7 @@ onBeforeUnmount(() => {
 
       <ReaderSettingsDialog
         v-model:open="settingsOpen"
-        :model-value="preferences"
+        :model-value="settingsPreferences"
         @update:model-value="updatePreferences"
         @mode-change="changeMode"
         @reset="resetPreferences"

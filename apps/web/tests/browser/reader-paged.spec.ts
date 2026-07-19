@@ -36,6 +36,13 @@ async function chooseMode(page: Page, mode: 'Scroll' | 'Paged') {
   await dialog.getByRole('radio', { name: mode }).check()
   await dialog.getByRole('button', { name: 'Close' }).click()
   await expect(dialog).toBeHidden()
+  await expect(
+    page.locator('[data-reader-preference-pending]'),
+  ).toHaveAttribute('data-reader-preference-pending', 'false')
+  const targetMode = mode === 'Scroll' ? 'scroll' : 'paged'
+  await expect(
+    page.locator(`[data-reader-view-mode="${targetMode}"]`),
+  ).toBeVisible()
 }
 
 async function scrollWebKitPagedViewportTo(
@@ -795,8 +802,19 @@ test.describe('Reader paged reading', () => {
       await expect(page.locator(
         '[data-reader-scroll-segment][data-reader-segment-ordinal="4"]',
       )).toBeVisible()
+      const canonicalScrollAnchor = await page.locator('[data-reader-scroll-view]').evaluate((view) => {
+        const headerBottom = document.querySelector<HTMLElement>('[data-reader-header]')?.getBoundingClientRect().bottom ?? 0
+        const readingLine = headerBottom + (window.innerHeight - headerBottom) * 0.35
+        const segment = [...view.querySelectorAll<HTMLElement>('[data-reader-scroll-segment]')].find((candidate) => {
+          const rect = candidate.getBoundingClientRect()
+          return rect.top <= readingLine && rect.bottom >= readingLine
+        })
+        if (!segment) throw new Error('No canonical scroll anchor')
+        const rect = segment.getBoundingClientRect()
+        return { ordinal: Number(segment.dataset.readerSegmentOrdinal), offset: (readingLine - rect.top) / Math.max(1, rect.height) }
+      })
       await chooseMode(page, 'Paged')
-      await expectCurrentPageContainsOrdinal(page, 4)
+      await expectCurrentPageContainsOrdinal(page, canonicalScrollAnchor.ordinal)
       await expectNoProgressPut(page, api, READER_SLUG)
     },
   )
@@ -928,20 +946,22 @@ test.describe('Reader paged reading', () => {
       .toBeLessThanOrEqual(1)
     const oversizedRequest = await oversizedPut.started
     expectLocatorV2Request(oversizedRequest, { ordinal: 2 })
-    expect(oversizedRequest.body).toEqual(
-      expect.objectContaining({
-        locator: expect.objectContaining({
-          segment: expect.objectContaining({ ordinal: 2, offset: 0 }),
-        }),
-      }),
-    )
+    const expectedCanonicalOffset = await oversized.evaluate((element) => {
+      const segment = element.querySelector<HTMLElement>('[data-reader-segment-ordinal="2"]')
+      if (!segment) throw new Error('Missing oversized segment')
+      const pageRect = element.getBoundingClientRect()
+      const segmentRect = segment.getBoundingClientRect()
+      const segmentTop = segmentRect.top - pageRect.top + element.scrollTop
+      return (element.scrollTop + element.clientHeight * 0.35 - segmentTop) / Math.max(1, segmentRect.height)
+    })
+    const oversizedBody = oversizedRequest.body as { locator: { segment: { offset: number } }; percent: number }
+    expect(oversizedBody.locator.segment.offset).toBeCloseTo(expectedCanonicalOffset, 2)
+    expect(oversizedBody.percent).toBeGreaterThan(0)
     oversizedPut.fulfill({ ok: true })
     await expect(page.locator('.reader-save-status')).toContainText('Saved')
     await expectNoProgressPut(page, api, READER_SLUG)
     expect(api.progressPuts()).toHaveLength(2)
-    expect(api.progress.get(READER_SLUG)?.locator.segment).toEqual(
-      expect.objectContaining({ ordinal: 2, offset: 0 }),
-    )
+    expect(api.progress.get(READER_SLUG)?.locator.segment.offset).toBeCloseTo(expectedCanonicalOffset, 2)
   })
 
   test('rapid Paged to Scroll to Paged toggles retain one anchor and no stale listener', async ({
