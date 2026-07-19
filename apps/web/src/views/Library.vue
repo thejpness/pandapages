@@ -45,6 +45,7 @@ const locking = ref(false)
 const lockError = ref('')
 const selectedStory = ref<LibraryStory | null>(null)
 const detailsOpen = ref(false)
+const stickyHeaderOffset = ref(0)
 
 const q = ref('')
 const sort = ref<LibrarySort>('title')
@@ -52,6 +53,9 @@ let sortWasChosen = false
 let queryTimer: number | null = null
 let queryGeneration = 0
 let loadGeneration = 0
+let querySyncNavigationOwners = 0
+let componentActive = false
+let removeNavigationSettledHook: (() => void) | null = null
 
 watch(
   () => route.query.q,
@@ -72,8 +76,51 @@ function cancelQuerySync() {
   queryTimer = null
 }
 
+function querySyncIsOwned() {
+  return querySyncNavigationOwners > 0 || locking.value || sessionLeaving.value
+}
+
+function acquireQuerySyncNavigation() {
+  querySyncNavigationOwners += 1
+  cancelQuerySync()
+}
+
+function resynchroniseQueryWhenAvailable() {
+  if (
+    !componentActive ||
+    querySyncIsOwned() ||
+    route.path !== '/library'
+  ) {
+    return
+  }
+  void nextTick(() => {
+    if (
+      componentActive &&
+      !querySyncIsOwned() &&
+      route.path === '/library'
+    ) {
+      scheduleQuerySync(q.value)
+    }
+  })
+}
+
+function releaseQuerySyncNavigation() {
+  if (querySyncNavigationOwners === 0) return
+  querySyncNavigationOwners -= 1
+  resynchroniseQueryWhenAvailable()
+}
+
+function handleHistoryNavigation() {
+  acquireQuerySyncNavigation()
+}
+
 function scheduleQuerySync(value: string) {
-  if (sessionLeaving.value || route.path !== '/library') return
+  if (
+    querySyncIsOwned() ||
+    route.path !== '/library'
+  ) {
+    return
+  }
   cancelQuerySync()
   const generation = queryGeneration
   queryTimer = window.setTimeout(() => {
@@ -124,14 +171,24 @@ function setSort(value: LibrarySort) {
   writeLibrarySortPreference(valid)
 }
 
+function setStickyHeaderOffset(value: number) {
+  stickyHeaderOffset.value = Number.isFinite(value)
+    ? Math.max(0, Math.ceil(value))
+    : 0
+}
+
+const libraryPageStyle = computed(() => ({
+  '--library-sticky-offset': `${stickyHeaderOffset.value}px`,
+}))
+
 function clearSearch() {
   cancelQuerySync()
   q.value = ''
+  if (querySyncIsOwned()) return
   void router.replace({ path: '/library', query: {} })
 }
 
 function goStory(story: LibraryStory) {
-  cancelQuerySync()
   void router.push(`/read/${encodeURIComponent(story.slug)}`)
 }
 
@@ -187,9 +244,10 @@ async function moveToUnlockAfterConfirmedSignOut() {
 
 async function lockLibrary() {
   if (locking.value) return
-  cancelQuerySync()
   locking.value = true
+  cancelQuerySync()
   lockError.value = ''
+  let restoreQuerySync = false
 
   try {
     const result = await runLockTransition({
@@ -204,9 +262,10 @@ async function lockLibrary() {
     }
   } catch {
     lockError.value = 'Could not lock Panda Pages. Your library is still open. Try again.'
-    scheduleQuerySync(q.value)
+    restoreQuerySync = true
   } finally {
     locking.value = false
+    if (restoreQuerySync) resynchroniseQueryWhenAvailable()
   }
 }
 
@@ -238,6 +297,17 @@ async function loadLibrary() {
 }
 
 onMounted(() => {
+  componentActive = true
+  window.addEventListener('popstate', handleHistoryNavigation)
+  removeNavigationSettledHook = router.afterEach(() => {
+    if (
+      querySyncNavigationOwners > 0 &&
+      router.currentRoute.value.path === '/library' &&
+      !sessionLeaving.value
+    ) {
+      releaseQuerySyncNavigation()
+    }
+  })
   const savedSort = readLibrarySortPreference()
   if (savedSort !== null) {
     sort.value = savedSort
@@ -247,22 +317,25 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  componentActive = false
   loadGeneration += 1
   cancelQuerySync()
+  window.removeEventListener('popstate', handleHistoryNavigation)
+  removeNavigationSettledHook?.()
+  removeNavigationSettledHook = null
 })
 
 onBeforeRouteLeave(() => {
-  cancelQuerySync()
+  acquireQuerySyncNavigation()
 })
 
 function navigateFromLibrary(path: string) {
-  cancelQuerySync()
   void router.push(path)
 }
 </script>
 
 <template>
-  <div class="library-page">
+  <div class="library-page" :style="libraryPageStyle">
     <a class="library-skip-link" href="#library-main">Skip to the bookshelf</a>
 
     <LibraryAppHeader
@@ -279,6 +352,7 @@ function navigateFromLibrary(path: string) {
       @journey="navigateFromLibrary('/journey')"
       @admin="navigateFromLibrary('/admin/upload')"
       @lock="lockLibrary"
+      @sticky-offset="setStickyHeaderOffset"
     />
 
     <main id="library-main" class="library-main" tabindex="-1">
@@ -412,6 +486,9 @@ function navigateFromLibrary(path: string) {
   width: min(80rem, 100%);
   min-width: 0;
   margin-inline: auto;
+  scroll-margin-top: calc(
+    max(var(--library-sticky-offset, 0px), env(safe-area-inset-top)) + 0.75rem
+  );
   padding: clamp(1.3rem, 4vw, 3.2rem) max(1rem, env(safe-area-inset-right)) max(3rem, calc(2rem + env(safe-area-inset-bottom))) max(1rem, env(safe-area-inset-left));
 }
 

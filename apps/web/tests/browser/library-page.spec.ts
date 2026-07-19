@@ -613,8 +613,9 @@ test.describe('Library 2 bookshelf', () => {
     await expect(page.locator('.bookshelf-card')).toHaveCount(READY_STORIES.length)
   })
 
-  test('a newer same-route history query cancels pending search ownership', async ({
+  test('delayed same-route Back and Forward cancel pending search ownership before auth resolves', async ({
     page,
+    api,
   }) => {
     await page.clock.install()
     await page.goto('/library?q=Mara')
@@ -644,15 +645,79 @@ test.describe('Library 2 bookshelf', () => {
     await expectQuery(page, 'Moonlit')
     await expect(search).toHaveValue('Moonlit')
 
+    await page.clock.fastForward(6_000)
+    const auth = api.deferAuthStatus()
     await search.fill('stale search')
-    await page.goBack()
-    await expectQuery(page, 'Mara')
-    await expect(search).toHaveValue('Mara')
-
+    const historyNavigation = page.goBack()
+    await auth.started
     await page.clock.fastForward(220)
+    auth.fulfill()
+    await historyNavigation
+
     await expectQuery(page, 'Mara')
     await expect(search).toHaveValue('Mara')
     await expect(storyCard(page, CURRENT_STORY.title)).toBeVisible()
+
+    await page.clock.fastForward(6_000)
+    const forwardAuth = api.deferAuthStatus()
+    await search.fill('stale forward search')
+    const forwardNavigation = page.goForward()
+    await forwardAuth.started
+    await page.clock.fastForward(220)
+    forwardAuth.fulfill()
+    await forwardNavigation
+
+    await expectQuery(page, 'Moonlit')
+    await expect(search).toHaveValue('Moonlit')
+    await expect(storyCard(page, CURRENT_STORY.title)).toBeVisible()
+
+    await search.fill('history ownership released')
+    await page.clock.fastForward(220)
+    await expectQuery(page, 'history ownership released')
+  })
+
+  test('articles have deterministic unique names when story titles are identical', async ({
+    page,
+    api,
+  }) => {
+    const sharedTitle = 'The Same-Looking Story'
+    api.items = [
+      {
+        ...CURRENT_STORY,
+        slug: 'same-looking-one',
+        title: sharedTitle,
+        progress: null,
+      },
+      {
+        ...LONG_UNAUTHORED_STORY,
+        slug: 'same-looking-two',
+        title: sharedTitle,
+      },
+    ]
+    await page.goto('/library')
+
+    const articles = page.getByRole('article', {
+      name: sharedTitle,
+      exact: true,
+    })
+    await expect(articles).toHaveCount(2)
+    expect(
+      await articles.evaluateAll((nodes) =>
+        nodes.map((node) => ({
+          labelledBy: node.getAttribute('aria-labelledby'),
+          titleId: node.querySelector('h3')?.id,
+        })),
+      ),
+    ).toEqual([
+      {
+        labelledBy: 'bookshelf-card-title-same-looking-one',
+        titleId: 'bookshelf-card-title-same-looking-one',
+      },
+      {
+        labelledBy: 'bookshelf-card-title-same-looking-two',
+        titleId: 'bookshelf-card-title-same-looking-two',
+      },
+    ])
   })
 
   test('a pending search query cannot supersede delayed protected navigation', async ({
@@ -663,16 +728,18 @@ test.describe('Library 2 bookshelf', () => {
     await gotoReadyLibrary(page)
     await page.clock.fastForward(6_000)
     const auth = api.deferAuthStatus()
+    const search = page.getByRole('searchbox', {
+      name: 'Search the library',
+    })
 
-    await page
-      .getByRole('searchbox', { name: 'Search the library' })
-      .fill('Moon')
+    await search.fill('Moon')
     await storyCard(page, CURRENT_STORY.title)
       .getByRole('link', {
         name: `Continue at 42%: ${CURRENT_STORY.title}`,
       })
       .click()
     await auth.started
+    await search.fill('typed after Reader navigation started')
 
     await page.clock.fastForward(220)
     await expectPath(page, '/library')
@@ -698,6 +765,9 @@ test.describe('Library 2 bookshelf', () => {
     })
     await page.locator('.surprise-button').click()
     await auth.started
+    await page
+      .getByRole('searchbox', { name: 'Search the library' })
+      .fill('typed after Surprise navigation started')
     await page.clock.fastForward(220)
     await expectPath(page, '/library')
     expect(new URL(page.url()).searchParams.get('q')).toBeNull()
@@ -727,6 +797,9 @@ test.describe('Library 2 bookshelf', () => {
       await action.focus()
       await action.press('Enter')
       await auth.started
+      await page
+        .getByRole('searchbox', { name: 'Search the library' })
+        .fill(`typed after ${destination.action} navigation started`)
       await page.clock.fastForward(220)
       await expectPath(page, '/library')
       expect(new URL(page.url()).searchParams.get('q')).toBeNull()
@@ -746,6 +819,38 @@ test.describe('Library 2 bookshelf', () => {
     await page.getByRole('link', { name: 'Panda Pages home' }).click()
     await page.clock.fastForward(220)
     await expectPath(page, '/')
+  })
+
+  test('modified Home activation opens separately without claiming Library query ownership', async ({
+    page,
+  }) => {
+    await page.clock.install()
+    await gotoReadyLibrary(page)
+    const search = page.getByRole('searchbox', {
+      name: 'Search the library',
+    })
+    await search.fill('Moonlit')
+    const applicationOrigin = new URL(page.url()).origin
+
+    const openedPage = page.context().waitForEvent('page')
+    await page
+      .getByRole('link', { name: 'Panda Pages home' })
+      .click({ modifiers: ['Control'] })
+    const homePage = await openedPage
+    await homePage.waitForURL(
+      (url) => url.origin === applicationOrigin && url.pathname === '/',
+    )
+
+    await expectPath(page, '/library')
+    await page.clock.fastForward(220)
+    await expectQuery(page, 'Moonlit')
+    await expect(
+      homePage.getByRole('heading', {
+        level: 1,
+        name: 'Stories that never grow old.',
+      }),
+    ).toBeVisible()
+    await homePage.close()
   })
 
   test('supports all four sort modes and validates the stored preference', async ({
@@ -1193,6 +1298,9 @@ test.describe('Library 2 bookshelf', () => {
       .fill('Moon')
     await page.getByRole('button', { name: 'Lock Panda Pages' }).click()
     await logout.started
+    await page
+      .getByRole('searchbox', { name: 'Search the library' })
+      .fill('Moonlit')
 
     await page.clock.fastForward(220)
     await expectPath(page, '/library')
@@ -1212,12 +1320,22 @@ test.describe('Library 2 bookshelf', () => {
     page,
     api,
   }) => {
-    api.enqueueLogout({
-      status: 503,
-      body: { error: { code: 'unavailable', message: 'Try later' } },
-    })
+    await page.clock.install()
+    const logout = api.deferLogout()
     await gotoReadyLibrary(page)
+    const search = page.getByRole('searchbox', {
+      name: 'Search the library',
+    })
+    await search.fill('before failed Lock')
     await page.getByRole('button', { name: 'Lock Panda Pages' }).click()
+    await logout.started
+    await search.fill('Moonlit')
+    await page.clock.fastForward(220)
+    await expectQuery(page, null)
+    logout.fulfill(
+      { error: { code: 'unavailable', message: 'Try later' } },
+      503,
+    )
 
     const alert = page.getByRole('alert')
     await expect(alert).toContainText('Could not lock Panda Pages')
@@ -1225,6 +1343,9 @@ test.describe('Library 2 bookshelf', () => {
     await expectPath(page, '/library')
     await expect(page.getByText(CURRENT_STORY.title).first()).toBeVisible()
     await expect(page.getByRole('button', { name: 'Lock Panda Pages' })).toBeEnabled()
+    await page.clock.fastForward(220)
+    await expectQuery(page, 'Moonlit')
+    await expect(search).toHaveValue('Moonlit')
   })
 
   test('has no page overflow across required phone, landscape, tablet, desktop, and 200%-equivalent viewports', async ({
@@ -1304,6 +1425,69 @@ test.describe('Library 2 bookshelf', () => {
     }
   })
 
+  test('the focused skip target stays below the measured sticky mobile header', async ({
+    page,
+    api,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 })
+    api.items = Array.from({ length: 10 }, (_, index) => ({
+      ...LONG_UNAUTHORED_STORY,
+      slug: `scroll-story-${index + 1}`,
+      title: `Scroll Story ${index + 1}`,
+    }))
+    await page.goto('/library')
+    const header = page.locator('.library-header')
+    const main = page.locator('#library-main')
+    const heading = page.getByRole('heading', {
+      name: 'Choose tonight’s story',
+    })
+    await expect(heading).toBeVisible()
+    await expect(page.locator('.bookshelf-card')).toHaveCount(10)
+    await expect(header).not.toHaveClass(/library-header--static/)
+
+    await page.evaluate(
+      () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+    )
+    const initialHeader = await header.boundingBox()
+    expect(initialHeader).not.toBeNull()
+    expect(
+      await main.evaluate((element) =>
+        Number.parseFloat(getComputedStyle(element).scrollMarginTop),
+      ),
+    ).toBeGreaterThan(initialHeader!.height)
+
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
+    await expect
+      .poll(() => page.evaluate(() => window.scrollY))
+      .toBeGreaterThan(initialHeader!.height)
+    const skip = page.getByRole('link', { name: 'Skip to the bookshelf' })
+    await skip.focus()
+    await expect(skip).toBeFocused()
+    await skip.press('Enter')
+    await expect(main).toBeFocused()
+
+    await expect
+      .poll(async () => {
+        const headerBox = await header.boundingBox()
+        const headingBox = await heading.boundingBox()
+        if (headerBox === null || headingBox === null) return false
+        return headingBox.y >= headerBox.y + headerBox.height
+      })
+      .toBe(true)
+
+    const headingBox = await heading.boundingBox()
+    expect(headingBox).not.toBeNull()
+    expect(
+      await page.evaluate(({ x, y }) => {
+        const target = document.elementFromPoint(x, y)
+        return target?.closest('#bookshelf-heading')?.id ?? null
+      }, {
+        x: headingBox!.x + Math.min(8, headingBox!.width / 2),
+        y: headingBox!.y + Math.min(8, headingBox!.height / 2),
+      }),
+    ).toBe('bookshelf-heading')
+  })
+
   test('long titles, missing authors, large text, and safe-area-aware layout remain contained', async ({
     page,
   }) => {
@@ -1321,6 +1505,13 @@ test.describe('Library 2 bookshelf', () => {
     expect(await header.evaluate((element) => getComputedStyle(element).position)).not.toBe(
       'sticky',
     )
+    expect(
+      await page.locator('#library-main').evaluate((element) =>
+        Number.parseFloat(
+          getComputedStyle(element).getPropertyValue('--library-sticky-offset'),
+        ),
+      ),
+    ).toBe(0)
     await expect(brand).toBeVisible()
     await expect(parent).toBeVisible()
     await expect(lock).toBeVisible()
