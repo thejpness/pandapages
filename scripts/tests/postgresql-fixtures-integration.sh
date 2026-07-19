@@ -23,10 +23,17 @@ readonly network="$resource_prefix-network"
 readonly volume="$resource_prefix-data"
 readonly run_label="com.pandapages.fixture-run=$resource_prefix"
 controlled_goose_failure_status=${PP_FIXTURE_TEST_CONTROLLED_GOOSE_FAILURE_STATUS:-}
+controlled_diagnostic_secret=${PP_FIXTURE_TEST_CONTROLLED_DIAGNOSTIC_SECRET:-}
 
 if [[ -n "$controlled_goose_failure_status" ]] &&
   [[ ! "$controlled_goose_failure_status" =~ ^([1-9]|[1-9][0-9]|1[01][0-9]|12[0-5])$ ]]; then
   printf 'Controlled Goose failure status must be between 1 and 125\n' >&2
+  exit 1
+fi
+
+if [[ -n "$controlled_diagnostic_secret" ]] &&
+  [[ ! "$controlled_diagnostic_secret" =~ ^[a-zA-Z0-9._-]{16,120}$ ]]; then
+  printf 'Controlled diagnostic secret must contain 16-120 safe characters\n' >&2
   exit 1
 fi
 
@@ -66,58 +73,233 @@ goose_container=''
 goose_run_count=0
 failure_line=''
 failure_signal=''
+controlled_pid=''
+controlled_child_status=''
+controlled_prefix=''
+controlled_label=''
+controlled_root=''
+controlled_stdout=''
+controlled_stderr=''
+
+redact_diagnostics() {
+  local escaped_controlled_secret
+
+  if [[ -n "$controlled_diagnostic_secret" ]]; then
+    escaped_controlled_secret=${controlled_diagnostic_secret//./\\.}
+    sed -E \
+      -e "s/$escaped_controlled_secret/[redacted-controlled-secret]/g" \
+      -e "s/$database_password/[redacted]/g" \
+      -e 's#postgres://[^[:space:]]+#[redacted-database-url]#g'
+  else
+    sed -E \
+      -e "s/$database_password/[redacted]/g" \
+      -e 's#postgres://[^[:space:]]+#[redacted-database-url]#g'
+  fi
+}
+
+docker_query() {
+  local description=$1
+  local output
+  local status
+  shift
+
+  if output=$(docker "$@" 2>&1); then
+    [[ -z "$output" ]] || printf '%s\n' "$output"
+    return 0
+  else
+    status=$?
+  fi
+
+  printf 'Docker command failed while %s (status %d)\n' "$description" "$status" >&2
+  if [[ -n "$output" ]]; then
+    printf '%s\n' "$output" | redact_diagnostics >&2
+  fi
+  return "$status"
+}
+
+list_labeled_resource_ids() {
+  local kind=$1
+  local label=$2
+
+  case "$kind" in
+    container)
+      docker_query 'listing disposable fixture containers' \
+        ps -aq --filter "label=$label"
+      ;;
+    network)
+      docker_query 'listing disposable fixture networks' \
+        network ls -q --filter "label=$label"
+      ;;
+    volume)
+      docker_query 'listing disposable fixture volumes' \
+        volume ls -q --filter "label=$label"
+      ;;
+    *)
+      printf 'Unknown disposable fixture resource kind\n' >&2
+      return 2
+      ;;
+  esac
+}
+
+inspect_container_name() {
+  local container_id=$1
+  docker_query 'inspecting a disposable fixture container' \
+    container inspect --format '{{.Name}}' "$container_id"
+}
+
+verify_no_labeled_resources() {
+  local label=$1
+  local scope=$2
+  local kind
+  local resource_ids
+  local verification_failed=0
+
+  for kind in container network volume; do
+    if resource_ids=$(list_labeled_resource_ids "$kind" "$label"); then
+      if [[ -n "$resource_ids" ]]; then
+        printf 'Disposable %s %s resources remain after cleanup\n' "$scope" "$kind" >&2
+        verification_failed=1
+      fi
+    else
+      verification_failed=1
+    fi
+  done
+
+  return "$verification_failed"
+}
+
+remove_labeled_resource_kind() {
+  local kind=$1
+  local label=$2
+  local resource_id
+  local resource_ids
+  local remaining_ids
+  local removal_failed=0
+
+  if ! resource_ids=$(list_labeled_resource_ids "$kind" "$label"); then
+    return 1
+  fi
+
+  while IFS= read -r resource_id; do
+    [[ -n "$resource_id" ]] || continue
+    case "$kind" in
+      container)
+        if ! docker_query 'removing a disposable fixture container' \
+          rm --force "$resource_id" >/dev/null; then
+          removal_failed=1
+        fi
+        ;;
+      network)
+        if ! docker_query 'removing a disposable fixture network' \
+          network rm "$resource_id" >/dev/null; then
+          removal_failed=1
+        fi
+        ;;
+      volume)
+        if ! docker_query 'removing a disposable fixture volume' \
+          volume rm "$resource_id" >/dev/null; then
+          removal_failed=1
+        fi
+        ;;
+    esac
+  done <<<"$resource_ids"
+
+  if remaining_ids=$(list_labeled_resource_ids "$kind" "$label"); then
+    if [[ -n "$remaining_ids" ]]; then
+      printf 'Disposable fixture %s removal was incomplete\n' "$kind" >&2
+      removal_failed=1
+    fi
+  else
+    removal_failed=1
+  fi
+
+  return "$removal_failed"
+}
+
+cleanup_labeled_resources() {
+  local label=$1
+  local kind
+  local cleanup_failed=0
+
+  for kind in container network volume; do
+    if ! remove_labeled_resource_kind "$kind" "$label"; then
+      cleanup_failed=1
+    fi
+  done
+
+  return "$cleanup_failed"
+}
+
+terminate_controlled_child() {
+  local child_pid
+  local child_status
+  local watchdog_pid=''
+
+  [[ -n "$controlled_pid" ]] || return 0
+  child_pid=$controlled_pid
+  controlled_pid=''
+
+  if kill -0 "$child_pid" 2>/dev/null; then
+    kill -TERM "$child_pid" 2>/dev/null || true
+    (
+      sleep 10
+      kill -KILL "$child_pid" 2>/dev/null || true
+    ) &
+    watchdog_pid=$!
+  fi
+
+  if wait "$child_pid" 2>/dev/null; then
+    child_status=0
+  else
+    child_status=$?
+  fi
+  controlled_child_status=$child_status
+  if [[ -n "$watchdog_pid" ]]; then
+    kill "$watchdog_pid" 2>/dev/null || true
+    wait "$watchdog_pid" 2>/dev/null || true
+  fi
+
+  if kill -0 "$child_pid" 2>/dev/null; then
+    printf 'Failed to terminate and reap the controlled fixture child\n' >&2
+    return 1
+  fi
+}
 
 cleanup() {
   local cleanup_failed=0
 
-  if [[ -n "$goose_container" ]]; then
-    if docker container inspect "$goose_container" >/dev/null 2>&1; then
-      if ! docker rm --force "$goose_container" >/dev/null 2>&1; then
-        printf 'Failed to remove disposable fixture migration container\n' >&2
-        cleanup_failed=1
-      fi
-    fi
-    goose_container=''
+  if ! terminate_controlled_child; then
+    cleanup_failed=1
   fi
-  if docker container inspect "$api_container" >/dev/null 2>&1; then
-    if ! docker rm --force "$api_container" >/dev/null 2>&1; then
-      printf 'Failed to remove disposable fixture API container\n' >&2
-      cleanup_failed=1
-    fi
+  if [[ -n "$controlled_label" ]] &&
+    ! cleanup_labeled_resources "$controlled_label"; then
+    cleanup_failed=1
   fi
-  if docker container inspect "$postgres_container" >/dev/null 2>&1; then
-    if ! docker rm --force "$postgres_container" >/dev/null 2>&1; then
-      printf 'Failed to remove disposable fixture PostgreSQL container\n' >&2
-      cleanup_failed=1
-    fi
+  if ! cleanup_labeled_resources "$run_label"; then
+    cleanup_failed=1
   fi
-  if docker network inspect "$network" >/dev/null 2>&1; then
-    if ! docker network rm "$network" >/dev/null 2>&1; then
-      printf 'Failed to remove disposable fixture network\n' >&2
-      cleanup_failed=1
-    fi
+  goose_container=''
+
+  if [[ -n "$controlled_root" && "$controlled_root" == "$test_root/"* && -e "$controlled_root" ]] &&
+    ! rm -rf -- "$controlled_root"; then
+    printf 'Failed to remove controlled fixture child artifacts\n' >&2
+    cleanup_failed=1
   fi
-  if docker volume inspect "$volume" >/dev/null 2>&1; then
-    if ! docker volume rm "$volume" >/dev/null 2>&1; then
-      printf 'Failed to remove disposable fixture volume\n' >&2
-      cleanup_failed=1
-    fi
-  fi
-  if [[ -e "$test_root" ]] && ! rm -rf -- "$test_root"; then
+  if [[ -n "$test_root" && -e "$test_root" ]] && ! rm -rf -- "$test_root"; then
     printf 'Failed to remove disposable fixture test artifacts\n' >&2
     cleanup_failed=1
   fi
-  return "$cleanup_failed"
-}
 
-redact_diagnostics() {
-  sed -E \
-    -e "s/$database_password/[redacted]/g" \
-    -e 's#postgres://[^[:space:]]+#[redacted-database-url]#g'
+  return "$cleanup_failed"
 }
 
 print_failure_diagnostics() {
   local status=$1
+  local container_id
+  local container_ids
+  local container_logs
+  local container_name
+  local diagnostics_failed=0
   local log_file
 
   if [[ -n "$failure_signal" ]]; then
@@ -131,21 +313,57 @@ print_failure_diagnostics() {
   for log_file in "$test_root"/*-goose.err "$test_root"/*-goose.out; do
     [[ -s "$log_file" ]] || continue
     printf '%s\n' "--- ${log_file##*/} (last 80 lines, redacted) ---" >&2
-    tail -n 80 "$log_file" | redact_diagnostics >&2
+    if ! tail -n 80 "$log_file" | redact_diagnostics >&2; then
+      diagnostics_failed=1
+    fi
   done
 
-  if docker container inspect "$api_container" >/dev/null 2>&1; then
-    printf '%s\n' '--- fixture API logs (last 80 lines, redacted) ---' >&2
-    docker logs --tail 80 "$api_container" 2>&1 | redact_diagnostics >&2 || true
+  if container_ids=$(list_labeled_resource_ids container "$run_label"); then
+    while IFS= read -r container_id; do
+      [[ -n "$container_id" ]] || continue
+      if ! container_name=$(inspect_container_name "$container_id"); then
+        diagnostics_failed=1
+        continue
+      fi
+      container_name=${container_name#/}
+      case "$container_name" in
+        "$api_container")
+          printf '%s\n' '--- fixture API logs (last 80 lines, redacted) ---' >&2
+          ;;
+        "$postgres_container")
+          printf '%s\n' '--- fixture PostgreSQL logs (last 80 lines, redacted) ---' >&2
+          ;;
+        *)
+          continue
+          ;;
+      esac
+      if container_logs=$(docker_query 'reading disposable fixture container logs' \
+        logs --tail 80 "$container_id"); then
+        printf '%s\n' "$container_logs" | redact_diagnostics >&2
+      else
+        diagnostics_failed=1
+      fi
+    done <<<"$container_ids"
+  else
+    diagnostics_failed=1
   fi
-  if docker container inspect "$postgres_container" >/dev/null 2>&1; then
-    printf '%s\n' '--- fixture PostgreSQL logs (last 80 lines, redacted) ---' >&2
-    docker logs --tail 80 "$postgres_container" 2>&1 | redact_diagnostics >&2 || true
-  fi
+
+  return "$diagnostics_failed"
 }
 
 record_failure() {
   failure_line=$1
+}
+
+combined_exit_status() {
+  local original_status=$1
+  local cleanup_status=$2
+
+  if ((original_status != 0)); then
+    printf '%d\n' "$original_status"
+  else
+    printf '%d\n' "$cleanup_status"
+  fi
 }
 
 on_exit() {
@@ -161,10 +379,8 @@ on_exit() {
   cleanup || cleanup_status=$?
   if ((cleanup_status != 0)); then
     printf 'Fixture integration cleanup was incomplete\n' >&2
-    if ((status == 0)); then
-      status=$cleanup_status
-    fi
   fi
+  status=$(combined_exit_status "$status" "$cleanup_status")
   exit "$status"
 }
 
@@ -247,6 +463,12 @@ run_goose() {
   local status
 
   if [[ -n "$controlled_goose_failure_status" ]]; then
+    if [[ -n "$controlled_diagnostic_secret" ]]; then
+      printf 'Controlled fixture diagnostic marker: disposable synthetic input\n' >&2
+      printf 'Synthetic fixture secret: %s\n' "$controlled_diagnostic_secret" >&2
+      printf 'Synthetic fixture database URL: postgres://fixture:%s@fixture.invalid:5432/disposable?sslmode=disable\n' \
+        "$controlled_diagnostic_secret" >&2
+    fi
     printf 'Controlled fixture migration failure for harness regression (status %s)\n' \
       "$controlled_goose_failure_status" >&2
     return "$controlled_goose_failure_status"
@@ -950,16 +1172,18 @@ env \
   "$seed_script" --remove >/dev/null
 printf 'ok 16 - fixture removal and recreation touch only fixed test IDs and preserve unrelated data\n'
 
-controlled_root="$test_root/controlled-failure"
-controlled_stdout="$controlled_root/stdout"
-controlled_stderr="$controlled_root/stderr"
 controlled_suffix="$$-controlled"
 controlled_prefix="pandapages-fixture-integration-$controlled_suffix"
 controlled_label="com.pandapages.fixture-run=$controlled_prefix"
+controlled_root="$test_root/controlled-failure"
+controlled_stdout="$controlled_root/stdout"
+controlled_stderr="$controlled_root/stderr"
+controlled_diagnostic_secret="fixture-secret-${resource_suffix}-${RANDOM}-${RANDOM}"
 mkdir -p "$controlled_root"
 
 PP_FIXTURE_TEST_RESOURCE_SUFFIX="$controlled_suffix" \
 PP_FIXTURE_TEST_CONTROLLED_GOOSE_FAILURE_STATUS=37 \
+PP_FIXTURE_TEST_CONTROLLED_DIAGNOSTIC_SECRET="$controlled_diagnostic_secret" \
 TMPDIR="$controlled_root" \
   "${BASH_SOURCE[0]}" >"$controlled_stdout" 2>"$controlled_stderr" &
 controlled_pid=$!
@@ -968,6 +1192,13 @@ if wait "$controlled_pid"; then
 else
   controlled_status=$?
 fi
+controlled_pid=''
+
+if ! cleanup_labeled_resources "$controlled_label"; then
+  printf 'Controlled fixture migration resource cleanup was incomplete\n' >&2
+  exit 1
+fi
+verify_no_labeled_resources "$controlled_label" 'controlled child'
 
 [[ "$controlled_status" == 37 ]] || {
   printf 'Controlled fixture migration failure status = %s, want 37\n' "$controlled_status" >&2
@@ -977,25 +1208,266 @@ grep -q '^1\.\.18$' "$controlled_stdout"
 grep -q 'Fixture integration failed at line .* (status 37)' "$controlled_stderr"
 grep -q 'fresh-goose.err .*redacted' "$controlled_stderr"
 grep -q 'Controlled fixture migration failure for harness regression (status 37)' "$controlled_stderr"
-if grep -Fq "$database_password" "$controlled_stdout" "$controlled_stderr" ||
+grep -Fq 'Controlled fixture diagnostic marker: disposable synthetic input' "$controlled_stderr"
+grep -Fq '[redacted-controlled-secret]' "$controlled_stderr"
+grep -Fq '[redacted-database-url]' "$controlled_stderr"
+if grep -Fq "$controlled_diagnostic_secret" "$controlled_stdout" "$controlled_stderr" ||
+  grep -Fq "$database_password" "$controlled_stdout" "$controlled_stderr" ||
   grep -Eq 'postgres://[^[:space:]]+' "$controlled_stdout" "$controlled_stderr"; then
   printf 'Controlled fixture diagnostics exposed credentials or a database URL\n' >&2
   exit 1
 fi
-[[ -z $(docker ps -aq --filter "label=$controlled_label") ]]
-[[ -z $(docker network ls -q --filter "label=$controlled_label") ]]
-[[ -z $(docker volume ls -q --filter "label=$controlled_label") ]]
 if compgen -G "$controlled_root/pandapages-fixture-integration.*" >/dev/null; then
   printf 'Controlled fixture migration left temporary artifacts behind\n' >&2
   exit 1
 fi
-printf 'ok 17 - controlled migration failure preserves status, emits redacted diagnostics, and leaves no resources or artifacts\n'
+
+fake_list_stderr="$controlled_root/fake-list.stderr"
+fake_inspect_stderr="$controlled_root/fake-inspect.stderr"
+fake_sensitive_stderr="$controlled_root/fake-sensitive.stderr"
+(
+  fake_docker_mode=''
+  docker() {
+    case "$fake_docker_mode" in
+      list-empty-failure)
+        return 71
+        ;;
+      inspect-empty-failure)
+        return 72
+        ;;
+      sensitive-failure)
+        printf 'synthetic daemon secret=%s url=postgres://fixture:%s@fixture.invalid:5432/disposable\n' \
+          "$controlled_diagnostic_secret" "$controlled_diagnostic_secret" >&2
+        return 73
+        ;;
+      success-empty)
+        return 0
+        ;;
+      *)
+        return 74
+        ;;
+    esac
+  }
+
+  fake_docker_mode=list-empty-failure
+  if list_labeled_resource_ids container "$controlled_label" \
+    >/dev/null 2>"$fake_list_stderr"; then
+    printf 'Empty-output Docker list failure was treated as resource absence\n' >&2
+    exit 1
+  else
+    fake_status=$?
+  fi
+  [[ "$fake_status" == 71 ]]
+  grep -Fq 'Docker command failed while listing disposable fixture containers (status 71)' \
+    "$fake_list_stderr"
+
+  fake_docker_mode=inspect-empty-failure
+  if inspect_container_name synthetic-container \
+    >/dev/null 2>"$fake_inspect_stderr"; then
+    printf 'Empty-output Docker inspect failure was treated as success\n' >&2
+    exit 1
+  else
+    fake_status=$?
+  fi
+  [[ "$fake_status" == 72 ]]
+  grep -Fq 'Docker command failed while inspecting a disposable fixture container (status 72)' \
+    "$fake_inspect_stderr"
+
+  fake_docker_mode=sensitive-failure
+  if list_labeled_resource_ids container "$controlled_label" \
+    >/dev/null 2>"$fake_sensitive_stderr"; then
+    printf 'Synthetic sensitive Docker failure unexpectedly succeeded\n' >&2
+    exit 1
+  else
+    fake_status=$?
+  fi
+  [[ "$fake_status" == 73 ]]
+  grep -Fq '[redacted-controlled-secret]' "$fake_sensitive_stderr"
+  grep -Fq '[redacted-database-url]' "$fake_sensitive_stderr"
+  if grep -Fq "$controlled_diagnostic_secret" "$fake_sensitive_stderr" ||
+    grep -Eq 'postgres://[^[:space:]]+' "$fake_sensitive_stderr"; then
+    printf 'Synthetic Docker failure diagnostics were not redacted\n' >&2
+    exit 1
+  fi
+
+  fake_docker_mode=success-empty
+  verify_no_labeled_resources "$controlled_label" 'fake controlled child'
+)
+
+fake_cleanup_root="$controlled_root/fake-cleanup-root"
+fake_cleanup_stderr="$controlled_root/fake-cleanup.stderr"
+if (
+  trap - EXIT ERR HUP INT TERM
+  test_root="$fake_cleanup_root"
+  controlled_root=''
+  controlled_label=''
+  controlled_pid=''
+  failure_line='synthetic'
+  failure_signal=''
+  docker() {
+    return 71
+  }
+  mkdir -p "$test_root"
+  trap on_exit EXIT
+  exit 37
+) >/dev/null 2>"$fake_cleanup_stderr"; then
+  fake_cleanup_status=0
+else
+  fake_cleanup_status=$?
+fi
+[[ "$fake_cleanup_status" == 37 ]]
+grep -Fq 'Docker command failed while listing disposable fixture containers (status 71)' \
+  "$fake_cleanup_stderr"
+grep -Fq 'Fixture integration diagnostics were incomplete' "$fake_cleanup_stderr"
+grep -Fq 'Fixture integration cleanup was incomplete' "$fake_cleanup_stderr"
+[[ ! -e "$fake_cleanup_root" ]]
+
+[[ $(combined_exit_status 37 71) == 37 ]]
+[[ $(combined_exit_status 41 71) == 41 ]]
+[[ $(combined_exit_status 137 71) == 137 ]]
+[[ $(combined_exit_status 143 71) == 143 ]]
+[[ $(combined_exit_status 0 71) == 71 ]]
+
+parent_term_root="$controlled_root/parent-term-root"
+parent_term_pid_file="$controlled_root/parent-term.pid"
+parent_term_stderr="$controlled_root/parent-term.stderr"
+if (
+  trap - EXIT ERR HUP INT TERM
+  test_root="$parent_term_root"
+  controlled_root="$test_root/recursive-child"
+  controlled_label='com.pandapages.fixture-run=synthetic-parent-term-child'
+  controlled_pid=''
+  failure_line=''
+  failure_signal=''
+  docker() {
+    return 0
+  }
+  mkdir -p "$controlled_root"
+  sleep 30 &
+  controlled_pid=$!
+  printf '%s\n' "$controlled_pid" >"$parent_term_pid_file"
+  trap on_exit EXIT
+  trap 'on_signal TERM 143' TERM
+  kill -TERM "$BASHPID"
+  sleep 1
+) >/dev/null 2>"$parent_term_stderr"; then
+  parent_term_status=0
+else
+  parent_term_status=$?
+fi
+[[ "$parent_term_status" == 143 ]]
+grep -Fq 'Fixture integration interrupted by TERM (status 143)' "$parent_term_stderr"
+IFS= read -r parent_term_child_pid <"$parent_term_pid_file"
+if kill -0 "$parent_term_child_pid" 2>/dev/null; then
+  printf 'Parent TERM regression left its controlled child running\n' >&2
+  exit 1
+fi
+[[ ! -e "$parent_term_root" ]]
+
+terminated_child_root="$controlled_root/terminated-child-root"
+terminated_child_pid_file="$controlled_root/terminated-child.pid"
+(
+  trap - EXIT ERR HUP INT TERM
+  test_root="$terminated_child_root"
+  controlled_root="$test_root/recursive-child"
+  controlled_label='com.pandapages.fixture-run=synthetic-terminated-child'
+  controlled_pid=''
+  controlled_child_status=''
+  docker() {
+    return 0
+  }
+  mkdir -p "$controlled_root"
+  sleep 30 &
+  controlled_pid=$!
+  printf '%s\n' "$controlled_pid" >"$terminated_child_pid_file"
+  terminate_controlled_child
+  [[ "$controlled_child_status" == 143 ]] || {
+    printf 'Terminated-child status = %s, want 143\n' "$controlled_child_status" >&2
+    exit 1
+  }
+  cleanup
+  cleanup
+)
+IFS= read -r terminated_child_pid <"$terminated_child_pid_file"
+if kill -0 "$terminated_child_pid" 2>/dev/null; then
+  printf 'Terminated-child regression did not reap its controlled child\n' >&2
+  exit 1
+fi
+[[ ! -e "$terminated_child_root" ]]
+
+killed_child_root="$controlled_root/killed-child-root"
+killed_child_pid_file="$controlled_root/killed-child.pid"
+(
+  trap - EXIT ERR HUP INT TERM
+  test_root="$killed_child_root"
+  controlled_root="$test_root/recursive-child"
+  controlled_label='com.pandapages.fixture-run=synthetic-killed-child'
+  controlled_pid=''
+  controlled_child_status=''
+  docker() {
+    return 0
+  }
+  mkdir -p "$controlled_root"
+  sleep 30 &
+  controlled_pid=$!
+  printf '%s\n' "$controlled_pid" >"$killed_child_pid_file"
+  kill -KILL "$controlled_pid"
+  cleanup
+  [[ "$controlled_child_status" == 137 ]] || {
+    printf 'Killed-child status = %s, want 137\n' "$controlled_child_status" >&2
+    exit 1
+  }
+  cleanup
+)
+IFS= read -r killed_child_pid <"$killed_child_pid_file"
+if kill -0 "$killed_child_pid" 2>/dev/null; then
+  printf 'Killed-child regression did not reap its controlled child\n' >&2
+  exit 1
+fi
+[[ ! -e "$killed_child_root" ]]
+
+early_child_root="$controlled_root/early-child-root"
+early_child_pid_file="$controlled_root/early-child.pid"
+(
+  trap - EXIT ERR HUP INT TERM
+  test_root="$early_child_root"
+  controlled_root="$test_root/recursive-child"
+  controlled_label='com.pandapages.fixture-run=synthetic-early-child'
+  controlled_pid=''
+  controlled_child_status=''
+  docker() {
+    return 0
+  }
+  mkdir -p "$controlled_root"
+  bash -c 'exit 41' &
+  controlled_pid=$!
+  printf '%s\n' "$controlled_pid" >"$early_child_pid_file"
+  if wait "$controlled_pid"; then
+    early_child_status=0
+  else
+    early_child_status=$?
+  fi
+  controlled_pid=''
+  [[ "$early_child_status" == 41 ]] || {
+    printf 'Early-child status = %s, want 41\n' "$early_child_status" >&2
+    exit 1
+  }
+  cleanup
+  cleanup
+)
+IFS= read -r early_child_pid <"$early_child_pid_file"
+if kill -0 "$early_child_pid" 2>/dev/null; then
+  printf 'Early-exit regression did not reap its controlled child\n' >&2
+  exit 1
+fi
+[[ ! -e "$early_child_root" ]]
+
+printf 'ok 17 - controlled failures preserve status and redacted diagnostics while abnormal children and Docker query failures clean up fail-closed\n'
 
 cleanup
 trap - EXIT ERR HUP INT TERM
-[[ -z $(docker ps -aq --filter "label=$run_label") ]]
-[[ -z $(docker network ls -q --filter "label=$run_label") ]]
-[[ -z $(docker volume ls -q --filter "label=$run_label") ]]
+verify_no_labeled_resources "$run_label" 'fixture integration'
+verify_no_labeled_resources "$controlled_label" 'controlled child'
 [[ ! -e "$test_root" ]]
 printf 'ok 18 - disposable containers, network, volume, credentials, and artifacts are removed\n'
 printf 'postgresql_fixtures_integration=passed\n'

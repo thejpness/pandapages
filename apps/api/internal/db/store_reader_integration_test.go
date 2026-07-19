@@ -121,6 +121,249 @@ func TestReaderStoreIntegration(t *testing.T) {
 		t.Fatalf("insert unpublished Reader draft: %v", err)
 	}
 
+	t.Run("corrupt idempotent version requires repair instead of false reuse", func(t *testing.T) {
+		req := model.AdminDraftUpsertRequest{
+			Slug:     "idempotent-repair-story",
+			Title:    "Idempotent repair story",
+			Language: &language,
+			Markdown: "# Idempotent repair story\n\nReadable body.\n",
+		}
+		draft, err := store.AdminDraftUpsert(readerAccountA, req)
+		if err != nil {
+			t.Fatalf("insert idempotency target: %v", err)
+		}
+		t.Cleanup(func() { _, _ = adminDB.Exec(`DELETE FROM stories WHERE id = $1`, draft.StoryID) })
+
+		// Preserve the segment count and structural shape while changing every
+		// content-bearing class of persisted field. Structural validation still
+		// passes; exact incoming-sequence comparison must refuse reuse.
+		if _, err := adminDB.Exec(`
+			UPDATE story_segments
+			SET content_key = $2,
+			    markdown = 'Tampered but structurally valid.',
+			    rendered_html = '<p>Tampered but structurally valid.</p>',
+			    word_count = 4
+			WHERE story_version_id = $1 AND ordinal = 2
+		`, draft.StoryVersionID, strings.Repeat("f", 64)); err != nil {
+			t.Fatalf("tamper same-count idempotency target: %v", err)
+		}
+		if _, err := store.AdminDraftUpsert(readerAccountA, req); !errors.Is(err, model.ErrAdminVersionRepairRequired) {
+			t.Fatalf("same-count tampered reuse error = %v, want repair-required", err)
+		}
+		var (
+			versionCount int
+			segmentCount int
+			draftPointer sql.NullString
+		)
+		if err := adminDB.QueryRow(`SELECT count(*) FROM story_versions WHERE story_id = $1`, draft.StoryID).Scan(&versionCount); err != nil {
+			t.Fatalf("count versions after same-count reuse refusal: %v", err)
+		}
+		if err := adminDB.QueryRow(`SELECT count(*) FROM story_segments WHERE story_version_id = $1`, draft.StoryVersionID).Scan(&segmentCount); err != nil {
+			t.Fatalf("count segments after same-count reuse refusal: %v", err)
+		}
+		if err := adminDB.QueryRow(`SELECT draft_version_id FROM stories WHERE id = $1`, draft.StoryID).Scan(&draftPointer); err != nil {
+			t.Fatalf("read draft pointer after same-count reuse refusal: %v", err)
+		}
+		if versionCount != 1 || segmentCount != draft.SegmentsCount ||
+			!draftPointer.Valid || draftPointer.String != draft.StoryVersionID {
+			t.Fatalf(
+				"same-count reuse refusal changed stored state: versions=%d segments=%d pointer=%#v",
+				versionCount,
+				segmentCount,
+				draftPointer,
+			)
+		}
+
+		if _, err := adminDB.Exec(`DELETE FROM story_segments WHERE story_version_id = $1`, draft.StoryVersionID); err != nil {
+			t.Fatalf("corrupt idempotency target: %v", err)
+		}
+
+		if _, err := store.AdminDraftUpsert(readerAccountA, req); !errors.Is(err, model.ErrAdminVersionRepairRequired) {
+			t.Fatalf("corrupt idempotent reuse error = %v, want repair-required", err)
+		}
+		if err := store.AdminPublish(readerAccountA, req.Slug, draft.StoryVersionID); !errors.Is(err, model.ErrAdminPublishInvalid) {
+			t.Fatalf("publish corrupt idempotency target error = %v, want publish-invalid", err)
+		}
+
+		var (
+			isPublished bool
+			publishedID sql.NullString
+			draftID     sql.NullString
+		)
+		if err := adminDB.QueryRow(`
+			SELECT is_published, published_version_id, draft_version_id
+			FROM stories
+			WHERE id = $1
+		`, draft.StoryID).Scan(&isPublished, &publishedID, &draftID); err != nil {
+			t.Fatalf("read corrupt idempotency target state: %v", err)
+		}
+		if isPublished || publishedID.Valid || !draftID.Valid || draftID.String != draft.StoryVersionID {
+			t.Fatalf("corrupt reuse/publish mutated pointers: published=%t publishedID=%#v draftID=%#v", isPublished, publishedID, draftID)
+		}
+	})
+
+	t.Run("publication validates immutable metadata identities and readable content atomically", func(t *testing.T) {
+		const slug = "publication-validation-story"
+		first, err := store.AdminDraftUpsert(readerAccountA, model.AdminDraftUpsertRequest{
+			Slug:     slug,
+			Title:    "Publication validation v1",
+			Language: &language,
+			Markdown: "# Publication validation v1\n\nOriginal body.\n",
+		})
+		if err != nil {
+			t.Fatalf("insert publication validation v1: %v", err)
+		}
+		t.Cleanup(func() { _, _ = adminDB.Exec(`DELETE FROM stories WHERE id = $1`, first.StoryID) })
+		if err := store.AdminPublish(readerAccountA, slug, first.StoryVersionID); err != nil {
+			t.Fatalf("publish validation v1: %v", err)
+		}
+		second, err := store.AdminDraftUpsert(readerAccountA, model.AdminDraftUpsertRequest{
+			Slug:     slug,
+			Title:    "Publication validation v2",
+			Language: &language,
+			Markdown: "# Publication validation v2\n\n## Chapter\n\nReplacement body.\n",
+		})
+		if err != nil {
+			t.Fatalf("insert publication validation v2: %v", err)
+		}
+
+		assertPublishedPointer := func(want string) {
+			t.Helper()
+			var (
+				isPublished bool
+				publishedID string
+			)
+			if err := adminDB.QueryRow(`
+				SELECT is_published, published_version_id
+				FROM stories
+				WHERE id = $1
+			`, first.StoryID).Scan(&isPublished, &publishedID); err != nil {
+				t.Fatalf("read publication pointer: %v", err)
+			}
+			if !isPublished || publishedID != want {
+				t.Fatalf("publication pointer = published %t / %s, want true / %s", isPublished, publishedID, want)
+			}
+		}
+
+		if _, err := adminDB.Exec(`UPDATE story_versions SET frontmatter = frontmatter - 'title' WHERE id = $1`, second.StoryVersionID); err != nil {
+			t.Fatalf("remove immutable title: %v", err)
+		}
+		if err := store.AdminPublish(readerAccountA, slug, second.StoryVersionID); !errors.Is(err, model.ErrAdminPublishInvalid) {
+			t.Fatalf("publish missing immutable title error = %v, want publish-invalid", err)
+		}
+		assertPublishedPointer(first.StoryVersionID)
+		if _, err := adminDB.Exec(`
+			UPDATE story_versions
+			SET frontmatter = jsonb_set(frontmatter, '{title}', to_jsonb($2::text), true)
+			WHERE id = $1
+		`, second.StoryVersionID, "Publication validation v2"); err != nil {
+			t.Fatalf("restore immutable title: %v", err)
+		}
+
+		if _, err := adminDB.Exec(`
+			UPDATE story_segments
+			SET chapter_occurrence = 2
+			WHERE story_version_id = $1 AND ordinal = 3
+		`, second.StoryVersionID); err != nil {
+			t.Fatalf("corrupt chapter propagation: %v", err)
+		}
+		if err := store.AdminPublish(readerAccountA, slug, second.StoryVersionID); !errors.Is(err, model.ErrAdminPublishInvalid) {
+			t.Fatalf("publish invalid chapter identity error = %v, want publish-invalid", err)
+		}
+		assertPublishedPointer(first.StoryVersionID)
+		if _, err := adminDB.Exec(`
+			UPDATE story_segments
+			SET chapter_occurrence = 1
+			WHERE story_version_id = $1 AND ordinal = 3
+		`, second.StoryVersionID); err != nil {
+			t.Fatalf("restore chapter propagation: %v", err)
+		}
+
+		var originalRenderedHTML string
+		if err := adminDB.QueryRow(`
+			SELECT rendered_html
+			FROM story_segments
+			WHERE story_version_id = $1 AND ordinal = 3
+		`, second.StoryVersionID).Scan(&originalRenderedHTML); err != nil {
+			t.Fatalf("read original rendered segment: %v", err)
+		}
+		mutationTx, err := adminDB.Begin()
+		if err != nil {
+			t.Fatalf("begin concurrent segment mutation: %v", err)
+		}
+		defer func() { _ = mutationTx.Rollback() }()
+		if _, err := mutationTx.Exec(`
+			UPDATE story_segments
+			SET rendered_html = ''
+			WHERE story_version_id = $1 AND ordinal = 3
+		`, second.StoryVersionID); err != nil {
+			t.Fatalf("hold unreadable segment mutation: %v", err)
+		}
+
+		const publishApplicationName = "reader_publish_segment_lock_test"
+		lockingStore := newReaderIntegrationStoreWithApplicationName(t, databaseURL, publishApplicationName)
+		publishResult := make(chan error, 1)
+		go func() {
+			publishResult <- lockingStore.AdminPublish(readerAccountA, slug, second.StoryVersionID)
+		}()
+		lockDeadline := time.Now().Add(5 * time.Second)
+		lockObserved := false
+		for time.Now().Before(lockDeadline) {
+			select {
+			case err := <-publishResult:
+				t.Fatalf("AdminPublish returned before segment mutation committed: %v", err)
+			default:
+			}
+			if err := adminDB.QueryRow(`
+				SELECT EXISTS (
+					SELECT 1
+					FROM pg_stat_activity
+					WHERE application_name = $1
+					  AND state = 'active'
+					  AND wait_event_type = 'Lock'
+					  AND query LIKE '%FOR SHARE OF segment%'
+				)
+			`, publishApplicationName).Scan(&lockObserved); err != nil {
+				t.Fatalf("inspect blocked publication validation: %v", err)
+			}
+			if lockObserved {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if !lockObserved {
+			t.Fatal("AdminPublish did not wait for the concurrent segment mutation")
+		}
+		if err := mutationTx.Commit(); err != nil {
+			t.Fatalf("commit unreadable segment mutation: %v", err)
+		}
+		select {
+		case err := <-publishResult:
+			if !errors.Is(err, model.ErrAdminPublishInvalid) {
+				t.Fatalf("publish after unreadable segment mutation = %v, want publish-invalid", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("AdminPublish remained blocked after segment mutation committed")
+		}
+		assertPublishedPointer(first.StoryVersionID)
+		if _, err := adminDB.Exec(`
+			UPDATE story_segments
+			SET rendered_html = $2
+			WHERE story_version_id = $1 AND ordinal = 3
+		`, second.StoryVersionID, originalRenderedHTML); err != nil {
+			t.Fatalf("restore rendered segment: %v", err)
+		}
+
+		if err := store.AdminPublish(readerAccountA, slug, accountBDraft.StoryVersionID); !errors.Is(err, model.ErrAdminPublishNotFound) {
+			t.Fatalf("cross-account version publish error = %v, want existing not-found semantics", err)
+		}
+		assertPublishedPointer(first.StoryVersionID)
+		if err := store.AdminPublish(readerAccountA, slug, second.StoryVersionID); err != nil {
+			t.Fatalf("publish restored validation v2: %v", err)
+		}
+		assertPublishedPointer(second.StoryVersionID)
+	})
+
 	t.Run("ingestion assigns six ordered identities and H2 chapters", func(t *testing.T) {
 		story, err := store.ReaderStory(readerAccountA, readerSlug)
 		if err != nil {

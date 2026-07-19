@@ -173,12 +173,20 @@ test('Library boundary ignores harmless additive fields but rejects unsafe data 
   const additive = {
     items: [
       story({
-        editorialBadge: 'bedtime',
-        progress: progress({ futureProgressHint: 'harmless' }),
+        editorialBadge: {
+          label: 'bedtime',
+          palette: ['paper', 'bamboo'],
+        },
+        progress: progress({
+          futureProgressHint: { label: 'harmless', values: [1, 2, 3] },
+        }),
       }),
     ],
     unavailableItemCount: 2,
-    futureEnvelope: { revision: 3 },
+    futureEnvelope: {
+      revision: 3,
+      metadata: [{ label: 'new' }, { label: 'calm' }],
+    },
   }
   assert.deepEqual(api.parseLibraryResponse(additive), {
     items: [
@@ -202,6 +210,35 @@ test('Library boundary ignores harmless additive fields but rejects unsafe data 
     assert.throws(
       () => api.parseLibraryResponse(unsafe),
       (error) => api.isInvalidLibraryResponseError(error),
+    )
+  }
+
+  for (const unsafeKey of [
+    'settings',
+    'child',
+    'prompt',
+    'profile',
+    'profiles',
+    'account',
+    'accountId',
+    'account_id',
+    'aid',
+    'profileId',
+    'profile_id',
+  ]) {
+    const nestedUnsafe = {
+      items: [
+        story({
+          futureEnvelope: [
+            { metadata: { [unsafeKey]: { value: 'private' } } },
+          ],
+        }),
+      ],
+    }
+    assert.throws(
+      () => api.parseLibraryResponse(nestedUnsafe),
+      (error) => api.isInvalidLibraryResponseError(error),
+      `expected nested ${unsafeKey} to be rejected`,
     )
   }
 })

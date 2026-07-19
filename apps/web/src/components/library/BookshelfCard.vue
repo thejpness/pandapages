@@ -22,10 +22,11 @@ const progressLabel = computed(() => libraryProgressLabel(props.story))
 const actionLabel = computed(() => libraryActionLabel(props.story))
 const lengthLabel = computed(() => libraryLengthLabel(props.story.wordCount))
 const chapterLabel = computed(() => libraryChapterLabel(props.story.chapterCount))
+const titleId = computed(() => `bookshelf-card-title-${props.story.slug}`)
 </script>
 
 <template>
-  <article class="bookshelf-card">
+  <article class="bookshelf-card" :aria-labelledby="titleId">
     <div
       class="bookshelf-card__read"
     >
@@ -50,7 +51,7 @@ const chapterLabel = computed(() => libraryChapterLabel(props.story.chapterCount
 
       <span class="bookshelf-card__copy">
         <span class="bookshelf-card__kicker">Story</span>
-        <h3 class="bookshelf-card__title">{{ story.title }}</h3>
+        <h3 :id="titleId" class="bookshelf-card__title">{{ story.title }}</h3>
         <span v-if="story.author" class="bookshelf-card__author">by {{ story.author }}</span>
         <span class="bookshelf-card__facts">
           <span>{{ lengthLabel }}</span>

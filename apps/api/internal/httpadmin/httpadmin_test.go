@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -32,6 +34,7 @@ type fakeAdminStore struct {
 	draftRequest   model.AdminDraftUpsertRequest
 	draftCalls     int
 	draftAccount   string
+	draftErr       error
 	publishErr     error
 	publishCalls   int
 }
@@ -48,6 +51,9 @@ func (s *fakeAdminStore) AdminDraftUpsert(accountID string, req model.AdminDraft
 	s.draftCalls++
 	s.draftRequest = req
 	s.draftAccount = accountID
+	if s.draftErr != nil {
+		return model.AdminDraftUpsertResponse{}, s.draftErr
+	}
 	return model.AdminDraftUpsertResponse{
 		StoryID:        "story-id",
 		StoryVersionID: "version-id",
@@ -173,7 +179,7 @@ func TestAdminListStoriesAuthorised(t *testing.T) {
 }
 
 func TestAdminPublishReturnsSafeValidationFailure(t *testing.T) {
-	store := &fakeAdminStore{publishErr: errors.New("story version was not found or contains no readable segments")}
+	store := &fakeAdminStore{publishErr: fmt.Errorf("private validation detail: %w", model.ErrAdminPublishInvalid)}
 	rec := serveAdmin(
 		t,
 		store,
@@ -187,9 +193,111 @@ func TestAdminPublishReturnsSafeValidationFailure(t *testing.T) {
 	if rec.Code != http.StatusBadRequest || store.publishCalls != 1 {
 		t.Fatalf("publish response/calls = %d/%d; body = %s", rec.Code, store.publishCalls, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"code":"publish_failed"`) ||
-		!strings.Contains(rec.Body.String(), "contains no readable segments") {
+	if !strings.Contains(rec.Body.String(), `"code":"publish_invalid"`) ||
+		!strings.Contains(rec.Body.String(), "story version is unavailable or unreadable") ||
+		strings.Contains(rec.Body.String(), "private validation detail") {
 		t.Fatalf("safe publish validation response = %s", rec.Body.String())
+	}
+}
+
+func TestAdminPublishHidesUnexpectedStorageFailure(t *testing.T) {
+	const sensitiveMarker = "SENSITIVE_DATABASE_HOST_RELATION_DETAIL"
+	var capturedLogs bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&capturedLogs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+	store := &fakeAdminStore{publishErr: errors.New(sensitiveMarker)}
+	rec := serveAdmin(
+		t,
+		store,
+		http.MethodPost,
+		"/api/v1/admin/stories/safe-story/publish",
+		[]byte(`{"versionId":"11111111-1111-4111-8111-111111111111"}`),
+		"valid",
+		testAdminKey,
+	)
+
+	response := rec.Result()
+	t.Cleanup(func() { _ = response.Body.Close() })
+	if rec.Code != http.StatusInternalServerError || response.StatusCode != http.StatusInternalServerError ||
+		response.Status != "500 Internal Server Error" || store.publishCalls != 1 {
+		t.Fatalf("publish response/calls = %d/%d; body = %s", rec.Code, store.publishCalls, rec.Body.String())
+	}
+	for key, values := range response.Header {
+		if strings.Contains(key, sensitiveMarker) {
+			t.Fatalf("unexpected publish failure leaked detail in header key %q", key)
+		}
+		for _, value := range values {
+			if strings.Contains(value, sensitiveMarker) {
+				t.Fatalf("unexpected publish failure leaked detail in header %s: %q", key, value)
+			}
+		}
+	}
+	var payload struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode unexpected publish failure: %v", err)
+	}
+	if payload.Error.Code != "publish_failed" || payload.Error.Message != "story publication failed" {
+		t.Fatalf("unexpected publish error envelope = %#v", payload.Error)
+	}
+	for boundary, value := range map[string]string{
+		"decoded code":    payload.Error.Code,
+		"decoded message": payload.Error.Message,
+		"raw body":        rec.Body.String(),
+		"captured logs":   capturedLogs.String(),
+	} {
+		if strings.Contains(value, sensitiveMarker) {
+			t.Fatalf("unexpected publish failure leaked detail in %s: %s", boundary, value)
+		}
+	}
+	if !strings.Contains(capturedLogs.String(), "admin story publication failed") {
+		t.Fatalf("unexpected publish failure omitted safe diagnostic: %s", capturedLogs.String())
+	}
+}
+
+func TestAdminPublishPreservesMissingVersionResponse(t *testing.T) {
+	store := &fakeAdminStore{publishErr: fmt.Errorf("private ownership detail: %w", model.ErrAdminPublishNotFound)}
+	rec := serveAdmin(
+		t,
+		store,
+		http.MethodPost,
+		"/api/v1/admin/stories/missing-story/publish",
+		[]byte(`{"versionId":"11111111-1111-4111-8111-111111111111"}`),
+		"valid",
+		testAdminKey,
+	)
+
+	if rec.Code != http.StatusBadRequest || store.publishCalls != 1 {
+		t.Fatalf("missing publish response/calls = %d/%d; body = %s", rec.Code, store.publishCalls, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"code":"publish_failed"`) ||
+		!strings.Contains(rec.Body.String(), "story version was not found") ||
+		strings.Contains(rec.Body.String(), "private ownership detail") {
+		t.Fatalf("missing publish response changed or leaked detail: %s", rec.Body.String())
+	}
+}
+
+func TestAdminDraftReturnsSafeRepairRequiredConflict(t *testing.T) {
+	store := &fakeAdminStore{draftErr: fmt.Errorf("private corrupt version detail: %w", model.ErrAdminVersionRepairRequired)}
+	body, err := json.Marshal(model.AdminDraftUpsertRequest{Slug: "safe-story", Title: "Safe story", Markdown: "# Safe story"})
+	if err != nil {
+		t.Fatalf("marshal draft request: %v", err)
+	}
+	rec := serveAdmin(t, store, http.MethodPost, "/api/v1/admin/stories/draft", body, "valid", testAdminKey)
+
+	if rec.Code != http.StatusConflict || store.draftCalls != 1 {
+		t.Fatalf("draft response/calls = %d/%d; body = %s", rec.Code, store.draftCalls, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"code":"draft_repair_required"`) ||
+		!strings.Contains(rec.Body.String(), "stored story version requires repair") ||
+		strings.Contains(rec.Body.String(), "private corrupt") {
+		t.Fatalf("repair-required response leaked detail: %s", rec.Body.String())
 	}
 }
 

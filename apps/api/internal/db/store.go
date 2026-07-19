@@ -346,22 +346,22 @@ func (s *Store) Library(accountID string) (model.LibraryReadModel, error) {
 	// identities are validated by the shared Reader contract in Go rather than
 	// reimplementing its occurrence/chapter rules in SQL.
 	rows, err := s.db.QueryContext(ctx, `
-		WITH published AS (
+		WITH candidates AS (
 			SELECT
 				story.id AS story_id,
 				story.slug,
 				story.created_at,
 				story.updated_at,
+				story.published_version_id AS requested_published_version_id,
 				version.id AS published_version_id,
 				version.version AS published_version,
-				version.frontmatter
+				version.frontmatter::text AS frontmatter
 			FROM stories AS story
-			JOIN story_versions AS version
+			LEFT JOIN story_versions AS version
 			  ON version.id = story.published_version_id
 			 AND version.story_id = story.id
 			WHERE story.account_id = $1
 			  AND story.is_published = true
-			  AND story.published_version_id IS NOT NULL
 		), default_profile AS (
 			SELECT profile.id
 			FROM profiles AS profile
@@ -371,10 +371,12 @@ func (s *Store) Library(accountID string) (model.LibraryReadModel, error) {
 			LIMIT 1
 		)
 		SELECT
-			published.slug,
-			published.frontmatter,
-			published.published_version_id,
-			published.published_version,
+			candidates.story_id,
+			candidates.slug,
+			candidates.frontmatter,
+			candidates.requested_published_version_id,
+			candidates.published_version_id,
+			candidates.published_version,
 			progress.story_version_id,
 			progress_version.version,
 			progress.percent,
@@ -388,22 +390,22 @@ func (s *Store) Library(accountID string) (model.LibraryReadModel, error) {
 			segment.chapter_key,
 			segment.chapter_occurrence,
 			segment.word_count
-		FROM published
+		FROM candidates
 		LEFT JOIN default_profile
 		  ON true
 		LEFT JOIN reading_progress AS progress
 		  ON progress.profile_id = default_profile.id
-		 AND progress.story_id = published.story_id
+		 AND progress.story_id = candidates.story_id
 		LEFT JOIN story_versions AS progress_version
 		  ON progress_version.id = progress.story_version_id
-		 AND progress_version.story_id = published.story_id
+		 AND progress_version.story_id = candidates.story_id
 		LEFT JOIN story_segments AS segment
-		  ON segment.story_version_id = published.published_version_id
+		  ON segment.story_version_id = candidates.published_version_id
 		ORDER BY
-			published.updated_at DESC,
-			published.created_at DESC,
-			published.slug ASC,
-			published.published_version_id ASC,
+			candidates.updated_at DESC,
+			candidates.created_at DESC,
+			candidates.slug ASC,
+			candidates.story_id ASC,
 			segment.ordinal ASC NULLS FIRST
 	`, accountID)
 	if err != nil {
@@ -413,6 +415,7 @@ func (s *Store) Library(accountID string) (model.LibraryReadModel, error) {
 
 	type storyAccumulator struct {
 		item               model.StoryItem
+		storyID            string
 		publishedVersionID string
 		identities         []readercontract.StoredSegmentIdentity
 		wordCount          int64
@@ -450,10 +453,12 @@ func (s *Store) Library(accountID string) (model.LibraryReadModel, error) {
 
 	for rows.Next() {
 		var (
+			storyID              string
 			slug                 string
-			frontmatterJSON      []byte
-			publishedVersionID   string
-			publishedVersion     int64
+			frontmatterJSON      sql.NullString
+			requestedVersionID   sql.NullString
+			publishedVersionID   sql.NullString
+			publishedVersion     sql.NullInt64
 			progressVersionID    sql.NullString
 			progressVersion      sql.NullInt64
 			progressPercent      sql.NullFloat64
@@ -469,8 +474,10 @@ func (s *Store) Library(accountID string) (model.LibraryReadModel, error) {
 			segmentWordCount     sql.NullInt64
 		)
 		if err := rows.Scan(
+			&storyID,
 			&slug,
 			&frontmatterJSON,
+			&requestedVersionID,
 			&publishedVersionID,
 			&publishedVersion,
 			&progressVersionID,
@@ -490,28 +497,34 @@ func (s *Store) Library(accountID string) (model.LibraryReadModel, error) {
 			return model.LibraryReadModel{}, err
 		}
 
-		if current == nil || current.publishedVersionID != publishedVersionID {
+		if current == nil || current.storyID != storyID {
 			if err := finalize(); err != nil {
 				return model.LibraryReadModel{}, err
 			}
 			current = &storyAccumulator{
-				item:               model.StoryItem{Slug: slug},
-				publishedVersionID: publishedVersionID,
-				identities:         make([]readercontract.StoredSegmentIdentity, 0, 32),
+				item:       model.StoryItem{Slug: slug},
+				storyID:    storyID,
+				identities: make([]readercontract.StoredSegmentIdentity, 0, 32),
 			}
 
-			if !validLibrarySlug(slug) || strings.TrimSpace(publishedVersionID) == "" {
+			if strings.TrimSpace(storyID) == "" || !validLibrarySlug(slug) ||
+				!requestedVersionID.Valid || strings.TrimSpace(requestedVersionID.String) == "" ||
+				!publishedVersionID.Valid || strings.TrimSpace(publishedVersionID.String) == "" ||
+				requestedVersionID.String != publishedVersionID.String ||
+				!frontmatterJSON.Valid || !publishedVersion.Valid {
 				current.invalid = true
+			} else {
+				current.publishedVersionID = publishedVersionID.String
 			}
-			versionValue := int(publishedVersion)
-			if publishedVersion <= 0 || int64(versionValue) != publishedVersion {
+			versionValue := int(publishedVersion.Int64)
+			if !publishedVersion.Valid || publishedVersion.Int64 <= 0 || int64(versionValue) != publishedVersion.Int64 {
 				current.invalid = true
 			} else {
 				current.item.PublishedVersion = versionValue
 			}
 
-			title, author, language, metadataErr := libraryVersionMetadata(frontmatterJSON)
-			if metadataErr != nil {
+			title, author, language, metadataErr := libraryVersionMetadata([]byte(frontmatterJSON.String))
+			if !frontmatterJSON.Valid || metadataErr != nil {
 				current.invalid = true
 			} else {
 				current.item.Title = title
@@ -532,7 +545,7 @@ func (s *Store) Library(accountID string) (model.LibraryReadModel, error) {
 						Version:          version,
 						Percent:          progressPercent.Float64,
 						UpdatedAt:        progressUpdatedAt.Time,
-						IsCurrentVersion: progressVersionID.String == publishedVersionID,
+						IsCurrentVersion: progressVersionID.String == current.publishedVersionID,
 					}
 				}
 			} else if progressVersion.Valid || progressPercent.Valid || progressUpdatedAt.Valid {

@@ -1,9 +1,22 @@
 package model
 
 import (
+	"errors"
 	"time"
 
 	"pandapages/api/internal/readercontract"
+)
+
+var (
+	// ErrAdminPublishNotFound preserves the existing client-visible missing
+	// story/version status without disclosing ownership boundaries.
+	ErrAdminPublishNotFound = errors.New("story version was not found")
+	// ErrAdminPublishInvalid marks an expected publish refusal whose public
+	// response must not reveal which internal invariant failed.
+	ErrAdminPublishInvalid = errors.New("story version cannot be published")
+	// ErrAdminVersionRepairRequired marks a corrupt idempotency target that must
+	// not be reused or mutated as though it were a healthy immutable version.
+	ErrAdminVersionRepairRequired = errors.New("stored story version requires repair")
 )
 
 type StoryItem struct {

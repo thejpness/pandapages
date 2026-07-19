@@ -103,6 +103,10 @@ func New(cfg Config, store Store) http.Handler {
 		aid := accountIDFromCtx(r)
 		out, err := store.AdminDraftUpsert(aid, body)
 		if err != nil {
+			if errors.Is(err, model.ErrAdminVersionRepairRequired) {
+				writeErr(w, http.StatusConflict, "draft_repair_required", "stored story version requires repair")
+				return
+			}
 			writeErr(w, http.StatusBadRequest, "draft_failed", err.Error())
 			return
 		}
@@ -142,7 +146,18 @@ func New(cfg Config, store Store) http.Handler {
 
 		aid := accountIDFromCtx(r)
 		if err := store.AdminPublish(aid, slug, strings.TrimSpace(body.VersionID)); err != nil {
-			writeErr(w, http.StatusBadRequest, "publish_failed", err.Error())
+			if errors.Is(err, model.ErrAdminPublishNotFound) {
+				writeErr(w, http.StatusBadRequest, "publish_failed", "story version was not found")
+				return
+			}
+			if errors.Is(err, model.ErrAdminPublishInvalid) {
+				writeErr(w, http.StatusBadRequest, "publish_invalid", "story version is unavailable or unreadable")
+				return
+			}
+			// Driver errors may contain connection or query detail. Keep both the
+			// browser response and application logs on a fixed safe boundary.
+			slog.Error("admin story publication failed")
+			writeErr(w, http.StatusInternalServerError, "publish_failed", "story publication failed")
 			return
 		}
 

@@ -25,6 +25,7 @@ const emit = defineEmits<{
   journey: []
   admin: []
   lock: []
+  'sticky-offset': [height: number]
 }>()
 
 const searchInput = ref<HTMLInputElement | null>(null)
@@ -97,8 +98,10 @@ function handleParentCloseAutoFocus(event: Event) {
 function updateStickyHeader() {
   if (headerRoot.value === null) return
   const height = headerRoot.value.getBoundingClientRect().height
-  stickyHeader.value =
-    window.innerHeight >= 480 && height <= window.innerHeight * 0.42
+  const shouldStick =
+    window.innerHeight > 480 && height <= window.innerHeight * 0.42
+  stickyHeader.value = shouldStick
+  emit('sticky-offset', shouldStick ? height : 0)
 }
 
 onMounted(() => {

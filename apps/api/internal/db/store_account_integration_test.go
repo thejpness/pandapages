@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"pandapages/api/internal/httpapi"
+	"pandapages/api/internal/model"
 	"pandapages/api/internal/session"
 )
 
@@ -271,6 +272,8 @@ func TestAccountStoreIntegration(t *testing.T) {
 		const (
 			accountA           = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 			accountB           = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+			accountC           = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+			accountD           = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 			profileA           = "aaaaaaaa-2000-4000-8000-000000000001"
 			profileAOther      = "aaaaaaaa-2000-4000-8000-000000000002"
 			profileB           = "bbbbbbbb-2000-4000-8000-000000000001"
@@ -280,6 +283,7 @@ func TestAccountStoreIntegration(t *testing.T) {
 			unpublishedStoryA  = "aaaaaaaa-0000-4000-8000-000000000004"
 			noPointerStoryA    = "aaaaaaaa-0000-4000-8000-000000000005"
 			crossPointerStoryA = "aaaaaaaa-0000-4000-8000-000000000006"
+			samePointerStoryA  = "aaaaaaaa-0000-4000-8000-000000000007"
 			storyB             = "bbbbbbbb-0000-4000-8000-000000000001"
 			versionA1          = "aaaaaaaa-1000-4000-8000-000000000001"
 			versionA2          = "aaaaaaaa-1000-4000-8000-000000000002"
@@ -287,6 +291,12 @@ func TestAccountStoreIntegration(t *testing.T) {
 			draftVersionA      = "aaaaaaaa-1000-4000-8000-000000000004"
 			unpublishedVersion = "aaaaaaaa-1000-4000-8000-000000000005"
 			versionB           = "bbbbbbbb-1000-4000-8000-000000000001"
+			missingPointerC    = "cccccccc-0000-4000-8000-000000000001"
+			crossPointerC      = "cccccccc-0000-4000-8000-000000000002"
+			validStoryD        = "dddddddd-0000-4000-8000-000000000001"
+			corruptStoryD      = "dddddddd-0000-4000-8000-000000000002"
+			validVersionD      = "dddddddd-1000-4000-8000-000000000001"
+			corruptVersionD    = "dddddddd-1000-4000-8000-000000000002"
 		)
 		progressTime := time.Date(2026, time.July, 19, 12, 0, 0, 0, time.UTC)
 
@@ -314,10 +324,11 @@ func TestAccountStoreIntegration(t *testing.T) {
 				($6, $1, 'unpublished-pointer', 'Unpublished pointer', NULL, 'en-GB', false, $9, $9),
 				($7, $1, 'published-without-pointer', 'No pointer', NULL, 'en-GB', true, $9, $9),
 				($8, $1, 'cross-story-pointer', 'Cross pointer', NULL, 'en-GB', true, $9, $9),
-				($10, $2, 'shared-story', 'Account B story', 'Account B author', 'cy', true, $9, $9)
+				($10, $1, 'same-account-cross-story-pointer', 'Same-account cross pointer', NULL, 'en-GB', true, $9, $9),
+				($11, $2, 'shared-story', 'Account B story', 'Account B author', 'cy', true, $9, $9)
 		`,
 			accountA, accountB, storyA, noProgressStoryA, draftStoryA, unpublishedStoryA,
-			noPointerStoryA, crossPointerStoryA, progressTime.Add(-time.Hour), storyB,
+			noPointerStoryA, crossPointerStoryA, progressTime.Add(-time.Hour), samePointerStoryA, storyB,
 		); err != nil {
 			t.Fatalf("insert account-scoped stories: %v", err)
 		}
@@ -369,14 +380,15 @@ func TestAccountStoreIntegration(t *testing.T) {
 		if _, err := adminDB.Exec(`
 			UPDATE stories
 			SET published_version_id = CASE id
-				WHEN $1 THEN $6::uuid
-				WHEN $2 THEN $7::uuid
-				WHEN $3 THEN $8::uuid
-				WHEN $4 THEN $9::uuid
-				WHEN $5 THEN $9::uuid
+				WHEN $1 THEN $7::uuid
+				WHEN $2 THEN $8::uuid
+				WHEN $3 THEN $9::uuid
+				WHEN $4 THEN $10::uuid
+				WHEN $5 THEN $7::uuid
+				WHEN $6 THEN $10::uuid
 			END
-			WHERE id IN ($1, $2, $3, $4, $5)
-		`, storyA, noProgressStoryA, unpublishedStoryA, crossPointerStoryA, storyB,
+			WHERE id IN ($1, $2, $3, $4, $5, $6)
+		`, storyA, noProgressStoryA, unpublishedStoryA, crossPointerStoryA, samePointerStoryA, storyB,
 			versionA1, noProgressVersionA, unpublishedVersion, versionB); err != nil {
 			t.Fatalf("publish account-scoped stories: %v", err)
 		}
@@ -402,8 +414,8 @@ func TestAccountStoreIntegration(t *testing.T) {
 			t.Fatalf("Library(account A): %v", err)
 		}
 		itemsA := libraryA.Items
-		if libraryA.UnavailableItemCount != 0 {
-			t.Fatalf("Library(account A) unavailable count = %d, want 0", libraryA.UnavailableItemCount)
+		if libraryA.UnavailableItemCount != 3 {
+			t.Fatalf("Library(account A) unavailable count = %d, want 3", libraryA.UnavailableItemCount)
 		}
 		if len(itemsA) != 2 || itemsA[0].Slug != "no-progress" || itemsA[1].Slug != "shared-story" {
 			t.Fatalf("Library(account A) ordering/scope = %#v", itemsA)
@@ -425,6 +437,93 @@ func TestAccountStoreIntegration(t *testing.T) {
 			t.Fatalf("current-version progress = %#v", current.Progress)
 		}
 
+		// Distinguish an empty account from an account whose complete shelf is
+		// quarantined. A foreign pointer is counted, but its metadata is never read.
+		if _, err := adminDB.Exec(
+			`INSERT INTO accounts (id, name) VALUES ($1, 'All invalid'), ($2, 'Empty')`,
+			accountC, accountD,
+		); err != nil {
+			t.Fatalf("insert all-invalid and empty accounts: %v", err)
+		}
+		if _, err := adminDB.Exec(`
+			INSERT INTO stories (
+				id, account_id, slug, title, language, is_published, published_version_id, created_at, updated_at
+			) VALUES
+				($1, $3, 'missing-pointer', 'Mutable missing pointer', 'fr', true, NULL, now(), now()),
+				($2, $3, 'foreign-pointer', 'Mutable foreign pointer', 'fr', true, $4, now(), now())
+		`, missingPointerC, crossPointerC, accountC, versionB); err != nil {
+			t.Fatalf("insert all-invalid Library candidates: %v", err)
+		}
+		allInvalid, err := store.Library(accountC)
+		if err != nil {
+			t.Fatalf("Library(all-invalid account): %v", err)
+		}
+		if len(allInvalid.Items) != 0 || allInvalid.UnavailableItemCount != 2 {
+			t.Fatalf("all-invalid Library = %#v", allInvalid)
+		}
+		allInvalidJSON, err := json.Marshal(allInvalid)
+		if err != nil {
+			t.Fatalf("encode all-invalid Library: %v", err)
+		}
+		if strings.Contains(string(allInvalidJSON), "Account B published") || strings.Contains(string(allInvalidJSON), `"cy"`) {
+			t.Fatalf("foreign immutable metadata crossed accounts: %s", allInvalidJSON)
+		}
+		emptyAccount, err := store.Library(accountD)
+		if err != nil {
+			t.Fatalf("Library(empty account): %v", err)
+		}
+		if len(emptyAccount.Items) != 0 || emptyAccount.UnavailableItemCount != 0 {
+			t.Fatalf("empty-account Library = %#v", emptyAccount)
+		}
+
+		// A corrupt immutable version quarantines only itself: a healthy sibling
+		// remains available and mutable story metadata is never used as fallback.
+		if _, err := adminDB.Exec(`
+			INSERT INTO stories (id, account_id, slug, title, language, is_published, created_at, updated_at) VALUES
+				($1, $3, 'valid-sibling', 'Mutable valid title', 'fr', true, now(), now()),
+				($2, $3, 'corrupt-sibling', 'Mutable corrupt fallback', 'fr', true, now(), now())
+		`, validStoryD, corruptStoryD, accountD); err != nil {
+			t.Fatalf("insert partial-library stories: %v", err)
+		}
+		if _, err := adminDB.Exec(`
+			INSERT INTO story_versions (id, story_id, version, frontmatter, rendered_html) VALUES
+				($1, $3, 1, '{"title":"Valid immutable sibling","language":"en-GB"}', '<p>Valid</p>'),
+				($2, $4, 1, '{"language":"en-GB"}', '<p>Corrupt metadata</p>')
+		`, validVersionD, corruptVersionD, validStoryD, corruptStoryD); err != nil {
+			t.Fatalf("insert partial-library versions: %v", err)
+		}
+		if _, err := adminDB.Exec(`
+			INSERT INTO story_segments (
+				story_version_id, ordinal, segment_kind, content_key, content_occurrence, word_count
+			) VALUES
+				($1, 1, 'paragraph', $3, 1, 4),
+				($2, 1, 'paragraph', $3, 1, 5)
+		`, validVersionD, corruptVersionD, keyA); err != nil {
+			t.Fatalf("insert partial-library segments: %v", err)
+		}
+		if _, err := adminDB.Exec(`
+			UPDATE stories
+			SET published_version_id = CASE id WHEN $1 THEN $3::uuid WHEN $2 THEN $4::uuid END
+			WHERE id IN ($1, $2)
+		`, validStoryD, corruptStoryD, validVersionD, corruptVersionD); err != nil {
+			t.Fatalf("set partial-library pointers: %v", err)
+		}
+		oneValidOneCorrupt, err := store.Library(accountD)
+		if err != nil {
+			t.Fatalf("Library(one valid and one corrupt): %v", err)
+		}
+		if len(oneValidOneCorrupt.Items) != 1 || oneValidOneCorrupt.UnavailableItemCount != 1 ||
+			oneValidOneCorrupt.Items[0].Slug != "valid-sibling" || oneValidOneCorrupt.Items[0].Title != "Valid immutable sibling" {
+			t.Fatalf("one-valid/one-corrupt Library = %#v", oneValidOneCorrupt)
+		}
+		oneValidOneCorruptJSON, err := json.Marshal(oneValidOneCorrupt)
+		if err != nil {
+			t.Fatalf("encode one-valid/one-corrupt Library: %v", err)
+		}
+		if strings.Contains(string(oneValidOneCorruptJSON), "Mutable corrupt fallback") {
+			t.Fatalf("partial Library exposed mutable corrupt fallback: %s", oneValidOneCorruptJSON)
+		}
+
 		// A historical version with no Reader segments is quarantined from the
 		// shelf and direct Reader access instead of producing a broken Read action.
 		const (
@@ -444,7 +543,7 @@ func TestAccountStoreIntegration(t *testing.T) {
 		`, zeroVersion, zeroStory); err != nil {
 			t.Fatalf("insert historical zero-segment version: %v", err)
 		}
-		if err := store.AdminPublish(accountA, "historical-empty", zeroVersion); err == nil || !strings.Contains(err.Error(), "no readable segments") {
+		if err := store.AdminPublish(accountA, "historical-empty", zeroVersion); !errors.Is(err, model.ErrAdminPublishInvalid) {
 			t.Fatalf("zero-segment AdminPublish error = %v", err)
 		}
 		var (
@@ -464,7 +563,7 @@ func TestAccountStoreIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Library(account A) with historical empty story: %v", err)
 		}
-		if emptyQuarantine.UnavailableItemCount != 1 || len(emptyQuarantine.Items) != 2 {
+		if emptyQuarantine.UnavailableItemCount != 4 || len(emptyQuarantine.Items) != 2 {
 			t.Fatalf("historical empty quarantine = %#v", emptyQuarantine)
 		}
 		if _, err := store.ReaderStory(accountA, "historical-empty"); !errors.Is(err, sql.ErrNoRows) {
@@ -491,7 +590,7 @@ func TestAccountStoreIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Library(account A) with corrupt immutable metadata: %v", err)
 		}
-		if partial.UnavailableItemCount != 1 || len(partial.Items) != 1 || partial.Items[0].Slug != "no-progress" {
+		if partial.UnavailableItemCount != 4 || len(partial.Items) != 1 || partial.Items[0].Slug != "no-progress" {
 			t.Fatalf("partial Library with corrupt metadata = %#v", partial)
 		}
 		for _, item := range partial.Items {
@@ -533,8 +632,8 @@ func TestAccountStoreIntegration(t *testing.T) {
 			t.Fatalf("Library(account A) after republish: %v", err)
 		}
 		updatedItems := updatedLibrary.Items
-		if updatedLibrary.UnavailableItemCount != 0 {
-			t.Fatalf("republished Library unavailable count = %d, want 0", updatedLibrary.UnavailableItemCount)
+		if updatedLibrary.UnavailableItemCount != 3 {
+			t.Fatalf("republished Library unavailable count = %d, want 3", updatedLibrary.UnavailableItemCount)
 		}
 		updated := updatedItems[1]
 		if updated.Title != "Published version two" || updated.Author != nil || updated.Language != "en" ||
@@ -550,7 +649,7 @@ func TestAccountStoreIntegration(t *testing.T) {
 			t.Fatalf("corrupt aggregate fixture: %v", err)
 		}
 		invalidAggregate, err := store.Library(accountA)
-		if err != nil || invalidAggregate.UnavailableItemCount != 1 || len(invalidAggregate.Items) != 1 {
+		if err != nil || invalidAggregate.UnavailableItemCount != 4 || len(invalidAggregate.Items) != 1 {
 			t.Fatalf("malformed aggregate quarantine = %#v / %v", invalidAggregate, err)
 		}
 		if _, err := adminDB.Exec(`UPDATE story_segments SET word_count = 4 WHERE story_version_id = $1 AND ordinal = 1`, versionA2); err != nil {
@@ -561,7 +660,7 @@ func TestAccountStoreIntegration(t *testing.T) {
 			t.Fatalf("corrupt chapter propagation fixture: %v", err)
 		}
 		invalidIdentity, err := store.Library(accountA)
-		if err != nil || invalidIdentity.UnavailableItemCount != 1 || len(invalidIdentity.Items) != 1 {
+		if err != nil || invalidIdentity.UnavailableItemCount != 4 || len(invalidIdentity.Items) != 1 {
 			t.Fatalf("malformed identity quarantine = %#v / %v", invalidIdentity, err)
 		}
 		if _, err := store.ReaderStory(accountA, "shared-story"); err == nil || !strings.Contains(err.Error(), "segment identities") {
@@ -575,7 +674,7 @@ func TestAccountStoreIntegration(t *testing.T) {
 			t.Fatalf("corrupt progress fixture: %v", err)
 		}
 		invalidProgress, err := store.Library(accountA)
-		if err != nil || invalidProgress.UnavailableItemCount != 1 || len(invalidProgress.Items) != 1 {
+		if err != nil || invalidProgress.UnavailableItemCount != 4 || len(invalidProgress.Items) != 1 {
 			t.Fatalf("malformed progress quarantine = %#v / %v", invalidProgress, err)
 		}
 		if _, err := adminDB.Exec(`UPDATE reading_progress SET percent = 0.42 WHERE profile_id = $1 AND story_id = $2`, profileA, storyA); err != nil {
@@ -586,7 +685,7 @@ func TestAccountStoreIntegration(t *testing.T) {
 			t.Fatalf("corrupt progress version fixture: %v", err)
 		}
 		crossStoryProgress, err := store.Library(accountA)
-		if err != nil || crossStoryProgress.UnavailableItemCount != 1 || len(crossStoryProgress.Items) != 1 {
+		if err != nil || crossStoryProgress.UnavailableItemCount != 4 || len(crossStoryProgress.Items) != 1 {
 			t.Fatalf("cross-story progress quarantine = %#v / %v", crossStoryProgress, err)
 		}
 		if _, err := adminDB.Exec(`UPDATE reading_progress SET story_version_id = $3 WHERE profile_id = $1 AND story_id = $2`, profileA, storyA, versionA1); err != nil {
