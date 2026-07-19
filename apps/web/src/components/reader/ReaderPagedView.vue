@@ -43,6 +43,8 @@ const props = defineProps<{
   title: string
   author: string | null
   language: string
+  storySlug: string
+  storyVersion: number
   segments: readonly ReaderStorySegment[]
   fontFamily: string
   fontSize: number
@@ -67,6 +69,7 @@ const layoutReady = ref(false)
 const surfaceHeight = ref(0)
 const pageAnnouncement = ref('')
 const navigationBusy = ref(true)
+const measurementPassCount = ref(0)
 const measuredCorrectionCount = ref(0)
 const pageElements = new Map<number, HTMLElement>()
 const measuredOversizedByModelKey = new Map<string, ReadonlySet<string>>()
@@ -205,14 +208,28 @@ async function measurePageMetrics(): Promise<ReaderPageMetrics | null> {
 }
 
 function metricsKey(metrics: ReaderPageMetrics): string {
+  const contentKey = props.segments
+    .map((segment) =>
+      [
+        readerPageSegmentIdentity(segment),
+        segment.ordinal,
+        segment.kind,
+        segment.headingLevel ?? 0,
+        segment.wordCount,
+      ].join('/'),
+    )
+    .join(',')
   return [
+    props.storySlug,
+    props.storyVersion,
+    props.language,
+    contentKey,
     metrics.fontSize,
     metrics.lineHeight,
     metrics.contentWidth,
     metrics.availableHeight,
     props.contentWidth,
     props.fontFamily,
-    props.segments.length,
   ].join(':')
 }
 
@@ -454,10 +471,14 @@ async function rebuildPages(
     return false
   }
   const key = metricsKey(metrics)
+  const cachedCorrection =
+    measuredOversizedByModelKey.get(key) ?? new Set<string>()
   let nextPages =
     !force && key === lastModelKey && pages.value.length > 0
       ? pages.value
-      : buildReaderPages(props.segments, metrics)
+      : buildReaderPages(props.segments, metrics, {
+          forcedOversizedSegmentIdentities: cachedCorrection,
+        })
   if (nextPages.length === 0) {
     finishProgrammaticOperation(generation)
     return false
@@ -469,8 +490,12 @@ async function rebuildPages(
   if (disposed || generation !== modelGeneration) return false
 
   const shouldMeasure = !measuredOversizedByModelKey.has(key)
-  const corrected = new Set<string>(measuredOversizedByModelKey.get(key) ?? [])
+  const corrected = new Set<string>(cachedCorrection)
   if (shouldMeasure) {
+    // Mark the complete key before inspecting rendered geometry. A forced
+    // rebuild can reuse the result, but can never spend a second pass.
+    measuredOversizedByModelKey.set(key, corrected)
+    measurementPassCount.value += 1
     for (const page of nextPages) {
       if (page.oversized) continue
       const pageElement = pageElements.get(page.index)
@@ -484,7 +509,7 @@ async function rebuildPages(
         }
       }
     }
-    measuredOversizedByModelKey.set(key, corrected)
+    measuredOversizedByModelKey.set(key, new Set(corrected))
   }
   if (shouldMeasure && corrected.size > 0) {
     measuredCorrectionCount.value += 1
@@ -932,8 +957,11 @@ defineExpose({ capture, whenReady, restore, moveToOrdinal, focusContent, mode: '
     data-reader-paged-view
     data-reader-view-mode="paged"
     :data-reader-paged-ready="layoutReady ? 'true' : 'false'"
+    :data-reader-reflow-pending="reflowPending ? 'true' : 'false'"
     :data-reader-current-page="currentPage + 1"
     :data-reader-page-count="pageCount"
+    :data-reader-measurement-pass-count="measurementPassCount"
+    :data-reader-measured-correction-count="measuredCorrectionCount"
     :aria-labelledby="firstSegmentIsHeading ? 'reader-story-title' : 'reader-paged-metadata-title'"
     :aria-busy="!layoutReady"
     :lang="language"

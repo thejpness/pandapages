@@ -293,6 +293,8 @@ defineExpose({ capture, whenReady, restore, moveToOrdinal, focusContent, mode: '
         class="reader-segment"
         data-reader-scroll-segment
         :data-reader-segment-ordinal="segment.ordinal"
+        :data-reader-content-key="segment.contentKey"
+        :data-reader-content-occurrence="segment.contentOccurrence"
         v-html="segment.renderedHtml"
       />
     </div>

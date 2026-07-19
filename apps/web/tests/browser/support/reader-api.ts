@@ -788,7 +788,7 @@ export function makeMeasuredOverflowReaderStory(
         chapterKey: null,
         chapterOccurrence: null,
         renderedHtml: '<pre><code>' + sparseCode + '</code></pre>',
-        wordCount: 6,
+        wordCount: words(sparseCode),
       },
       {
         ordinal: 3,

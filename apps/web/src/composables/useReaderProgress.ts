@@ -82,6 +82,7 @@ export function useReaderProgress(options: UseReaderProgressOptions) {
   const saveState = ref<ProgressSaveState>(initialSave())
   const decision = shallowRef<ReaderProgressDecision | null>(null)
   const captureSuppressed = ref(false)
+  const captureSuppressionOwners = new Set<symbol>()
   const navigatingToLibrary = ref(false)
   const leaveAfterSaveFailure = ref(false)
   const announcement = ref('')
@@ -120,6 +121,24 @@ export function useReaderProgress(options: UseReaderProgressOptions) {
     () => !captureSuppressed.value && decision.value === null,
   )
 
+  function suppressCapture(): () => void {
+    const owner = Symbol('reader-progress-capture-suppression')
+    captureSuppressionOwners.add(owner)
+    captureSuppressed.value = true
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      captureSuppressionOwners.delete(owner)
+      captureSuppressed.value = captureSuppressionOwners.size > 0
+    }
+  }
+
+  function clearCaptureSuppressions() {
+    captureSuppressionOwners.clear()
+    captureSuppressed.value = false
+  }
+
   function snapshot(
     position: ReaderCapturedPosition | null,
     activeContext = context,
@@ -157,7 +176,7 @@ export function useReaderProgress(options: UseReaderProgressOptions) {
     awaitingIntent = false
     handlingSessionLoss = false
     lifecycleSuppressed = false
-    captureSuppressed.value = false
+    clearCaptureSuppressions()
     decision.value = null
     baselineState.value = initialBaseline()
     saveState.value = initialSave()
@@ -359,7 +378,7 @@ export function useReaderProgress(options: UseReaderProgressOptions) {
     const offer = decision.value
     const activeGeneration = context?.generation
     if (offer?.kind !== 'resume' || activeGeneration === undefined) return
-    captureSuppressed.value = true
+    const releaseCaptureSuppression = suppressCapture()
     try {
       const restored = await restore(offer.locator)
       if (context?.generation !== activeGeneration || !restored) return
@@ -367,9 +386,7 @@ export function useReaderProgress(options: UseReaderProgressOptions) {
       awaitingIntent = true
       announcement.value = 'Reading place restored.'
     } finally {
-      if (context?.generation === activeGeneration) {
-        captureSuppressed.value = false
-      }
+      releaseCaptureSuppression()
     }
   }
 
@@ -378,7 +395,7 @@ export function useReaderProgress(options: UseReaderProgressOptions) {
   ) {
     const activeGeneration = context?.generation
     if (activeGeneration === undefined) return
-    captureSuppressed.value = true
+    const releaseCaptureSuppression = suppressCapture()
     decision.value = null
     awaitingIntent = false
     try {
@@ -393,9 +410,7 @@ export function useReaderProgress(options: UseReaderProgressOptions) {
         }
       }
     } finally {
-      if (context?.generation === activeGeneration) {
-        captureSuppressed.value = false
-      }
+      releaseCaptureSuppression()
     }
   }
 
@@ -487,6 +502,8 @@ export function useReaderProgress(options: UseReaderProgressOptions) {
     decision,
     captureSuppressed,
     captureEnabled,
+    suppressCapture,
+    clearCaptureSuppressions,
     navigatingToLibrary,
     leaveAfterSaveFailure,
     announcement,
