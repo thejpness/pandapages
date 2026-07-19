@@ -691,6 +691,120 @@ export function makePagedReaderStory(
   }
 }
 
+export function makeLongUnbrokenReaderStory(
+  overrides: Partial<Pick<ReaderStoryFixture, 'slug' | 'title' | 'author' | 'language' | 'version'>> = {},
+): ReaderStoryFixture {
+  const title = overrides.title ?? 'TEST ONLY — Long Unbroken Page'
+  const ascii = 'PandaPagesReadingToken'.repeat(220)
+  const cjk = '月夜熊猫物語'.repeat(360)
+
+  return {
+    slug: overrides.slug ?? READER_SLUG,
+    title,
+    author: overrides.author ?? 'Panda Pages Test Fixture',
+    language: overrides.language ?? 'en-GB',
+    version: overrides.version ?? 1,
+    segments: [
+      {
+        ordinal: 1,
+        kind: 'heading',
+        headingLevel: 1,
+        contentKey: fixtureKey(960),
+        contentOccurrence: 1,
+        chapterKey: null,
+        chapterOccurrence: null,
+        renderedHtml: '<h1>' + escapeHtml(title) + '</h1>',
+        wordCount: words(title),
+      },
+      {
+        ordinal: 2,
+        kind: 'paragraph',
+        headingLevel: null,
+        contentKey: fixtureKey(961),
+        contentOccurrence: 1,
+        chapterKey: null,
+        chapterOccurrence: null,
+        renderedHtml: '<p>' + ascii + '</p>',
+        wordCount: 1,
+      },
+      {
+        ordinal: 3,
+        kind: 'paragraph',
+        headingLevel: null,
+        contentKey: fixtureKey(962),
+        contentOccurrence: 1,
+        chapterKey: null,
+        chapterOccurrence: null,
+        renderedHtml: '<p>' + cjk + '</p>',
+        wordCount: 1,
+      },
+      {
+        ordinal: 4,
+        kind: 'paragraph',
+        headingLevel: null,
+        contentKey: fixtureKey(963),
+        contentOccurrence: 1,
+        chapterKey: null,
+        chapterOccurrence: null,
+        renderedHtml: '<p>Every pathological segment remains present exactly once.</p>',
+        wordCount: 8,
+      },
+    ],
+  }
+}
+
+export function makeMeasuredOverflowReaderStory(
+  overrides: Partial<Pick<ReaderStoryFixture, 'slug' | 'title' | 'author' | 'language' | 'version'>> = {},
+): ReaderStoryFixture {
+  const title = overrides.title ?? 'TEST ONLY — Measured Overflow'
+  const sparseCode = Array.from({ length: 90 }, (_, index) =>
+    index % 15 === 0 ? 'panda' : '',
+  ).join('\n')
+
+  return {
+    slug: overrides.slug ?? READER_SLUG,
+    title,
+    author: overrides.author ?? 'Panda Pages Test Fixture',
+    language: overrides.language ?? 'en-GB',
+    version: overrides.version ?? 1,
+    segments: [
+      {
+        ordinal: 1,
+        kind: 'heading',
+        headingLevel: 1,
+        contentKey: fixtureKey(970),
+        contentOccurrence: 1,
+        chapterKey: null,
+        chapterOccurrence: null,
+        renderedHtml: '<h1>' + escapeHtml(title) + '</h1>',
+        wordCount: words(title),
+      },
+      {
+        ordinal: 2,
+        kind: 'other',
+        headingLevel: null,
+        contentKey: fixtureKey(971),
+        contentOccurrence: 1,
+        chapterKey: null,
+        chapterOccurrence: null,
+        renderedHtml: '<pre><code>' + sparseCode + '</code></pre>',
+        wordCount: 6,
+      },
+      {
+        ordinal: 3,
+        kind: 'paragraph',
+        headingLevel: null,
+        contentKey: fixtureKey(972),
+        contentOccurrence: 1,
+        chapterKey: null,
+        chapterOccurrence: null,
+        renderedHtml: '<p>Measured correction keeps this following block separate.</p>',
+        wordCount: 8,
+      },
+    ],
+  }
+}
+
 export function makeOversizedReaderStory(
   overrides: Partial<Pick<ReaderStoryFixture, 'slug' | 'title' | 'author' | 'language' | 'version'>> = {},
 ): ReaderStoryFixture {

@@ -191,8 +191,8 @@ test('an oversized segment is isolated while every segment remains readable', as
     segment({ ordinal: 1, wordCount: 12 }),
     segment({
       ordinal: 2,
-      wordCount: 1_000,
-      renderedHtml: '<p>One very long unbroken-content block 🐼</p>',
+      wordCount: 1,
+      renderedHtml: '<p>' + 'unbroken'.repeat(400) + '</p>',
     }),
     segment({ ordinal: 3, wordCount: 12 }),
   ]
@@ -212,6 +212,162 @@ test('an oversized segment is isolated while every segment remains readable', as
   )
   assert.equal(single.length, 1)
   assert.equal(single[0].oversized, false)
+})
+
+test('visible-text workload strips markup and counts entities and Unicode code points', async () => {
+  const pages = await moduleAt('../src/lib/reader-pages.ts')
+
+  assert.deepEqual(
+    pages.readerSegmentTextWorkload(
+      '<p data-hidden="' + 'x'.repeat(2_000) + '">A<strong>B</strong>🐼星</p>',
+    ),
+    {
+      visibleCharacters: 4,
+      longestUnbrokenCharacters: 4,
+      weightedCharacters: 6,
+    },
+  )
+  assert.deepEqual(
+    pages.readerSegmentTextWorkload('&amp;&madeup;&#65;&#x1f43c;&nbsp;'),
+    {
+      visibleCharacters: 5,
+      longestUnbrokenCharacters: 4,
+      weightedCharacters: 6,
+    },
+  )
+  assert.deepEqual(
+    pages.readerSegmentTextWorkload('<p>one</p><p>two</p>'),
+    {
+      visibleCharacters: 6,
+      longestUnbrokenCharacters: 3,
+      weightedCharacters: 6,
+    },
+  )
+  assert.equal(
+    pages.readerSegmentTextWorkload('<code>🐼</code>').visibleCharacters,
+    1,
+    'a supplementary-plane emoji is one Unicode code point, not two UTF-16 units',
+  )
+})
+
+test('text workload keeps ordinary English stable while ignoring inline tag syntax', async () => {
+  const pages = await moduleAt('../src/lib/reader-pages.ts')
+  const words = Array.from({ length: 66 }, () => 'panda')
+  const plain = segment({
+    ordinal: 1,
+    wordCount: words.length,
+    renderedHtml: '<p>' + words.join(' ') + '</p>',
+  })
+  const markedUp = segment({
+    ordinal: 2,
+    wordCount: words.length,
+    renderedHtml:
+      '<p>' +
+      words.map((word, index) =>
+        index % 2 === 0 ? '<em>' + word + '</em>' : word,
+      ).join(' ') +
+      '</p>',
+  })
+
+  const plainPage = pages.buildReaderPages([plain], metrics())[0]
+  const markedUpPage = pages.buildReaderPages([markedUp], metrics())[0]
+  assert.equal(plainPage.estimatedLines, 7)
+  assert.equal(markedUpPage.estimatedLines, plainPage.estimatedLines)
+  assert.equal(plainPage.oversized, false)
+  assert.equal(markedUpPage.oversized, false)
+})
+
+test('real long runs, CJK, URLs, entities, emoji and code become isolated oversized pages', async () => {
+  const pages = await moduleAt('../src/lib/reader-pages.ts')
+  const workloads = [
+    'x'.repeat(3_000),
+    '月夜故事'.repeat(400),
+    'https://example.test/' + 'household-reading-path/'.repeat(140),
+    '&CounterClockwiseContourIntegral;'.repeat(2_000),
+    '🐼'.repeat(900),
+    '<pre><code>' + 'constPandaPages='.repeat(220) + '</code></pre>',
+  ]
+  const segments = workloads.map((renderedHtml, index) =>
+    segment({
+      ordinal: index + 1,
+      wordCount: 1,
+      renderedHtml:
+        renderedHtml.startsWith('<pre>')
+          ? renderedHtml
+          : '<p>' + renderedHtml + '</p>',
+    }),
+  )
+
+  const first = pages.buildReaderPages(segments, metrics())
+  const repeated = pages.buildReaderPages(
+    segments.map((candidate) => ({ ...candidate })),
+    { ...metrics() },
+  )
+
+  assert.equal(first.length, segments.length)
+  assert.ok(first.every((page) => page.oversized))
+  assert.ok(
+    first.every((page) => page.segments.length === 1),
+    'every pathological segment is isolated',
+  )
+  assert.deepEqual(
+    first.flatMap((page) => page.segments.map(({ ordinal }) => ordinal)),
+    segments.map(({ ordinal }) => ordinal),
+  )
+  assert.deepEqual(repeated, first)
+})
+
+test('a forced oversized identity is isolated deterministically without object identity', async () => {
+  const pages = await moduleAt('../src/lib/reader-pages.ts')
+  const repeatedKey = 'e'.repeat(64)
+  const segments = [
+    segment({
+      ordinal: 1,
+      contentKey: repeatedKey,
+      contentOccurrence: 1,
+      wordCount: 1,
+    }),
+    segment({
+      ordinal: 2,
+      contentKey: repeatedKey,
+      contentOccurrence: 2,
+      wordCount: 1,
+    }),
+    segment({ ordinal: 3, wordCount: 1 }),
+  ]
+  const forcedIdentity = pages.readerPageSegmentIdentity(segments[1])
+  const options = {
+    forcedOversizedSegmentIdentities: new Set([forcedIdentity]),
+  }
+  const first = pages.buildReaderPages(segments, metrics(), options)
+  const cloned = segments.map((candidate) => ({ ...candidate }))
+  const repeated = pages.buildReaderPages(cloned, { ...metrics() }, options)
+
+  assert.notEqual(
+    pages.readerPageSegmentIdentity(segments[0]),
+    forcedIdentity,
+    'content occurrence is part of stable identity',
+  )
+  assert.equal(pages.readerPageSegmentIdentity(cloned[1]), forcedIdentity)
+  assert.deepEqual(
+    first.map((page) => page.segments.map(({ ordinal }) => ordinal)),
+    [[1], [2], [3]],
+  )
+  assert.deepEqual(
+    first.map((page) => page.oversized),
+    [false, true, false],
+  )
+  assert.deepEqual(repeated, first)
+  assert.deepEqual(
+    first.flatMap((page) => page.segments.map(({ ordinal }) => ordinal)),
+    [1, 2, 3],
+  )
+
+  const noMatch = pages.buildReaderPages(segments, metrics(), {
+    forcedOversizedSegmentIdentities: new Set(['f'.repeat(64) + ':1']),
+  })
+  assert.equal(noMatch.length, 1)
+  assert.equal(noMatch[0].oversized, false)
 })
 
 test('identical input deterministically builds identical pages without mutation', async () => {
@@ -325,22 +481,6 @@ test('representative Locator v2 carries chapter identity and oversized offset', 
     0.4,
   )
 
-  const geometry = { scrollHeight: 1_000, clientHeight: 400 }
-  assert.equal(pages.readerOversizedOffset({ ...geometry, scrollTop: 240 }), 0.4)
-  assert.equal(pages.readerOversizedScrollTop({ ...geometry, offset: 0.4 }), 240)
-  assert.equal(
-    pages.readerOversizedOffset({ ...geometry, scrollTop: 10_000 }),
-    1,
-  )
-  assert.equal(pages.readerOversizedScrollTop({ ...geometry, offset: -2 }), 0)
-  assert.equal(
-    pages.readerOversizedOffset({
-      scrollTop: 50,
-      scrollHeight: 300,
-      clientHeight: 400,
-    }),
-    0,
-  )
   assert.equal(pages.readerPageRepresentativeLocator(null), null)
 })
 

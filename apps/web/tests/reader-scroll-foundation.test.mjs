@@ -189,6 +189,83 @@ test('the same canonical anchor has stable progress across layout changes', asyn
   assert.equal(compact.locator.segment.offset, 0.5)
 })
 
+test('contained reading-line capture and restoration share canonical segment geometry', async () => {
+  const scroll = await readerModule('../src/lib/reader-scroll-location.ts')
+  const segments = [segment({ ordinal: 1, wordCount: 100 })]
+  const layout = { ordinal: 1, top: 0, bottom: 1000 }
+  const geometry = { scrollHeight: 1200, clientHeight: 400 }
+
+  for (const expectedScrollTop of [0, 360, 700]) {
+    const captured = scroll.captureReaderContainedScrollPosition(
+      segments,
+      [layout],
+      { ...geometry, scrollTop: expectedScrollTop },
+    )
+    const expectedOffset = (expectedScrollTop + 140) / 1000
+
+    assert.ok(captured)
+    assert.ok(
+      Math.abs(captured.locator.segment.offset - expectedOffset) <
+        Number.EPSILON,
+    )
+    assert.ok(captured.locator.segment.offset > 0)
+    assert.ok(
+      Math.abs(
+        scroll.readerContainedRestoreScrollTop({
+          layout,
+          offset: captured.locator.segment.offset,
+          ...geometry,
+        }) - expectedScrollTop,
+      ) < Number.EPSILON,
+    )
+    assert.ok(
+      Math.abs(captured.percent - captured.locator.segment.offset) <
+        Number.EPSILON,
+    )
+  }
+})
+
+test('contained restoration clamps scroll range and rejects malformed geometry safely', async () => {
+  const scroll = await readerModule('../src/lib/reader-scroll-location.ts')
+  const layout = { ordinal: 1, top: 0, bottom: 1000 }
+
+  assert.equal(
+    scroll.readerContainedRestoreScrollTop({
+      layout,
+      offset: 1,
+      scrollHeight: 1000,
+      clientHeight: 400,
+    }),
+    600,
+  )
+  assert.equal(
+    scroll.readerContainedRestoreScrollTop({
+      layout,
+      offset: -2,
+      scrollHeight: 1000,
+      clientHeight: 400,
+    }),
+    0,
+  )
+  assert.equal(
+    scroll.readerContainedRestoreScrollTop({
+      layout: { ordinal: 1, top: Number.NaN, bottom: Number.NaN },
+      offset: Number.NaN,
+      scrollHeight: Number.NaN,
+      clientHeight: Number.NaN,
+    }),
+    0,
+  )
+  assert.equal(
+    scroll.captureReaderContainedScrollPosition(
+      [segment()],
+      [{ ordinal: 1, top: Number.NaN, bottom: 100 }],
+      { scrollTop: Number.NaN, scrollHeight: Number.NaN, clientHeight: Number.NaN },
+    ),
+    null,
+  )
+})
+
 test('restore target clamps offsets and scroll boundaries', async () => {
   const scroll = await readerModule('../src/lib/reader-scroll-location.ts')
 

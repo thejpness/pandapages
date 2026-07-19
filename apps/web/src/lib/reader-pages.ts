@@ -1,5 +1,4 @@
 import {
-  clampReaderOffset,
   createReaderLocatorV2,
   type ReaderLocatorV2,
   type ReaderStorySegment,
@@ -34,9 +33,14 @@ export type ReaderPage = {
   oversized: boolean
 }
 
-type ReaderOverflowGeometry = {
-  scrollHeight: number
-  clientHeight: number
+export type ReaderPageBuildOptions = {
+  forcedOversizedSegmentIdentities?: ReadonlySet<string>
+}
+
+export type ReaderSegmentTextWorkload = {
+  visibleCharacters: number
+  longestUnbrokenCharacters: number
+  weightedCharacters: number
 }
 
 const DEFAULT_FONT_SIZE = 20
@@ -46,9 +50,219 @@ const DEFAULT_AVAILABLE_HEIGHT = 640
 const AVERAGE_CHARACTER_EM = 0.52
 const AVERAGE_WORD_CHARACTERS_WITH_SPACE = 6
 const MINIMUM_CHARACTERS_PER_LINE = 8
+const LONG_UNBROKEN_RUN_MULTIPLIER = 1.08
+const WIDE_CHARACTER_MULTIPLIER = 2
+const WHITESPACE_ENTITIES = new Set([
+  'nbsp',
+  'ensp',
+  'emsp',
+  'thinsp',
+  'hairsp',
+  'numsp',
+  'puncsp',
+  'tab',
+  'newline',
+])
+const KNOWN_ENTITIES = new Map([
+  ['amp', '&'],
+  ['apos', "'"],
+  ['gt', '>'],
+  ['lt', '<'],
+  ['quot', '"'],
+])
+const BLOCK_TAGS = new Set([
+  'address',
+  'article',
+  'aside',
+  'blockquote',
+  'br',
+  'dd',
+  'div',
+  'dl',
+  'dt',
+  'figcaption',
+  'figure',
+  'footer',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'header',
+  'hr',
+  'li',
+  'main',
+  'nav',
+  'ol',
+  'p',
+  'pre',
+  'section',
+  'table',
+  'tbody',
+  'td',
+  'tfoot',
+  'th',
+  'thead',
+  'tr',
+  'ul',
+])
 
 function positiveOr(value: number, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? value : fallback
+}
+
+function isWideCodePoint(codePoint: number): boolean {
+  return (
+    (codePoint >= 0x1100 && codePoint <= 0x11ff) ||
+    (codePoint >= 0x2e80 && codePoint <= 0xa4cf) ||
+    (codePoint >= 0xac00 && codePoint <= 0xd7af) ||
+    (codePoint >= 0xf900 && codePoint <= 0xfaff) ||
+    (codePoint >= 0xfe10 && codePoint <= 0xfe6f) ||
+    (codePoint >= 0xff01 && codePoint <= 0xff60) ||
+    (codePoint >= 0xffe0 && codePoint <= 0xffe6) ||
+    (codePoint >= 0x1f000 && codePoint <= 0x1faff) ||
+    (codePoint >= 0x20000 && codePoint <= 0x3ffff)
+  )
+}
+
+function validCodePoint(value: number): boolean {
+  return (
+    Number.isInteger(value) &&
+    value >= 0 &&
+    value <= 0x10ffff &&
+    (value < 0xd800 || value > 0xdfff)
+  )
+}
+
+function decodedEntity(body: string): string | null {
+  const lower = body.toLowerCase()
+  if (WHITESPACE_ENTITIES.has(lower)) return ' '
+  const known = KNOWN_ENTITIES.get(lower)
+  if (known !== undefined) return known
+
+  let codePoint: number | null = null
+  if (/^#x[0-9a-f]+$/i.test(body)) {
+    codePoint = Number.parseInt(body.slice(2), 16)
+  } else if (/^#[0-9]+$/.test(body)) {
+    codePoint = Number.parseInt(body.slice(1), 10)
+  }
+  if (codePoint !== null) {
+    return validCodePoint(codePoint) ? String.fromCodePoint(codePoint) : '\ufffd'
+  }
+
+  // A syntactically complete named entity represents one rendered code point.
+  return /^[a-z][a-z0-9]+$/i.test(body) ? 'x' : null
+}
+
+function tagEnd(renderedHtml: string, start: number): number {
+  const first = renderedHtml[start + 1]
+  if (!first || !/[a-z!/?]/i.test(first)) return -1
+  if (renderedHtml.startsWith('<!--', start)) {
+    const commentEnd = renderedHtml.indexOf('-->', start + 4)
+    return commentEnd < 0 ? -1 : commentEnd + 2
+  }
+
+  let quote: '"' | "'" | null = null
+  for (let index = start + 1; index < renderedHtml.length; index += 1) {
+    const character = renderedHtml[index]
+    if (quote !== null) {
+      if (character === quote) quote = null
+      continue
+    }
+    if (character === '"' || character === "'") {
+      quote = character
+      continue
+    }
+    if (character === '>') return index
+  }
+  return -1
+}
+
+function tagCreatesBoundary(tag: string): boolean {
+  const name = /^<\s*\/?\s*([a-z0-9-]+)/i.exec(tag)?.[1]?.toLowerCase()
+  return name !== undefined && BLOCK_TAGS.has(name)
+}
+
+/**
+ * Returns a deterministic approximation of rendered text without using a DOM.
+ * Tag syntax is ignored, collapsed whitespace consumes one character, complete
+ * entities consume one Unicode code point, and wide CJK/emoji code points carry
+ * a conservative two-character layout cost.
+ */
+export function readerSegmentTextWorkload(
+  renderedHtml: string,
+): ReaderSegmentTextWorkload {
+  let visibleCharacters = 0
+  let longestUnbrokenCharacters = 0
+  let currentUnbrokenCharacters = 0
+  let weightedCharacters = 0
+  let previousWasWhitespace = false
+
+  const consume = (character: string) => {
+    const whitespace = /\s/u.test(character)
+    if (whitespace && previousWasWhitespace) return
+    previousWasWhitespace = whitespace
+    visibleCharacters += 1
+    const codePoint = character.codePointAt(0) ?? 0
+    weightedCharacters += isWideCodePoint(codePoint)
+      ? WIDE_CHARACTER_MULTIPLIER
+      : 1
+    if (whitespace) {
+      currentUnbrokenCharacters = 0
+      return
+    }
+    currentUnbrokenCharacters += 1
+    longestUnbrokenCharacters = Math.max(
+      longestUnbrokenCharacters,
+      currentUnbrokenCharacters,
+    )
+  }
+
+  for (let index = 0; index < renderedHtml.length; ) {
+    if (renderedHtml[index] === '<') {
+      const end = tagEnd(renderedHtml, index)
+      if (end >= 0) {
+        if (tagCreatesBoundary(renderedHtml.slice(index, end + 1))) {
+          currentUnbrokenCharacters = 0
+        }
+        index = end + 1
+        continue
+      }
+    }
+
+    if (renderedHtml[index] === '&') {
+      const semicolon = renderedHtml.indexOf(';', index + 1)
+      if (semicolon > index && semicolon - index <= 34) {
+        const entity = decodedEntity(
+          renderedHtml.slice(index + 1, semicolon),
+        )
+        if (entity !== null) {
+          consume(entity)
+          index = semicolon + 1
+          continue
+        }
+      }
+    }
+
+    const codePoint = renderedHtml.codePointAt(index)
+    if (codePoint === undefined) break
+    const character = String.fromCodePoint(codePoint)
+    consume(character)
+    index += character.length
+  }
+
+  return {
+    visibleCharacters,
+    longestUnbrokenCharacters,
+    weightedCharacters,
+  }
+}
+
+export function readerPageSegmentIdentity(
+  segment: Pick<ReaderStorySegment, 'contentKey' | 'contentOccurrence'>,
+): string {
+  return segment.contentKey + ':' + segment.contentOccurrence
 }
 
 /**
@@ -120,17 +334,41 @@ function readerSegmentEstimatedLines(
   capacity: ReaderPageCapacity,
 ): number {
   const words = safeWordCount(segment)
+  const workload = readerSegmentTextWorkload(segment.renderedHtml)
   if (segment.kind === 'heading') {
     const scale = headingScale(segment.headingLevel)
     const headingWordsPerLine = Math.max(1, capacity.wordsPerLine / scale)
-    const textLines = Math.ceil(words / headingWordsPerLine)
+    const headingCharactersPerLine = Math.max(
+      1,
+      capacity.charactersPerLine / scale,
+    )
+    const textLines = Math.max(
+      Math.ceil(words / headingWordsPerLine),
+      Math.ceil(workload.visibleCharacters / headingCharactersPerLine),
+      Math.ceil(
+        (workload.longestUnbrokenCharacters *
+          LONG_UNBROKEN_RUN_MULTIPLIER) /
+          headingCharactersPerLine,
+      ),
+      Math.ceil(workload.weightedCharacters / headingCharactersPerLine),
+    )
     return Math.max(
       1,
       Math.ceil(textLines * 1.12 + headingSpacing(segment.headingLevel)),
     )
   }
 
-  const textLines = Math.max(1, Math.ceil(words / capacity.wordsPerLine))
+  const textLines = Math.max(
+    1,
+    Math.ceil(words / capacity.wordsPerLine),
+    Math.ceil(workload.visibleCharacters / capacity.charactersPerLine),
+    Math.ceil(
+      (workload.longestUnbrokenCharacters *
+        LONG_UNBROKEN_RUN_MULTIPLIER) /
+        capacity.charactersPerLine,
+    ),
+    Math.ceil(workload.weightedCharacters / capacity.charactersPerLine),
+  )
   // Every coherent segment is a block. Reserving at least one line for block
   // separation prevents many tiny paragraphs from being packed unrealistically.
   return textLines + (segment.kind === 'other' ? 2 : 1)
@@ -192,6 +430,7 @@ function rebalanceTinyFinalPage(
 export function buildReaderPages(
   segments: readonly ReaderStorySegment[],
   metrics: ReaderPageMetrics,
+  options: ReaderPageBuildOptions = {},
 ): ReaderPage[] {
   if (segments.length === 0) return []
 
@@ -228,7 +467,11 @@ export function buildReaderPages(
     const segmentLines = estimates[index]
     if (!segment || segmentLines === undefined) continue
 
-    if (segmentLines > capacity.capacityLines) {
+    const forcedOversized =
+      options.forcedOversizedSegmentIdentities?.has(
+        readerPageSegmentIdentity(segment),
+      ) ?? false
+    if (forcedOversized || segmentLines > capacity.capacityLines) {
       flush()
       pageSegments = [segment]
       estimatedLines = segmentLines
@@ -307,36 +550,5 @@ export function readerPageRepresentativeLocator(
   return createReaderLocatorV2(
     segment,
     page.oversized ? oversizedOffset : 0,
-  )
-}
-
-function readerOverflowMaximum({
-  scrollHeight,
-  clientHeight,
-}: ReaderOverflowGeometry): number {
-  const content = Number.isFinite(scrollHeight) ? Math.max(0, scrollHeight) : 0
-  const viewport = Number.isFinite(clientHeight) ? Math.max(0, clientHeight) : 0
-  return Math.max(0, content - viewport)
-}
-
-export function readerOversizedOffset({
-  scrollTop,
-  scrollHeight,
-  clientHeight,
-}: ReaderOverflowGeometry & { scrollTop: number }): number {
-  const maximum = readerOverflowMaximum({ scrollHeight, clientHeight })
-  if (maximum <= 0) return 0
-  const current = Number.isFinite(scrollTop) ? scrollTop : 0
-  return clampReaderOffset(current / maximum)
-}
-
-export function readerOversizedScrollTop({
-  offset,
-  scrollHeight,
-  clientHeight,
-}: ReaderOverflowGeometry & { offset: number }): number {
-  return (
-    readerOverflowMaximum({ scrollHeight, clientHeight }) *
-    clampReaderOffset(offset)
   )
 }

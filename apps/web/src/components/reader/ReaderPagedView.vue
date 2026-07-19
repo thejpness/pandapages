@@ -18,15 +18,16 @@ import {
 import { readerPageNavigationTarget } from '../../lib/reader-page-navigation'
 import {
   buildReaderPages,
-  readerOversizedOffset,
-  readerOversizedScrollTop,
   readerPageForLocator,
   readerPageRepresentativeLocator,
+  readerPageSegmentIdentity,
   type ReaderPage,
   type ReaderPageMetrics,
 } from '../../lib/reader-pages'
 import {
+  captureReaderContainedScrollPosition,
   findReaderResumeSegment,
+  readerContainedRestoreScrollTop,
   readerWeightedPercent,
   type ReaderScrollPosition,
 } from '../../lib/reader-scroll-location'
@@ -65,7 +66,9 @@ const layoutReady = ref(false)
 const surfaceHeight = ref(0)
 const pageAnnouncement = ref('')
 const navigationBusy = ref(true)
+const measuredCorrectionCount = ref(0)
 const pageElements = new Map<number, HTMLElement>()
+const measuredOversizedByModelKey = new Map<string, ReadonlySet<string>>()
 
 let mounted = false
 let disposed = false
@@ -87,6 +90,11 @@ let settledPage = -1
 let rebuildTimer: number | null = null
 let horizontalFrame: number | null = null
 let horizontalSettleTimer: number | null = null
+let horizontalContactReleaseFrame: number | null = null
+let horizontalScrollPending = false
+let horizontalScrollEndDeferred = false
+const activeHorizontalPointers = new Set<number>()
+let activeHorizontalTouches = 0
 let verticalFrame: number | null = null
 let verticalSettleTimer: number | null = null
 let headerObserver: ResizeObserver | null = null
@@ -222,23 +230,11 @@ function pageIsScrollable(page: ReaderPage): boolean {
   )
 }
 
-function oversizedOffset(page: ReaderPage): number {
-  if (!page.oversized) return 0
-  const element = pageElements.get(page.index)
-  if (!element) return 0
-  return readerOversizedOffset({
-    scrollTop: element.scrollTop,
-    scrollHeight: element.scrollHeight,
-    clientHeight: element.clientHeight,
-  })
-}
-
 function scrollablePageLocator(page: ReaderPage): ReaderLocatorV2 | null {
   const element = pageElements.get(page.index)
-  if (!element || element.scrollTop <= 1) return null
+  if (!element || element.scrollHeight - element.clientHeight <= 1) return null
 
   const pageRect = element.getBoundingClientRect()
-  const readingLine = element.scrollTop + element.clientHeight * 0.35
   const layouts = Array.from(
     element.querySelectorAll<HTMLElement>('[data-reader-paged-segment]'),
   ).flatMap((segmentElement) => {
@@ -250,29 +246,17 @@ function scrollablePageLocator(page: ReaderPage): ReaderLocatorV2 | null {
     const top = rect.top - pageRect.top + element.scrollTop
     return [{ ordinal, top, bottom: top + rect.height }]
   })
-  const layout =
-    layouts.find(
-      (candidate) =>
-        candidate.top <= readingLine && candidate.bottom >= readingLine,
-    ) ??
-    layouts.find((candidate) => candidate.top > readingLine) ??
-    layouts.at(-1)
-  if (!layout) return null
-  const segment =
-    page.segments.find((candidate) => candidate.ordinal === layout.ordinal) ??
-    null
-  if (!segment) return null
-  const height = layout.bottom - layout.top
-  const offset = height > 0 ? (readingLine - layout.top) / height : 0
-  return createReaderLocatorV2(segment, offset)
+  return captureReaderContainedScrollPosition(props.segments, layouts, {
+    scrollTop: element.scrollTop,
+    scrollHeight: element.scrollHeight,
+    clientHeight: element.clientHeight,
+  })?.locator ?? null
 }
 
 function positionForPage(pageIndex: number): ReaderScrollPosition | null {
   const page = pages.value[pageIndex]
   if (!page) return null
-  const locator = page.oversized
-    ? readerPageRepresentativeLocator(page, oversizedOffset(page))
-    : scrollablePageLocator(page) ?? readerPageRepresentativeLocator(page)
+  const locator = scrollablePageLocator(page) ?? readerPageRepresentativeLocator(page)
   if (!locator) return null
   return {
     locator,
@@ -323,6 +307,12 @@ function clearHorizontalSettling() {
     window.clearTimeout(horizontalSettleTimer)
     horizontalSettleTimer = null
   }
+  if (horizontalContactReleaseFrame !== null) {
+    window.cancelAnimationFrame(horizontalContactReleaseFrame)
+    horizontalContactReleaseFrame = null
+  }
+  horizontalScrollPending = false
+  horizontalScrollEndDeferred = false
 }
 
 function clearVerticalSettling() {
@@ -403,33 +393,23 @@ async function restorePageOffset(
 
   const restoreScrollTop = () => {
     if (disposed || generation !== modelGeneration) return
-    let top: number
-    if (page.oversized) {
-      top = readerOversizedScrollTop({
-        offset: locator.segment.offset,
-        scrollHeight: element.scrollHeight,
-        clientHeight: element.clientHeight,
-      })
-    } else {
-      const segmentElement = element.querySelector<HTMLElement>(
-        '[data-reader-segment-ordinal="' +
-          locator.segment.ordinal +
-          '"]',
-      )
-      if (!segmentElement) return
-      const pageRect = element.getBoundingClientRect()
-      const segmentRect = segmentElement.getBoundingClientRect()
-      const segmentTop =
-        segmentRect.top - pageRect.top + element.scrollTop
-      const target =
-        segmentTop +
-        segmentRect.height * locator.segment.offset -
-        element.clientHeight * 0.35
-      top = Math.max(
-        0,
-        Math.min(element.scrollHeight - element.clientHeight, target),
-      )
-    }
+    const segmentElement = element.querySelector<HTMLElement>(
+      '[data-reader-segment-ordinal="' + locator.segment.ordinal + '"]',
+    )
+    if (!segmentElement) return
+    const pageRect = element.getBoundingClientRect()
+    const segmentRect = segmentElement.getBoundingClientRect()
+    const segmentTop = segmentRect.top - pageRect.top + element.scrollTop
+    const top = readerContainedRestoreScrollTop({
+      layout: {
+        ordinal: locator.segment.ordinal,
+        top: segmentTop,
+        bottom: segmentTop + segmentRect.height,
+      },
+      offset: locator.segment.offset,
+      scrollHeight: element.scrollHeight,
+      clientHeight: element.clientHeight,
+    })
     element.scrollTo({ top, behavior: 'auto' })
   }
   await settleProgrammaticReaderRestore(restoreScrollTop)
@@ -465,7 +445,7 @@ async function rebuildPages(
     return false
   }
   const key = metricsKey(metrics)
-  const nextPages =
+  let nextPages =
     !force && key === lastModelKey && pages.value.length > 0
       ? pages.value
       : buildReaderPages(props.segments, metrics)
@@ -478,6 +458,34 @@ async function rebuildPages(
   lastModelKey = key
   await nextTick()
   if (disposed || generation !== modelGeneration) return false
+
+  const shouldMeasure = !measuredOversizedByModelKey.has(key)
+  const corrected = new Set<string>(measuredOversizedByModelKey.get(key) ?? [])
+  if (shouldMeasure) {
+    for (const page of nextPages) {
+      if (page.oversized) continue
+      const pageElement = pageElements.get(page.index)
+      if (!pageElement || pageElement.scrollHeight - pageElement.clientHeight <= 1) continue
+      for (const segment of page.segments) {
+        const segmentElement = pageElement.querySelector<HTMLElement>(
+          "[data-reader-segment-ordinal=\"" + segment.ordinal + "\"]",
+        )
+        if (segmentElement && segmentElement.getBoundingClientRect().height - pageElement.clientHeight > 1) {
+          corrected.add(readerPageSegmentIdentity(segment))
+        }
+      }
+    }
+    measuredOversizedByModelKey.set(key, corrected)
+  }
+  if (shouldMeasure && corrected.size > 0) {
+    measuredCorrectionCount.value += 1
+    nextPages = buildReaderPages(props.segments, metrics, {
+      forcedOversizedSegmentIdentities: corrected,
+    })
+    pages.value = nextPages
+    await nextTick()
+    if (disposed || generation !== modelGeneration) return false
+  }
 
   // Reused keyed page elements retain their own vertical scroll position.
   // Reset every page before restoring the canonical target anchor so Start
@@ -556,9 +564,25 @@ function onHeaderResize() {
   queueRebuild()
 }
 
+function horizontalContactActive(): boolean {
+  return activeHorizontalPointers.size > 0 || activeHorizontalTouches > 0
+}
+
+function viewportSupportsScrollEnd(
+  viewport = viewportRef.value,
+): viewport is HTMLElement {
+  return Boolean(viewport && 'onscrollend' in viewport)
+}
+
 function finishNativeHorizontalScroll() {
+  if (horizontalContactActive()) {
+    horizontalScrollEndDeferred = true
+    return
+  }
+  const hadPendingScroll = horizontalScrollPending
   clearHorizontalSettling()
   if (
+    !hadPendingScroll ||
     horizontalProgrammatic ||
     reflowPending.value ||
     navigationBusy.value ||
@@ -567,6 +591,25 @@ function finishNativeHorizontalScroll() {
     return
   }
   applySettledPage(nearestPage(), true)
+}
+
+function armHorizontalQuietFallback() {
+  const viewport = viewportRef.value
+  if (
+    !viewport ||
+    viewportSupportsScrollEnd(viewport) ||
+    horizontalContactActive() ||
+    !horizontalScrollPending
+  ) {
+    return
+  }
+  if (horizontalSettleTimer !== null) {
+    window.clearTimeout(horizontalSettleTimer)
+  }
+  horizontalSettleTimer = window.setTimeout(
+    finishNativeHorizontalScroll,
+    SCROLL_SETTLE_MS,
+  )
 }
 
 function onHorizontalScroll() {
@@ -578,24 +621,79 @@ function onHorizontalScroll() {
   ) {
     return
   }
+  horizontalScrollPending = true
+  horizontalScrollEndDeferred = false
   if (horizontalFrame === null) {
     horizontalFrame = window.requestAnimationFrame(() => {
       horizontalFrame = null
       nearestPage()
     })
   }
-  if (horizontalSettleTimer !== null) {
-    window.clearTimeout(horizontalSettleTimer)
+  if (viewportSupportsScrollEnd()) {
+    if (horizontalSettleTimer !== null) {
+      window.clearTimeout(horizontalSettleTimer)
+      horizontalSettleTimer = null
+    }
+    return
   }
-  horizontalSettleTimer = window.setTimeout(
-    finishNativeHorizontalScroll,
-    SCROLL_SETTLE_MS,
-  )
+  if (horizontalContactActive()) return
+  armHorizontalQuietFallback()
 }
 
 function onHorizontalScrollEnd() {
   if (horizontalProgrammatic || reflowPending.value || navigationBusy.value) return
+  if (!horizontalScrollPending) return
+  if (horizontalContactActive()) {
+    horizontalScrollEndDeferred = true
+    return
+  }
   finishNativeHorizontalScroll()
+}
+
+function finishHorizontalContact() {
+  if (horizontalContactActive() || !horizontalScrollPending) return
+  if (!viewportSupportsScrollEnd()) {
+    horizontalScrollEndDeferred = false
+    armHorizontalQuietFallback()
+    return
+  }
+  if (!horizontalScrollEndDeferred) return
+  if (horizontalContactReleaseFrame !== null) {
+    window.cancelAnimationFrame(horizontalContactReleaseFrame)
+  }
+  horizontalContactReleaseFrame = window.requestAnimationFrame(() => {
+    horizontalContactReleaseFrame = null
+    if (!horizontalContactActive() && horizontalScrollEndDeferred) {
+      finishNativeHorizontalScroll()
+    }
+  })
+}
+
+function onHorizontalPointerDown(event: PointerEvent) {
+  activeHorizontalPointers.add(event.pointerId)
+  horizontalScrollEndDeferred = false
+  if (horizontalSettleTimer !== null) {
+    window.clearTimeout(horizontalSettleTimer)
+    horizontalSettleTimer = null
+  }
+}
+
+function onHorizontalPointerEnd(event: PointerEvent) {
+  activeHorizontalPointers.delete(event.pointerId)
+  finishHorizontalContact()
+}
+
+function onHorizontalTouchChange(event: TouchEvent) {
+  activeHorizontalTouches = event.touches.length
+  if (activeHorizontalTouches > 0) {
+    horizontalScrollEndDeferred = false
+    if (horizontalSettleTimer !== null) {
+      window.clearTimeout(horizontalSettleTimer)
+      horizontalSettleTimer = null
+    }
+    return
+  }
+  finishHorizontalContact()
 }
 
 function finishPageScroll(pageIndex: number) {
@@ -746,6 +844,27 @@ useEventListener(viewportRef, 'scroll', onHorizontalScroll, { passive: true })
 useEventListener(viewportRef, 'scrollend', onHorizontalScrollEnd, {
   passive: true,
 })
+useEventListener(viewportRef, 'pointerdown', onHorizontalPointerDown, {
+  passive: true,
+})
+useEventListener(window, 'pointerup', onHorizontalPointerEnd, {
+  passive: true,
+})
+useEventListener(window, 'pointercancel', onHorizontalPointerEnd, {
+  passive: true,
+})
+useEventListener(viewportRef, 'lostpointercapture', onHorizontalPointerEnd, {
+  passive: true,
+})
+useEventListener(viewportRef, 'touchstart', onHorizontalTouchChange, {
+  passive: true,
+})
+useEventListener(viewportRef, 'touchend', onHorizontalTouchChange, {
+  passive: true,
+})
+useEventListener(viewportRef, 'touchcancel', onHorizontalTouchChange, {
+  passive: true,
+})
 useEventListener(window, 'keydown', onKeydown)
 useEventListener(window, 'resize', queueRebuild, { passive: true })
 useEventListener(window, 'orientationchange', queueRebuild, { passive: true })
@@ -788,6 +907,8 @@ onBeforeUnmount(() => {
   cancelQueuedRebuild()
   clearHorizontalSettling()
   clearVerticalSettling()
+  activeHorizontalPointers.clear()
+  activeHorizontalTouches = 0
   headerObserver?.disconnect()
   headerObserver = null
   resolveLayoutReady()
