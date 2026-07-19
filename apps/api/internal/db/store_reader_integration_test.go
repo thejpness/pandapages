@@ -134,6 +134,67 @@ func TestReaderStoreIntegration(t *testing.T) {
 		}
 		t.Cleanup(func() { _, _ = adminDB.Exec(`DELETE FROM stories WHERE id = $1`, draft.StoryID) })
 
+		exactReuse, err := store.AdminDraftUpsert(readerAccountA, req)
+		if err != nil {
+			t.Fatalf("reuse exact immutable version: %v", err)
+		}
+		if exactReuse.StoryVersionID != draft.StoryVersionID || exactReuse.Version != draft.Version ||
+			exactReuse.SegmentsCount != draft.SegmentsCount || exactReuse.RenderedHTML != draft.RenderedHTML {
+			t.Fatalf("exact reuse response = %#v, want locked stored version %#v", exactReuse, draft)
+		}
+
+		changedAuthor := "Different author"
+		changedLanguage := "cy"
+		metadataChanges := []struct {
+			name   string
+			change func(*model.AdminDraftUpsertRequest)
+		}{
+			{name: "title", change: func(changed *model.AdminDraftUpsertRequest) {
+				changed.Title = "Changed metadata with the same body"
+			}},
+			{name: "author", change: func(changed *model.AdminDraftUpsertRequest) {
+				changed.Author = &changedAuthor
+			}},
+			{name: "language", change: func(changed *model.AdminDraftUpsertRequest) {
+				changed.Language = &changedLanguage
+			}},
+			{name: "additive frontmatter", change: func(changed *model.AdminDraftUpsertRequest) {
+				changed.Markdown = "---\ndisplayNote: Different safe metadata\n---\n" + req.Markdown
+			}},
+		}
+		for _, metadataChange := range metadataChanges {
+			t.Run("same body changed "+metadataChange.name, func(t *testing.T) {
+				changed := req
+				metadataChange.change(&changed)
+				if _, err := store.AdminDraftUpsert(readerAccountA, changed); !errors.Is(err, model.ErrAdminVersionRepairRequired) {
+					t.Fatalf("metadata-only reuse error = %v, want repair-required", err)
+				}
+				var (
+					storedTitle    string
+					storedAuthor   sql.NullString
+					storedLanguage string
+					draftPointer   string
+				)
+				if err := adminDB.QueryRow(`
+					SELECT title, author, language, draft_version_id
+					FROM stories
+					WHERE id = $1
+				`, draft.StoryID).Scan(&storedTitle, &storedAuthor, &storedLanguage, &draftPointer); err != nil {
+					t.Fatalf("read story after metadata-only conflict: %v", err)
+				}
+				if storedTitle != req.Title || storedAuthor.Valid || storedLanguage != language ||
+					draftPointer != draft.StoryVersionID {
+					t.Fatalf(
+						"metadata-only conflict changed stored state: title=%q author=%#v language=%q pointer=%s",
+						storedTitle,
+						storedAuthor,
+						storedLanguage,
+						draftPointer,
+					)
+				}
+			})
+		}
+
 		// Preserve the segment count and structural shape while changing every
 		// content-bearing class of persisted field. Structural validation still
 		// passes; exact incoming-sequence comparison must refuse reuse.
@@ -202,6 +263,469 @@ func TestReaderStoreIntegration(t *testing.T) {
 		}
 	})
 
+	t.Run("idempotent reuse preserves full additive frontmatter", func(t *testing.T) {
+		req := model.AdminDraftUpsertRequest{
+			Slug:     "reuse-additive-frontmatter",
+			Title:    "Reuse additive frontmatter",
+			Language: &language,
+			Markdown: "---\ndisplayNote: Keep this note\nlargeMeasure: 1e21\npresentation:\n  tone: calm\n---\n# Reuse additive frontmatter\n\nReadable body.\n",
+		}
+		draft, err := store.AdminDraftUpsert(readerAccountA, req)
+		if err != nil {
+			t.Fatalf("insert additive-frontmatter target: %v", err)
+		}
+		t.Cleanup(func() { _, _ = adminDB.Exec(`DELETE FROM stories WHERE id = $1`, draft.StoryID) })
+		exact, err := store.AdminDraftUpsert(readerAccountA, req)
+		if err != nil {
+			t.Fatalf("reuse exact additive frontmatter: %v", err)
+		}
+		if exact.StoryVersionID != draft.StoryVersionID || exact.RenderedHTML != draft.RenderedHTML {
+			t.Fatalf("exact additive-frontmatter reuse = %#v, want version %s", exact, draft.StoryVersionID)
+		}
+
+		changed := req
+		changed.Markdown = strings.Replace(req.Markdown, "Keep this note", "Different note", 1)
+		if _, err := store.AdminDraftUpsert(readerAccountA, changed); !errors.Is(err, model.ErrAdminVersionRepairRequired) {
+			t.Fatalf("changed additive-frontmatter reuse error = %v, want repair-required", err)
+		}
+		var pointer string
+		if err := adminDB.QueryRow(`SELECT draft_version_id FROM stories WHERE id = $1`, draft.StoryID).Scan(&pointer); err != nil {
+			t.Fatalf("read additive-frontmatter pointer: %v", err)
+		}
+		if pointer != draft.StoryVersionID {
+			t.Fatalf("changed additive frontmatter moved pointer to %s", pointer)
+		}
+	})
+
+	t.Run("optional author frontmatter variants reuse canonically", func(t *testing.T) {
+		req := model.AdminDraftUpsertRequest{
+			Slug:     "reuse-optional-author",
+			Title:    "Reuse optional author",
+			Language: &language,
+			Markdown: "# Reuse optional author\n\nReadable body.\n",
+		}
+		draft, err := store.AdminDraftUpsert(readerAccountA, req)
+		if err != nil {
+			t.Fatalf("insert optional-author target: %v", err)
+		}
+		t.Cleanup(func() { _, _ = adminDB.Exec(`DELETE FROM stories WHERE id = $1`, draft.StoryID) })
+		variants := []struct {
+			name      string
+			statement string
+		}{
+			{name: "missing", statement: `UPDATE story_versions SET frontmatter = frontmatter - 'author' WHERE id = $1`},
+			{name: "null", statement: `UPDATE story_versions SET frontmatter = jsonb_set(frontmatter, '{author}', 'null'::jsonb, true) WHERE id = $1`},
+			{name: "blank", statement: `UPDATE story_versions SET frontmatter = jsonb_set(frontmatter, '{author}', to_jsonb('   '::text), true) WHERE id = $1`},
+		}
+		for _, variant := range variants {
+			t.Run(variant.name, func(t *testing.T) {
+				if _, err := adminDB.Exec(variant.statement, draft.StoryVersionID); err != nil {
+					t.Fatalf("set %s optional author: %v", variant.name, err)
+				}
+				exact, err := store.AdminDraftUpsert(readerAccountA, req)
+				if err != nil {
+					t.Fatalf("reuse %s optional author: %v", variant.name, err)
+				}
+				if exact.StoryVersionID != draft.StoryVersionID {
+					t.Fatalf("%s optional author reused version %s, want %s", variant.name, exact.StoryVersionID, draft.StoryVersionID)
+				}
+			})
+		}
+	})
+
+	t.Run("idempotent reuse refuses each persisted mismatch", func(t *testing.T) {
+		tests := []struct {
+			name   string
+			slug   string
+			mutate func(*testing.T, model.AdminDraftUpsertResponse)
+		}{
+			{
+				name: "valid but different immutable metadata",
+				slug: "reuse-metadata-mismatch",
+				mutate: func(t *testing.T, draft model.AdminDraftUpsertResponse) {
+					t.Helper()
+					if _, err := adminDB.Exec(`
+						UPDATE story_versions
+						SET frontmatter = jsonb_set(frontmatter, '{title}', to_jsonb('Different valid title'::text), true)
+						WHERE id = $1
+					`, draft.StoryVersionID); err != nil {
+						t.Fatalf("change immutable metadata: %v", err)
+					}
+				},
+			},
+			{
+				name: "valid but different immutable author",
+				slug: "reuse-author-mismatch",
+				mutate: func(t *testing.T, draft model.AdminDraftUpsertResponse) {
+					t.Helper()
+					if _, err := adminDB.Exec(`
+						UPDATE story_versions
+						SET frontmatter = jsonb_set(frontmatter, '{author}', to_jsonb('Different valid author'::text), true)
+						WHERE id = $1
+					`, draft.StoryVersionID); err != nil {
+						t.Fatalf("change immutable author: %v", err)
+					}
+				},
+			},
+			{
+				name: "valid but different immutable language",
+				slug: "reuse-language-mismatch",
+				mutate: func(t *testing.T, draft model.AdminDraftUpsertResponse) {
+					t.Helper()
+					if _, err := adminDB.Exec(`
+						UPDATE story_versions
+						SET frontmatter = jsonb_set(frontmatter, '{language}', to_jsonb('cy'::text), true)
+						WHERE id = $1
+					`, draft.StoryVersionID); err != nil {
+						t.Fatalf("change immutable language: %v", err)
+					}
+				},
+			},
+			{
+				name: "valid but different additive frontmatter",
+				slug: "reuse-additive-mismatch",
+				mutate: func(t *testing.T, draft model.AdminDraftUpsertResponse) {
+					t.Helper()
+					if _, err := adminDB.Exec(`
+						UPDATE story_versions
+						SET frontmatter = jsonb_set(frontmatter, '{displayNote}', to_jsonb('Different safe metadata'::text), true)
+						WHERE id = $1
+					`, draft.StoryVersionID); err != nil {
+						t.Fatalf("change additive frontmatter: %v", err)
+					}
+				},
+			},
+			{
+				name: "version markdown",
+				slug: "reuse-version-markdown",
+				mutate: func(t *testing.T, draft model.AdminDraftUpsertResponse) {
+					t.Helper()
+					if _, err := adminDB.Exec(`UPDATE story_versions SET markdown = markdown || E'\n' WHERE id = $1`, draft.StoryVersionID); err != nil {
+						t.Fatalf("change version Markdown: %v", err)
+					}
+				},
+			},
+			{
+				name: "version rendered HTML",
+				slug: "reuse-version-rendered",
+				mutate: func(t *testing.T, draft model.AdminDraftUpsertResponse) {
+					t.Helper()
+					if _, err := adminDB.Exec(`UPDATE story_versions SET rendered_html = '<p>Different rendering</p>' WHERE id = $1`, draft.StoryVersionID); err != nil {
+						t.Fatalf("change version rendered HTML: %v", err)
+					}
+				},
+			},
+			{
+				name: "version content hash",
+				slug: "reuse-version-content-hash",
+				mutate: func(t *testing.T, draft model.AdminDraftUpsertResponse) {
+					t.Helper()
+					if _, err := adminDB.Exec(`UPDATE story_versions SET content_hash = $2 WHERE id = $1`, draft.StoryVersionID, strings.Repeat("0", 64)); err != nil {
+						t.Fatalf("change version content hash: %v", err)
+					}
+				},
+			},
+			{
+				name: "segment markdown",
+				slug: "reuse-segment-markdown",
+				mutate: func(t *testing.T, draft model.AdminDraftUpsertResponse) {
+					t.Helper()
+					if _, err := adminDB.Exec(`UPDATE story_segments SET markdown = 'Different Markdown.' WHERE story_version_id = $1 AND ordinal = 2`, draft.StoryVersionID); err != nil {
+						t.Fatalf("change segment Markdown: %v", err)
+					}
+				},
+			},
+			{
+				name: "segment rendered HTML",
+				slug: "reuse-segment-rendered",
+				mutate: func(t *testing.T, draft model.AdminDraftUpsertResponse) {
+					t.Helper()
+					if _, err := adminDB.Exec(`UPDATE story_segments SET rendered_html = '<p>Different rendering.</p>' WHERE story_version_id = $1 AND ordinal = 2`, draft.StoryVersionID); err != nil {
+						t.Fatalf("change segment rendered HTML: %v", err)
+					}
+				},
+			},
+			{
+				name: "segment identity",
+				slug: "reuse-segment-identity",
+				mutate: func(t *testing.T, draft model.AdminDraftUpsertResponse) {
+					t.Helper()
+					if _, err := adminDB.Exec(`UPDATE story_segments SET content_key = $2 WHERE story_version_id = $1 AND ordinal = 2`, draft.StoryVersionID, strings.Repeat("f", 64)); err != nil {
+						t.Fatalf("change segment identity: %v", err)
+					}
+				},
+			},
+			{
+				name: "segment word count",
+				slug: "reuse-segment-word-count",
+				mutate: func(t *testing.T, draft model.AdminDraftUpsertResponse) {
+					t.Helper()
+					if _, err := adminDB.Exec(`UPDATE story_segments SET word_count = word_count + 1 WHERE story_version_id = $1 AND ordinal = 2`, draft.StoryVersionID); err != nil {
+						t.Fatalf("change segment word count: %v", err)
+					}
+				},
+			},
+			{
+				name: "reordered segments",
+				slug: "reuse-reordered-segments",
+				mutate: func(t *testing.T, draft model.AdminDraftUpsertResponse) {
+					t.Helper()
+					tx, err := adminDB.Begin()
+					if err != nil {
+						t.Fatalf("begin segment reorder: %v", err)
+					}
+					defer func() { _ = tx.Rollback() }()
+					for _, statement := range []string{
+						`UPDATE story_segments SET ordinal = 100 WHERE story_version_id = $1 AND ordinal = 1`,
+						`UPDATE story_segments SET ordinal = 1 WHERE story_version_id = $1 AND ordinal = 2`,
+						`UPDATE story_segments SET ordinal = 2 WHERE story_version_id = $1 AND ordinal = 100`,
+					} {
+						if _, err := tx.Exec(statement, draft.StoryVersionID); err != nil {
+							t.Fatalf("reorder segments: %v", err)
+						}
+					}
+					if err := tx.Commit(); err != nil {
+						t.Fatalf("commit segment reorder: %v", err)
+					}
+				},
+			},
+			{
+				name: "one missing segment",
+				slug: "reuse-missing-segment",
+				mutate: func(t *testing.T, draft model.AdminDraftUpsertResponse) {
+					t.Helper()
+					if _, err := adminDB.Exec(`DELETE FROM story_segments WHERE story_version_id = $1 AND ordinal = 3`, draft.StoryVersionID); err != nil {
+						t.Fatalf("delete one segment: %v", err)
+					}
+				},
+			},
+			{
+				name: "all segments deleted",
+				slug: "reuse-deleted-segments",
+				mutate: func(t *testing.T, draft model.AdminDraftUpsertResponse) {
+					t.Helper()
+					if _, err := adminDB.Exec(`DELETE FROM story_segments WHERE story_version_id = $1`, draft.StoryVersionID); err != nil {
+						t.Fatalf("delete all segments: %v", err)
+					}
+				},
+			},
+		}
+
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				req := model.AdminDraftUpsertRequest{
+					Slug:     test.slug,
+					Title:    "Persisted mismatch target",
+					Language: &language,
+					Markdown: "# Persisted mismatch target\n\nFirst paragraph.\n\nSecond paragraph.\n",
+				}
+				draft, err := store.AdminDraftUpsert(readerAccountA, req)
+				if err != nil {
+					t.Fatalf("insert persisted mismatch target: %v", err)
+				}
+				t.Cleanup(func() { _, _ = adminDB.Exec(`DELETE FROM stories WHERE id = $1`, draft.StoryID) })
+				test.mutate(t, draft)
+
+				if _, err := store.AdminDraftUpsert(readerAccountA, req); !errors.Is(err, model.ErrAdminVersionRepairRequired) {
+					t.Fatalf("corrupt reuse error = %v, want repair-required", err)
+				}
+				var (
+					versionCount int
+					draftPointer string
+				)
+				if err := adminDB.QueryRow(`SELECT count(*) FROM story_versions WHERE story_id = $1`, draft.StoryID).Scan(&versionCount); err != nil {
+					t.Fatalf("count versions after reuse refusal: %v", err)
+				}
+				if err := adminDB.QueryRow(`SELECT draft_version_id FROM stories WHERE id = $1`, draft.StoryID).Scan(&draftPointer); err != nil {
+					t.Fatalf("read pointer after reuse refusal: %v", err)
+				}
+				if versionCount != 1 || draftPointer != draft.StoryVersionID {
+					t.Fatalf("reuse refusal changed version state: count=%d pointer=%s", versionCount, draftPointer)
+				}
+			})
+		}
+	})
+
+	t.Run("idempotent reuse reads one locked version snapshot", func(t *testing.T) {
+		req := model.AdminDraftUpsertRequest{
+			Slug:     "reuse-version-lock",
+			Title:    "Reuse version lock",
+			Language: &language,
+			Markdown: "# Reuse version lock\n\nReadable body.\n",
+		}
+		draft, err := store.AdminDraftUpsert(readerAccountA, req)
+		if err != nil {
+			t.Fatalf("insert reuse lock target: %v", err)
+		}
+		t.Cleanup(func() { _, _ = adminDB.Exec(`DELETE FROM stories WHERE id = $1`, draft.StoryID) })
+
+		mutationTx, err := adminDB.Begin()
+		if err != nil {
+			t.Fatalf("begin concurrent version mutation: %v", err)
+		}
+		mutationFinished := false
+		defer func() {
+			if !mutationFinished {
+				_ = mutationTx.Rollback()
+			}
+		}()
+		if _, err := mutationTx.Exec(`
+			UPDATE story_versions
+			SET rendered_html = '<p>Committed concurrent mismatch.</p>'
+			WHERE id = $1
+		`, draft.StoryVersionID); err != nil {
+			t.Fatalf("hold concurrent version mutation: %v", err)
+		}
+
+		const reuseApplicationName = "reader_reuse_version_lock_test"
+		lockingStore := newReaderIntegrationStoreWithApplicationName(t, databaseURL, reuseApplicationName)
+		reuseResult := make(chan error, 1)
+		go func() {
+			_, err := lockingStore.AdminDraftUpsert(readerAccountA, req)
+			reuseResult <- err
+		}()
+
+		lockDeadline := time.Now().Add(5 * time.Second)
+		lockObserved := false
+		for time.Now().Before(lockDeadline) {
+			select {
+			case err := <-reuseResult:
+				t.Fatalf("AdminDraftUpsert returned before version mutation committed: %v", err)
+			default:
+			}
+			if err := adminDB.QueryRow(`
+				SELECT EXISTS (
+					SELECT 1
+					FROM pg_stat_activity
+					WHERE application_name = $1
+					  AND state = 'active'
+					  AND wait_event_type = 'Lock'
+					  AND query LIKE '%content_hash = $2%'
+				)
+			`, reuseApplicationName).Scan(&lockObserved); err != nil {
+				t.Fatalf("inspect blocked idempotent reuse: %v", err)
+			}
+			if lockObserved {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if !lockObserved {
+			t.Fatal("AdminDraftUpsert did not wait for the concurrent version mutation")
+		}
+		if err := mutationTx.Commit(); err != nil {
+			t.Fatalf("commit concurrent version mutation: %v", err)
+		}
+		mutationFinished = true
+
+		select {
+		case err := <-reuseResult:
+			if !errors.Is(err, model.ErrAdminVersionRepairRequired) {
+				t.Fatalf("reuse after committed version mutation = %v, want repair-required", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("AdminDraftUpsert remained blocked after version mutation committed")
+		}
+
+		var draftPointer string
+		if err := adminDB.QueryRow(`SELECT draft_version_id FROM stories WHERE id = $1`, draft.StoryID).Scan(&draftPointer); err != nil {
+			t.Fatalf("read pointer after concurrent reuse refusal: %v", err)
+		}
+		if draftPointer != draft.StoryVersionID {
+			t.Fatalf("concurrent reuse refusal changed draft pointer to %s", draftPointer)
+		}
+	})
+
+	t.Run("idempotent reuse locks the persisted segment sequence", func(t *testing.T) {
+		req := model.AdminDraftUpsertRequest{
+			Slug:     "reuse-segment-lock",
+			Title:    "Reuse segment lock",
+			Language: &language,
+			Markdown: "# Reuse segment lock\n\nReadable body.\n",
+		}
+		draft, err := store.AdminDraftUpsert(readerAccountA, req)
+		if err != nil {
+			t.Fatalf("insert reuse segment-lock target: %v", err)
+		}
+		t.Cleanup(func() { _, _ = adminDB.Exec(`DELETE FROM stories WHERE id = $1`, draft.StoryID) })
+
+		mutationTx, err := adminDB.Begin()
+		if err != nil {
+			t.Fatalf("begin concurrent segment reuse mutation: %v", err)
+		}
+		mutationFinished := false
+		defer func() {
+			if !mutationFinished {
+				_ = mutationTx.Rollback()
+			}
+		}()
+		if _, err := mutationTx.Exec(`
+			UPDATE story_segments
+			SET rendered_html = '<p>Committed segment mismatch.</p>'
+			WHERE story_version_id = $1 AND ordinal = 2
+		`, draft.StoryVersionID); err != nil {
+			t.Fatalf("hold concurrent segment reuse mutation: %v", err)
+		}
+
+		const reuseApplicationName = "reader_reuse_segment_lock_test"
+		lockingStore := newReaderIntegrationStoreWithApplicationName(t, databaseURL, reuseApplicationName)
+		reuseResult := make(chan error, 1)
+		go func() {
+			_, err := lockingStore.AdminDraftUpsert(readerAccountA, req)
+			reuseResult <- err
+		}()
+
+		lockDeadline := time.Now().Add(5 * time.Second)
+		lockObserved := false
+		for time.Now().Before(lockDeadline) {
+			select {
+			case err := <-reuseResult:
+				t.Fatalf("AdminDraftUpsert returned before segment mutation committed: %v", err)
+			default:
+			}
+			if err := adminDB.QueryRow(`
+				SELECT EXISTS (
+					SELECT 1
+					FROM pg_stat_activity
+					WHERE application_name = $1
+					  AND state = 'active'
+					  AND wait_event_type = 'Lock'
+					  AND query LIKE '%FOR SHARE OF segment%'
+				)
+			`, reuseApplicationName).Scan(&lockObserved); err != nil {
+				t.Fatalf("inspect blocked segment reuse: %v", err)
+			}
+			if lockObserved {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if !lockObserved {
+			t.Fatal("AdminDraftUpsert did not wait for the concurrent segment mutation")
+		}
+		if err := mutationTx.Commit(); err != nil {
+			t.Fatalf("commit concurrent segment reuse mutation: %v", err)
+		}
+		mutationFinished = true
+
+		select {
+		case err := <-reuseResult:
+			if !errors.Is(err, model.ErrAdminVersionRepairRequired) {
+				t.Fatalf("reuse after committed segment mutation = %v, want repair-required", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("AdminDraftUpsert remained blocked after segment mutation committed")
+		}
+
+		var draftPointer string
+		if err := adminDB.QueryRow(`SELECT draft_version_id FROM stories WHERE id = $1`, draft.StoryID).Scan(&draftPointer); err != nil {
+			t.Fatalf("read pointer after concurrent segment reuse refusal: %v", err)
+		}
+		if draftPointer != draft.StoryVersionID {
+			t.Fatalf("concurrent segment reuse refusal changed draft pointer to %s", draftPointer)
+		}
+	})
+
 	t.Run("publication validates immutable metadata identities and readable content atomically", func(t *testing.T) {
 		const slug = "publication-validation-story"
 		first, err := store.AdminDraftUpsert(readerAccountA, model.AdminDraftUpsertRequest{
@@ -244,6 +768,190 @@ func TestReaderStoreIntegration(t *testing.T) {
 				t.Fatalf("publication pointer = published %t / %s, want true / %s", isPublished, publishedID, want)
 			}
 		}
+
+		var (
+			originalVersionMarkdown string
+			originalVersionRendered string
+			originalContentHash     string
+		)
+		if err := adminDB.QueryRow(`
+			SELECT markdown, rendered_html, content_hash
+			FROM story_versions
+			WHERE id = $1
+		`, second.StoryVersionID).Scan(&originalVersionMarkdown, &originalVersionRendered, &originalContentHash); err != nil {
+			t.Fatalf("read canonical version fields: %v", err)
+		}
+		versionMutations := []struct {
+			name      string
+			column    string
+			badValue  string
+			goodValue string
+		}{
+			{name: "version Markdown", column: "markdown", badValue: originalVersionMarkdown + "\n", goodValue: originalVersionMarkdown},
+			{name: "version rendered HTML", column: "rendered_html", badValue: "<p>Different version rendering.</p>", goodValue: originalVersionRendered},
+			{name: "version content hash", column: "content_hash", badValue: strings.Repeat("0", 64), goodValue: originalContentHash},
+		}
+		for _, mutation := range versionMutations {
+			t.Run(mutation.name, func(t *testing.T) {
+				// Column names are fixed test constants; values remain parameters.
+				if _, err := adminDB.Exec(
+					`UPDATE story_versions SET `+mutation.column+` = $2 WHERE id = $1`,
+					second.StoryVersionID,
+					mutation.badValue,
+				); err != nil {
+					t.Fatalf("mutate %s: %v", mutation.name, err)
+				}
+				if err := store.AdminPublish(readerAccountA, slug, second.StoryVersionID); !errors.Is(err, model.ErrAdminPublishInvalid) {
+					t.Fatalf("publish noncanonical %s error = %v, want publish-invalid", mutation.name, err)
+				}
+				assertPublishedPointer(first.StoryVersionID)
+				if _, err := adminDB.Exec(
+					`UPDATE story_versions SET `+mutation.column+` = $2 WHERE id = $1`,
+					second.StoryVersionID,
+					mutation.goodValue,
+				); err != nil {
+					t.Fatalf("restore %s: %v", mutation.name, err)
+				}
+			})
+		}
+
+		frontmatterMutations := []struct {
+			name      string
+			path      string
+			badValue  string
+			goodValue string
+		}{
+			{name: "noncanonical title whitespace", path: "title", badValue: " Publication validation v2 ", goodValue: "Publication validation v2"},
+			{name: "noncanonical author whitespace", path: "author", badValue: " Padded author ", goodValue: ""},
+			{name: "noncanonical language whitespace", path: "language", badValue: " en-GB ", goodValue: language},
+		}
+		for _, mutation := range frontmatterMutations {
+			t.Run(mutation.name, func(t *testing.T) {
+				if _, err := adminDB.Exec(`
+					UPDATE story_versions
+					SET frontmatter = jsonb_set(frontmatter, ARRAY[$2]::text[], to_jsonb($3::text), true)
+					WHERE id = $1
+				`, second.StoryVersionID, mutation.path, mutation.badValue); err != nil {
+					t.Fatalf("mutate %s: %v", mutation.name, err)
+				}
+				if err := store.AdminPublish(readerAccountA, slug, second.StoryVersionID); !errors.Is(err, model.ErrAdminPublishInvalid) {
+					t.Fatalf("publish %s error = %v, want publish-invalid", mutation.name, err)
+				}
+				assertPublishedPointer(first.StoryVersionID)
+				if _, err := adminDB.Exec(`
+					UPDATE story_versions
+					SET frontmatter = jsonb_set(frontmatter, ARRAY[$2]::text[], to_jsonb($3::text), true)
+					WHERE id = $1
+				`, second.StoryVersionID, mutation.path, mutation.goodValue); err != nil {
+					t.Fatalf("restore %s: %v", mutation.name, err)
+				}
+			})
+		}
+
+		var (
+			originalSegmentMarkdown string
+			originalSegmentRendered string
+		)
+		if err := adminDB.QueryRow(`
+			SELECT markdown, rendered_html
+			FROM story_segments
+			WHERE story_version_id = $1 AND ordinal = 3
+		`, second.StoryVersionID).Scan(&originalSegmentMarkdown, &originalSegmentRendered); err != nil {
+			t.Fatalf("read canonical segment content: %v", err)
+		}
+		segmentMutations := []struct {
+			name         string
+			column       string
+			badValue     string
+			goodValue    string
+			assertReader bool
+		}{
+			{name: "segment Markdown", column: "markdown", badValue: "Different segment Markdown.", goodValue: originalSegmentMarkdown},
+			{name: "segment rendered HTML", column: "rendered_html", badValue: "<p>Different segment rendering.</p>", goodValue: originalSegmentRendered},
+			{name: "unsafe event-handler rendered HTML", column: "rendered_html", badValue: `<img src=x onerror="globalThis.__ppUnsafe=true">`, goodValue: originalSegmentRendered, assertReader: true},
+			{name: "unsafe JavaScript link rendered HTML", column: "rendered_html", badValue: `<a href="javascript:globalThis.__ppUnsafe=true">Unsafe</a>`, goodValue: originalSegmentRendered, assertReader: true},
+		}
+		for _, mutation := range segmentMutations {
+			t.Run(mutation.name, func(t *testing.T) {
+				if _, err := adminDB.Exec(
+					`UPDATE story_segments SET `+mutation.column+` = $2 WHERE story_version_id = $1 AND ordinal = 3`,
+					second.StoryVersionID,
+					mutation.badValue,
+				); err != nil {
+					t.Fatalf("mutate %s: %v", mutation.name, err)
+				}
+				if err := store.AdminPublish(readerAccountA, slug, second.StoryVersionID); !errors.Is(err, model.ErrAdminPublishInvalid) {
+					t.Fatalf("publish noncanonical %s error = %v, want publish-invalid", mutation.name, err)
+				}
+				assertPublishedPointer(first.StoryVersionID)
+				if mutation.assertReader {
+					readerStory, err := store.ReaderStory(readerAccountA, slug)
+					if err != nil {
+						t.Fatalf("read prior safe publication after %s refusal: %v", mutation.name, err)
+					}
+					if readerStory.Version != first.Version {
+						t.Fatalf("Reader returned version %d after %s refusal, want %d", readerStory.Version, mutation.name, first.Version)
+					}
+					for _, segment := range readerStory.Segments {
+						lower := strings.ToLower(segment.RenderedHTML)
+						if strings.Contains(lower, "onerror") || strings.Contains(lower, "javascript:") ||
+							strings.Contains(lower, "__ppunsafe") {
+							t.Fatalf("Reader exposed refused active content after %s: %s", mutation.name, segment.RenderedHTML)
+						}
+					}
+				}
+				if _, err := adminDB.Exec(
+					`UPDATE story_segments SET `+mutation.column+` = $2 WHERE story_version_id = $1 AND ordinal = 3`,
+					second.StoryVersionID,
+					mutation.goodValue,
+				); err != nil {
+					t.Fatalf("restore %s: %v", mutation.name, err)
+				}
+			})
+		}
+
+		t.Run("raw HTML only manual version has no readable segment", func(t *testing.T) {
+			const (
+				rawMarkdown        = "<script>alert(1)</script>\n"
+				rawSegmentMarkdown = "<script>alert(1)</script>"
+				rawRendered        = "<!-- raw HTML omitted -->\n"
+				rawContentHash     = "cfc151a63b53ac09647ea69d07410784a48c62c857ab6079e2ee8b3a3c9efbbe"
+				rawContentKey      = "4a2812dc34b4ed923adb2ca9c952e7c5308f36082a3097763c4d9481a64edab6"
+			)
+			var rawVersionID string
+			if err := adminDB.QueryRow(`
+				INSERT INTO story_versions (
+					story_id, version, frontmatter, markdown, rendered_html, content_hash
+				) VALUES (
+					$1, 3, '{"title":"Unreadable manual version","author":"","language":"en-GB"}',
+					$2, $3, $4
+				)
+				RETURNING id
+			`, first.StoryID, rawMarkdown, rawRendered, rawContentHash).Scan(&rawVersionID); err != nil {
+				t.Fatalf("insert raw-HTML-only version: %v", err)
+			}
+			t.Cleanup(func() { _, _ = adminDB.Exec(`DELETE FROM story_versions WHERE id = $1`, rawVersionID) })
+			if _, err := adminDB.Exec(`
+				INSERT INTO story_segments (
+					story_version_id, ordinal, segment_kind, content_key, content_occurrence,
+					markdown, rendered_html, word_count
+				) VALUES ($1, 1, 'other', $2, 1, $3, $4, 1)
+			`, rawVersionID, rawContentKey, rawSegmentMarkdown, rawRendered); err != nil {
+				t.Fatalf("insert raw-HTML-only segment: %v", err)
+			}
+
+			if err := store.AdminPublish(readerAccountA, slug, rawVersionID); !errors.Is(err, model.ErrAdminPublishInvalid) {
+				t.Fatalf("publish raw-HTML-only version error = %v, want publish-invalid", err)
+			}
+			assertPublishedPointer(first.StoryVersionID)
+			readerStory, err := store.ReaderStory(readerAccountA, slug)
+			if err != nil {
+				t.Fatalf("read prior safe publication after raw-only refusal: %v", err)
+			}
+			if readerStory.Version != first.Version {
+				t.Fatalf("Reader returned version %d after raw-only refusal, want %d", readerStory.Version, first.Version)
+			}
+		})
 
 		if _, err := adminDB.Exec(`UPDATE story_versions SET frontmatter = frontmatter - 'title' WHERE id = $1`, second.StoryVersionID); err != nil {
 			t.Fatalf("remove immutable title: %v", err)

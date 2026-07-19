@@ -777,7 +777,9 @@ func setupAccountIntegrationSchema(t *testing.T, database *sql.DB) {
 			story_id uuid NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
 			version integer NOT NULL,
 			frontmatter jsonb NOT NULL DEFAULT '{}'::jsonb,
+			markdown text NOT NULL DEFAULT '',
 			rendered_html text NOT NULL,
+			content_hash text NOT NULL DEFAULT '',
 			UNIQUE (story_id, version)
 		)`,
 		`ALTER TABLE stories
@@ -793,6 +795,7 @@ func setupAccountIntegrationSchema(t *testing.T, database *sql.DB) {
 			content_occurrence integer NOT NULL,
 			chapter_key text,
 			chapter_occurrence integer,
+			markdown text NOT NULL DEFAULT '',
 			rendered_html text NOT NULL DEFAULT '',
 			word_count integer NOT NULL,
 			UNIQUE (story_version_id, ordinal)

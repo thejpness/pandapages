@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"html"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -119,6 +120,22 @@ func wordCount(s string) int {
 	return len(strings.Fields(strings.ReplaceAll(s, "\n", " ")))
 }
 
+func hasReadableRenderedText(rendered string) bool {
+	var text strings.Builder
+	inTag := false
+	for _, character := range rendered {
+		switch {
+		case !inTag && character == '<':
+			inTag = true
+		case inTag && character == '>':
+			inTag = false
+		case !inTag:
+			text.WriteRune(character)
+		}
+	}
+	return strings.TrimSpace(html.UnescapeString(text.String())) != ""
+}
+
 func extractBlockSource(src []byte, n ast.Node) string {
 	type liner interface{ Lines() *text.Segments }
 	l, ok := n.(liner)
@@ -173,6 +190,18 @@ func validateUTF8(in Input) error {
 }
 
 func Ingest(in Input) (Output, error) {
+	return ingest(in, false, nil)
+}
+
+// CanonicalizeStoredBody applies the same rendering, segmentation, and Reader
+// identity contract as Ingest to a story-version body whose outer frontmatter
+// has already been removed. Stored bodies must not be reparsed for frontmatter:
+// a legitimate body can itself begin with a thematic break.
+func CanonicalizeStoredBody(in Input, frontmatter map[string]any) (Output, error) {
+	return ingest(in, true, frontmatter)
+}
+
+func ingest(in Input, bodyAlreadySplit bool, presetFrontmatter map[string]any) (Output, error) {
 	if err := validateUTF8(in); err != nil {
 		return Output{}, err
 	}
@@ -194,9 +223,18 @@ func Ingest(in Input) (Output, error) {
 		return Output{}, fmt.Errorf("markdown is required")
 	}
 
-	fm, body, err := splitFrontmatter(in.Markdown)
-	if err != nil {
-		return Output{}, err
+	fm := map[string]any{}
+	body := in.Markdown
+	if bodyAlreadySplit {
+		for key, value := range presetFrontmatter {
+			fm[key] = value
+		}
+	} else {
+		var err error
+		fm, body, err = splitFrontmatter(in.Markdown)
+		if err != nil {
+			return Output{}, err
+		}
 	}
 
 	// prefer explicit fields, fall back to frontmatter
@@ -284,6 +322,16 @@ func Ingest(in Input) (Output, error) {
 		}
 	}
 	if len(segs) == 0 {
+		return Output{}, fmt.Errorf("story must contain at least one readable segment")
+	}
+	hasReadableSegment := false
+	for _, segment := range segs {
+		if hasReadableRenderedText(segment.RenderedHTML) {
+			hasReadableSegment = true
+			break
+		}
+	}
+	if !hasReadableSegment {
 		return Output{}, fmt.Errorf("story must contain at least one readable segment")
 	}
 
