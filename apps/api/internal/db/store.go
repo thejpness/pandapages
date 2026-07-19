@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"pandapages/api/internal/model"
 	"pandapages/api/internal/readercontract"
@@ -259,17 +260,154 @@ func (s *Store) getDefaultProfileID(ctx context.Context, accountID string) (stri
 
 /* ----------------------------- Library ----------------------------- */
 
+const maxSafeJSONInteger int64 = 1<<53 - 1
+
+var librarySlugPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+
+func validLibrarySlug(slug string) bool {
+	return utf8.ValidString(slug) && librarySlugPattern.MatchString(slug)
+}
+
+func libraryVersionMetadata(
+	frontmatterJSON []byte,
+) (string, *string, string, error) {
+	var frontmatter map[string]json.RawMessage
+	if err := json.Unmarshal(frontmatterJSON, &frontmatter); err != nil || frontmatter == nil {
+		if err == nil {
+			err = fmt.Errorf("frontmatter must be an object")
+		}
+		return "", nil, "", fmt.Errorf("decode published version frontmatter: %w", err)
+	}
+
+	// Only immutable version-owned metadata is safe here. The story columns are
+	// updated when a newer draft is uploaded, before that draft is published.
+	// Falling back to them would expose draft metadata beside older published
+	// content.
+	var titleValue string
+	if raw, ok := frontmatter["title"]; !ok {
+		return "", nil, "", fmt.Errorf("published version title is missing")
+	} else if err := json.Unmarshal(raw, &titleValue); err != nil {
+		return "", nil, "", fmt.Errorf("published version title is not a string")
+	}
+	title := strings.TrimSpace(titleValue)
+	if title == "" || !utf8.ValidString(title) {
+		return "", nil, "", fmt.Errorf("published version title is invalid")
+	}
+
+	var author *string
+	if raw, ok := frontmatter["author"]; ok {
+		if string(raw) == "null" {
+			author = nil
+		} else {
+			var value string
+			if err := json.Unmarshal(raw, &value); err != nil {
+				return "", nil, "", fmt.Errorf("published version author is not a string or null")
+			}
+			value = strings.TrimSpace(value)
+			if !utf8.ValidString(value) {
+				return "", nil, "", fmt.Errorf("published version author is invalid")
+			}
+			if value == "" {
+				author = nil
+			} else {
+				author = &value
+			}
+		}
+	}
+
+	var languageValue string
+	if raw, ok := frontmatter["language"]; !ok {
+		return "", nil, "", fmt.Errorf("published version language is missing")
+	} else if err := json.Unmarshal(raw, &languageValue); err != nil {
+		return "", nil, "", fmt.Errorf("published version language is not a string")
+	}
+	language := strings.TrimSpace(languageValue)
+	if language == "" || !utf8.ValidString(language) {
+		return "", nil, "", fmt.Errorf("published version language is invalid")
+	}
+
+	return title, author, language, nil
+}
+
 func (s *Store) Library(accountID string) ([]model.StoryItem, error) {
 	ctx, cancel := s.ctx()
 	defer cancel()
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT s.slug, s.title, NULLIF(BTRIM(s.author), '')
-		FROM stories s
-		WHERE s.account_id = $1
-		  AND s.published_version_id IS NOT NULL
-		ORDER BY s.updated_at DESC, s.created_at DESC
-		LIMIT 100
+		WITH published AS (
+			SELECT
+				story.id AS story_id,
+				story.slug,
+				story.created_at,
+				story.updated_at,
+				version.id AS published_version_id,
+				version.version AS published_version,
+				version.frontmatter
+			FROM stories AS story
+			JOIN story_versions AS version
+			  ON version.id = story.published_version_id
+			 AND version.story_id = story.id
+			WHERE story.account_id = $1
+			  AND story.is_published = true
+			  AND story.published_version_id IS NOT NULL
+		), default_profile AS (
+			SELECT profile.id
+			FROM profiles AS profile
+			WHERE profile.account_id = $1
+			  AND profile.name = 'Default'
+			ORDER BY profile.created_at ASC, profile.id ASC
+			LIMIT 1
+		), segment_totals AS (
+			SELECT
+				published.published_version_id,
+				COALESCE(SUM(segment.word_count), 0)::bigint AS word_count,
+				COUNT(segment.id) FILTER (
+					WHERE segment.segment_kind = 'heading'
+					  AND segment.heading_level = 2
+				)::bigint AS chapter_count,
+				COUNT(segment.id) FILTER (
+					WHERE segment.word_count < 0
+				)::bigint AS invalid_word_count,
+				COUNT(segment.id) FILTER (
+					WHERE segment.segment_kind = 'heading'
+					  AND segment.heading_level = 2
+					  AND (
+						segment.chapter_key IS NULL
+						OR segment.chapter_occurrence IS NULL
+						OR segment.chapter_key <> segment.content_key
+						OR segment.chapter_occurrence <> segment.content_occurrence
+					  )
+				)::bigint AS invalid_chapter_count
+			FROM published
+			LEFT JOIN story_segments AS segment
+			  ON segment.story_version_id = published.published_version_id
+			GROUP BY published.published_version_id
+		)
+		SELECT
+			published.slug,
+			published.frontmatter,
+			published.published_version_id,
+			published.published_version,
+			segment_totals.word_count,
+			segment_totals.chapter_count,
+			segment_totals.invalid_word_count,
+			segment_totals.invalid_chapter_count,
+			progress.story_version_id,
+			progress_version.version,
+			progress.percent,
+			progress.updated_at
+		FROM published
+		JOIN segment_totals
+		  ON segment_totals.published_version_id = published.published_version_id
+		LEFT JOIN default_profile
+		  ON true
+		LEFT JOIN reading_progress AS progress
+		  ON progress.profile_id = default_profile.id
+		 AND progress.story_id = published.story_id
+		LEFT JOIN story_versions AS progress_version
+		  ON progress_version.id = progress.story_version_id
+		 AND progress_version.story_id = published.story_id
+		ORDER BY published.updated_at DESC, published.created_at DESC, published.slug ASC
 	`, accountID)
 	if err != nil {
 		return nil, err
@@ -278,13 +416,78 @@ func (s *Store) Library(accountID string) ([]model.StoryItem, error) {
 
 	items := make([]model.StoryItem, 0, 16)
 	for rows.Next() {
-		var it model.StoryItem
-		var author sql.NullString
-		if err := rows.Scan(&it.Slug, &it.Title, &author); err != nil {
+		var (
+			item                model.StoryItem
+			frontmatterJSON     []byte
+			publishedVersionID  string
+			wordCount           int64
+			chapterCount        int64
+			invalidWordCount    int64
+			invalidChapterCount int64
+			progressVersionID   sql.NullString
+			progressVersion     sql.NullInt64
+			progressPercent     sql.NullFloat64
+			progressUpdatedAt   sql.NullTime
+		)
+		if err := rows.Scan(
+			&item.Slug,
+			&frontmatterJSON,
+			&publishedVersionID,
+			&item.PublishedVersion,
+			&wordCount,
+			&chapterCount,
+			&invalidWordCount,
+			&invalidChapterCount,
+			&progressVersionID,
+			&progressVersion,
+			&progressPercent,
+			&progressUpdatedAt,
+		); err != nil {
 			return nil, err
 		}
-		it.Author = strPtr(author)
-		items = append(items, it)
+
+		if !validLibrarySlug(item.Slug) {
+			return nil, fmt.Errorf("published story slug is invalid")
+		}
+		if strings.TrimSpace(publishedVersionID) == "" || item.PublishedVersion <= 0 {
+			return nil, fmt.Errorf("published story version is invalid")
+		}
+		if invalidWordCount != 0 || wordCount < 0 || wordCount > maxSafeJSONInteger {
+			return nil, fmt.Errorf("published story word count is invalid")
+		}
+		if invalidChapterCount != 0 || chapterCount < 0 || chapterCount > maxSafeJSONInteger {
+			return nil, fmt.Errorf("published story chapter count is invalid")
+		}
+
+		title, author, language, err := libraryVersionMetadata(frontmatterJSON)
+		if err != nil {
+			return nil, err
+		}
+		item.Title = title
+		item.Author = author
+		item.Language = language
+		item.WordCount = wordCount
+		item.ChapterCount = chapterCount
+
+		if progressVersionID.Valid {
+			if strings.TrimSpace(progressVersionID.String) == "" ||
+				!progressVersion.Valid || progressVersion.Int64 <= 0 ||
+				!progressPercent.Valid || math.IsNaN(progressPercent.Float64) || math.IsInf(progressPercent.Float64, 0) ||
+				progressPercent.Float64 < 0 || progressPercent.Float64 > 1 ||
+				!progressUpdatedAt.Valid || progressUpdatedAt.Time.IsZero() {
+				return nil, fmt.Errorf("stored library progress is incomplete or invalid")
+			}
+			item.Progress = &model.LibraryProgressSummary{
+				Version:          int(progressVersion.Int64),
+				Percent:          progressPercent.Float64,
+				UpdatedAt:        progressUpdatedAt.Time,
+				IsCurrentVersion: progressVersionID.String == publishedVersionID,
+			}
+		} else if progressVersion.Valid || progressPercent.Valid || progressUpdatedAt.Valid {
+			return nil, fmt.Errorf("stored library progress is incomplete or invalid")
+		}
+
+		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

@@ -163,15 +163,247 @@ export async function logout(): Promise<void> {
 
 /* ---------------------------- Library --------------------------- */
 
-export type LibraryItem = {
+export type LibraryProgress = {
+  version: number
+  percent: number
+  updatedAt: string
+  isCurrentVersion: boolean
+}
+
+export type LibraryProgressAvailability = 'available' | 'unavailable'
+
+export type LibraryStory = {
   slug: string
   title: string
   author: string | null
+  language: string
+  publishedVersion: number
+  wordCount: number
+  chapterCount: number
+  progress: LibraryProgress | null
+  progressAvailability: LibraryProgressAvailability
 }
 
-export async function getLibrary(): Promise<{ items: LibraryItem[] }> {
-  const data = await request<{ items?: LibraryItem[] }>('/api/v1/library')
-  return { items: Array.isArray(data.items) ? data.items : [] }
+// Kept as an alias for existing imports while the additive response grows into
+// the complete Library read model.
+export type LibraryItem = LibraryStory
+
+export type LibraryResponse = {
+  items: LibraryStory[]
+}
+
+export class InvalidLibraryResponseError extends Error {
+  constructor() {
+    super('Invalid library response')
+    this.name = 'InvalidLibraryResponseError'
+  }
+}
+
+export function isInvalidLibraryResponseError(
+  error: unknown,
+): error is InvalidLibraryResponseError {
+  return (
+    error instanceof InvalidLibraryResponseError ||
+    (error instanceof Error && error.name === 'InvalidLibraryResponseError')
+  )
+}
+
+const libraryStoryRequiredKeys = [
+  'slug',
+  'title',
+  'language',
+  'publishedVersion',
+  'wordCount',
+  'chapterCount',
+] as const
+
+const libraryStoryAllowedKeys = [
+  ...libraryStoryRequiredKeys,
+  'author',
+  'progress',
+] as const
+
+const libraryProgressKeys = [
+  'version',
+  'percent',
+  'updatedAt',
+  'isCurrentVersion',
+] as const
+
+const librarySlugPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+const rfc3339Pattern =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:Z|([+-])(\d{2}):(\d{2}))$/
+
+function hasRequiredAllowedKeys(
+  record: Record<string, unknown>,
+  required: readonly string[],
+  allowed: readonly string[],
+): boolean {
+  const allowedKeys = new Set(allowed)
+  return (
+    required.every((key) => Object.hasOwn(record, key)) &&
+    Object.keys(record).every((key) => allowedKeys.has(key))
+  )
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= 0
+}
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= 1
+}
+
+function isRFC3339Timestamp(value: unknown): value is string {
+  if (typeof value !== 'string') return false
+  const match = rfc3339Pattern.exec(value)
+  if (!match) return false
+
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  const hour = Number(match[4])
+  const minute = Number(match[5])
+  const second = Number(match[6])
+  const offsetHour = match[8] === undefined ? 0 : Number(match[8])
+  const offsetMinute = match[9] === undefined ? 0 : Number(match[9])
+
+  if (
+    year < 1 ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59 ||
+    offsetHour > 23 ||
+    offsetMinute > 59
+  ) {
+    return false
+  }
+
+  const calendarDate = new Date(Date.UTC(year, month - 1, day))
+  if (
+    calendarDate.getUTCFullYear() !== year ||
+    calendarDate.getUTCMonth() !== month - 1 ||
+    calendarDate.getUTCDate() !== day
+  ) {
+    return false
+  }
+
+  return Number.isFinite(Date.parse(value))
+}
+
+function invalidLibraryResponse(): never {
+  throw new InvalidLibraryResponseError()
+}
+
+function parseLibraryProgress(
+  value: unknown,
+  publishedVersion: number,
+): Pick<LibraryStory, 'progress' | 'progressAvailability'> {
+  if (value === null) {
+    return { progress: null, progressAvailability: 'available' }
+  }
+  if (!isRecord(value)) {
+    return { progress: null, progressAvailability: 'unavailable' }
+  }
+
+  const allowedKeys = new Set<string>(libraryProgressKeys)
+  if (Object.keys(value).some((key) => !allowedKeys.has(key))) {
+    return invalidLibraryResponse()
+  }
+  if (
+    !libraryProgressKeys.every((key) => Object.hasOwn(value, key)) ||
+    !isPositiveSafeInteger(value.version) ||
+    typeof value.percent !== 'number' ||
+    !Number.isFinite(value.percent) ||
+    value.percent < 0 ||
+    value.percent > 1 ||
+    !isRFC3339Timestamp(value.updatedAt) ||
+    typeof value.isCurrentVersion !== 'boolean' ||
+    value.isCurrentVersion !== (value.version === publishedVersion)
+  ) {
+    return { progress: null, progressAvailability: 'unavailable' }
+  }
+
+  return {
+    progress: {
+      version: value.version,
+      percent: value.percent,
+      updatedAt: value.updatedAt,
+      isCurrentVersion: value.isCurrentVersion,
+    },
+    progressAvailability: 'available',
+  }
+}
+
+function parseLibraryStory(value: unknown): LibraryStory {
+  if (
+    !isRecord(value) ||
+    !hasRequiredAllowedKeys(
+      value,
+      libraryStoryRequiredKeys,
+      libraryStoryAllowedKeys,
+    ) ||
+    typeof value.slug !== 'string' ||
+    !librarySlugPattern.test(value.slug) ||
+    typeof value.title !== 'string' ||
+    value.title.trim().length === 0 ||
+    typeof value.language !== 'string' ||
+    value.language.trim().length === 0 ||
+    !isPositiveSafeInteger(value.publishedVersion) ||
+    !isNonNegativeInteger(value.wordCount) ||
+    !isNonNegativeInteger(value.chapterCount)
+  ) {
+    return invalidLibraryResponse()
+  }
+
+  const author = Object.hasOwn(value, 'author') ? value.author : null
+  if (
+    author !== null &&
+    (typeof author !== 'string' || author.trim().length === 0)
+  ) {
+    return invalidLibraryResponse()
+  }
+
+  const parsedProgress = Object.hasOwn(value, 'progress')
+    ? parseLibraryProgress(value.progress, value.publishedVersion)
+    : { progress: null, progressAvailability: 'unavailable' as const }
+
+  return {
+    slug: value.slug,
+    title: value.title,
+    author,
+    language: value.language,
+    publishedVersion: value.publishedVersion,
+    wordCount: value.wordCount,
+    chapterCount: value.chapterCount,
+    ...parsedProgress,
+  }
+}
+
+export function parseLibraryResponse(value: unknown): LibraryResponse {
+  if (
+    !isRecord(value) ||
+    !hasRequiredAllowedKeys(value, ['items'], ['items']) ||
+    !Array.isArray(value.items)
+  ) {
+    return invalidLibraryResponse()
+  }
+
+  const items = value.items.map(parseLibraryStory)
+  const slugs = new Set<string>()
+  for (const item of items) {
+    if (slugs.has(item.slug)) return invalidLibraryResponse()
+    slugs.add(item.slug)
+  }
+  return { items }
+}
+
+export async function getLibrary(): Promise<LibraryResponse> {
+  const data = await request<unknown>('/api/v1/library')
+  return parseLibraryResponse(data)
 }
 
 /* ----------------------------- Story ---------------------------- */

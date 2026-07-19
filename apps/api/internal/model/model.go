@@ -7,9 +7,21 @@ import (
 )
 
 type StoryItem struct {
-	Slug   string  `json:"slug"`
-	Title  string  `json:"title"`
-	Author *string `json:"author,omitempty"`
+	Slug             string                  `json:"slug"`
+	Title            string                  `json:"title"`
+	Author           *string                 `json:"author,omitempty"`
+	Language         string                  `json:"language"`
+	PublishedVersion int                     `json:"publishedVersion"`
+	WordCount        int64                   `json:"wordCount"`
+	ChapterCount     int64                   `json:"chapterCount"`
+	Progress         *LibraryProgressSummary `json:"progress"`
+}
+
+type LibraryProgressSummary struct {
+	Version          int       `json:"version"`
+	Percent          float64   `json:"percent"`
+	UpdatedAt        time.Time `json:"updatedAt"`
+	IsCurrentVersion bool      `json:"isCurrentVersion"`
 }
 
 type ReaderStory struct {

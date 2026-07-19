@@ -1,7 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 import Unlock from './views/Unlock.vue'
-import Library from './views/Library.vue'
 
 import { authState } from './lib/session'
 import {
@@ -27,7 +26,7 @@ export const router = createRouter({
       component: () => import('./views/SessionUnavailable.vue'),
     },
 
-    { path: '/library', component: Library, meta: { requiresUnlock: true } },
+    { path: '/library', component: () => import('./views/Library.vue'), meta: { requiresUnlock: true } },
     { path: '/read/:slug', component: () => import('./views/Reader.vue'), props: true, meta: { requiresUnlock: true } },
     { path: '/journey', component: () => import('./views/Journey.vue'), meta: { requiresUnlock: true } },
 

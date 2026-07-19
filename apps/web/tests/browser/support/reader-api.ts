@@ -62,6 +62,12 @@ export type MockResponse = {
   abort?: string
 }
 
+type ReaderLibraryItemFixture = {
+  slug: string
+  title: string
+  author: string | null
+}
+
 export type ResponseGate = {
   started: Promise<CapturedRequest>
   fulfill: (body?: unknown, status?: number) => void
@@ -304,7 +310,7 @@ export class ReaderApiMock {
   readonly progress = new Map<string, ProgressFixture | null>()
 
   authUnlocked = true
-  libraryItems: Array<{ slug: string; title: string; author: string | null }> = []
+  libraryItems: ReaderLibraryItemFixture[] = []
 
   private readonly storyResponses = new Map<string, QueuedResponse[]>()
   private readonly progressGetResponses = new Map<string, QueuedResponse[]>()
@@ -378,6 +384,28 @@ export class ReaderApiMock {
         request.method === 'PUT' &&
         request.pathname === `/api/v1/progress/${encodeURIComponent(slug)}`,
     )
+  }
+
+  private libraryReadModelItems() {
+    return this.libraryItems.map((item) => {
+      const story = this.stories.get(item.slug)
+      return {
+        ...item,
+        language: story?.language ?? 'en-GB',
+        publishedVersion: story?.version ?? 1,
+        wordCount:
+          story?.segments.reduce(
+            (total, segment) => total + segment.wordCount,
+            0,
+          ) ?? 0,
+        chapterCount:
+          story?.segments.filter(
+            (segment) =>
+              segment.kind === 'heading' && segment.headingLevel === 2,
+          ).length ?? 0,
+        progress: null,
+      }
+    })
   }
 
   private take(
@@ -510,7 +538,9 @@ export class ReaderApiMock {
     }
 
     if (request.method() === 'GET' && url.pathname === '/api/v1/library') {
-      await this.respond(route, captured, undefined, { items: this.libraryItems })
+      await this.respond(route, captured, undefined, {
+        items: this.libraryReadModelItems(),
+      })
       return
     }
     if (request.method() === 'GET' && url.pathname === '/api/v1/continue') {

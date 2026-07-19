@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -262,19 +263,31 @@ func TestAccountStoreIntegration(t *testing.T) {
 		}
 	})
 
-	t.Run("library remains account scoped", func(t *testing.T) {
+	t.Run("library read model remains published-version and account scoped", func(t *testing.T) {
 		resetAccountIntegrationData(t, adminDB)
 		store := newAccountIntegrationStore(t, databaseURL)
 
 		const (
-			accountA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-			accountB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
-			storyA   = "aaaaaaaa-0000-4000-8000-000000000001"
-			storyB   = "bbbbbbbb-0000-4000-8000-000000000001"
-			draftA   = "aaaaaaaa-0000-4000-8000-000000000002"
-			versionA = "aaaaaaaa-1000-4000-8000-000000000001"
-			versionB = "bbbbbbbb-1000-4000-8000-000000000001"
+			accountA           = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+			accountB           = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+			profileA           = "aaaaaaaa-2000-4000-8000-000000000001"
+			profileAOther      = "aaaaaaaa-2000-4000-8000-000000000002"
+			profileB           = "bbbbbbbb-2000-4000-8000-000000000001"
+			storyA             = "aaaaaaaa-0000-4000-8000-000000000001"
+			noProgressStoryA   = "aaaaaaaa-0000-4000-8000-000000000002"
+			draftStoryA        = "aaaaaaaa-0000-4000-8000-000000000003"
+			unpublishedStoryA  = "aaaaaaaa-0000-4000-8000-000000000004"
+			noPointerStoryA    = "aaaaaaaa-0000-4000-8000-000000000005"
+			crossPointerStoryA = "aaaaaaaa-0000-4000-8000-000000000006"
+			storyB             = "bbbbbbbb-0000-4000-8000-000000000001"
+			versionA1          = "aaaaaaaa-1000-4000-8000-000000000001"
+			versionA2          = "aaaaaaaa-1000-4000-8000-000000000002"
+			noProgressVersionA = "aaaaaaaa-1000-4000-8000-000000000003"
+			draftVersionA      = "aaaaaaaa-1000-4000-8000-000000000004"
+			unpublishedVersion = "aaaaaaaa-1000-4000-8000-000000000005"
+			versionB           = "bbbbbbbb-1000-4000-8000-000000000001"
 		)
+		progressTime := time.Date(2026, time.July, 19, 12, 0, 0, 0, time.UTC)
 
 		if _, err := adminDB.Exec(
 			`INSERT INTO accounts (id, name) VALUES ($1, 'Account A'), ($2, 'Account B')`,
@@ -283,42 +296,210 @@ func TestAccountStoreIntegration(t *testing.T) {
 			t.Fatalf("insert library accounts: %v", err)
 		}
 		if _, err := adminDB.Exec(`
-			INSERT INTO stories (id, account_id, slug, title) VALUES
-				($3, $1, 'account-a-story', 'Account A Story'),
-				($4, $2, 'account-b-story', 'Account B Story'),
-				($5, $1, 'account-a-draft', 'Account A Draft')
-		`, accountA, accountB, storyA, storyB, draftA); err != nil {
+			INSERT INTO profiles (id, account_id, name, created_at) VALUES
+				($1, $3, 'Default', '2026-07-19T10:00:00Z'),
+				($2, $4, 'Default', '2026-07-19T10:00:00Z'),
+				($5, $3, 'Other', '2026-07-19T09:00:00Z')
+		`, profileA, profileB, accountA, accountB, profileAOther); err != nil {
+			t.Fatalf("insert library profiles: %v", err)
+		}
+		if _, err := adminDB.Exec(`
+			INSERT INTO stories (
+				id, account_id, slug, title, author, language, is_published, created_at, updated_at
+			) VALUES
+				($3, $1, 'shared-story', 'Unpublished draft title', 'Unpublished draft author', 'fr', true, $9, $9),
+				($4, $1, 'no-progress', 'Legacy metadata title', NULL, 'en-GB', true, $9, $9),
+				($5, $1, 'draft-only', 'Draft only', NULL, 'en-GB', false, $9, $9),
+				($6, $1, 'unpublished-pointer', 'Unpublished pointer', NULL, 'en-GB', false, $9, $9),
+				($7, $1, 'published-without-pointer', 'No pointer', NULL, 'en-GB', true, $9, $9),
+				($8, $1, 'cross-story-pointer', 'Cross pointer', NULL, 'en-GB', true, $9, $9),
+				($10, $2, 'shared-story', 'Account B story', 'Account B author', 'cy', true, $9, $9)
+		`,
+			accountA, accountB, storyA, noProgressStoryA, draftStoryA, unpublishedStoryA,
+			noPointerStoryA, crossPointerStoryA, progressTime.Add(-time.Hour), storyB,
+		); err != nil {
 			t.Fatalf("insert account-scoped stories: %v", err)
 		}
 		if _, err := adminDB.Exec(`
-			INSERT INTO story_versions (id, story_id, version, rendered_html) VALUES
-				($3, $1, 1, '<p>A</p>'),
-				($4, $2, 1, '<p>B</p>')
-		`, storyA, storyB, versionA, versionB); err != nil {
+			INSERT INTO story_versions (id, story_id, version, frontmatter, rendered_html) VALUES
+				($1, $7, 1, '{"title":"Published version one","author":"Published author","language":"en-GB"}', '<p>A1</p>'),
+				($2, $7, 2, '{"title":"Published version two","author":null,"language":"en"}', '<p>A2</p>'),
+				($3, $8, 1, '{"title":"No progress published","language":"en-GB"}', '<p>No progress</p>'),
+				($4, $9, 1, '{"title":"Draft version","author":"Draft author","language":"en-GB"}', '<p>Draft</p>'),
+				($5, $10, 1, '{"title":"Hidden version","author":"Hidden author","language":"en-GB"}', '<p>Hidden</p>'),
+				($6, $11, 1, '{"title":"Account B published","author":"Account B version author","language":"cy"}', '<p>B</p>')
+		`,
+			versionA1, versionA2, noProgressVersionA, draftVersionA, unpublishedVersion, versionB,
+			storyA, noProgressStoryA, draftStoryA, unpublishedStoryA, storyB,
+		); err != nil {
 			t.Fatalf("insert account-scoped story versions: %v", err)
+		}
+
+		keyA := strings.Repeat("a", 64)
+		keyB := strings.Repeat("b", 64)
+		chapterKey := strings.Repeat("c", 64)
+		keyD := strings.Repeat("d", 64)
+		keyE := strings.Repeat("e", 64)
+		if _, err := adminDB.Exec(`
+			INSERT INTO story_segments (
+				story_version_id, ordinal, segment_kind, heading_level,
+				content_key, content_occurrence, chapter_key, chapter_occurrence, word_count
+			) VALUES
+				($1, 1, 'heading', 1, $7, 1, NULL, NULL, 3),
+				($1, 2, 'paragraph', NULL, $8, 1, NULL, NULL, 5),
+				($1, 3, 'heading', 2, $9, 1, $9, 1, 2),
+				($1, 4, 'paragraph', NULL, $10, 1, $9, 1, 7),
+				($1, 5, 'heading', 3, $11, 1, $9, 1, 2),
+				($1, 6, 'heading', 2, $9, 2, $9, 2, 2),
+				($2, 1, 'heading', 1, $7, 1, NULL, NULL, 4),
+				($2, 2, 'paragraph', NULL, $8, 1, NULL, NULL, 10),
+				($2, 3, 'heading', 2, $11, 1, $11, 1, 3),
+				($2, 4, 'paragraph', NULL, $10, 1, $11, 1, 8),
+				($3, 1, 'paragraph', NULL, $7, 1, NULL, NULL, 9),
+				($4, 1, 'paragraph', NULL, $7, 1, NULL, NULL, 999),
+				($5, 1, 'paragraph', NULL, $7, 1, NULL, NULL, 888),
+				($6, 1, 'heading', 2, $11, 1, $11, 1, 6)
+		`,
+			versionA1, versionA2, noProgressVersionA, draftVersionA, unpublishedVersion, versionB,
+			keyA, keyB, chapterKey, keyD, keyE,
+		); err != nil {
+			t.Fatalf("insert published and draft segments: %v", err)
 		}
 		if _, err := adminDB.Exec(`
 			UPDATE stories
-			SET published_version_id = CASE id WHEN $1 THEN $3::uuid WHEN $2 THEN $4::uuid END
-			WHERE id IN ($1, $2)
-		`, storyA, storyB, versionA, versionB); err != nil {
+			SET published_version_id = CASE id
+				WHEN $1 THEN $6::uuid
+				WHEN $2 THEN $7::uuid
+				WHEN $3 THEN $8::uuid
+				WHEN $4 THEN $9::uuid
+				WHEN $5 THEN $9::uuid
+			END
+			WHERE id IN ($1, $2, $3, $4, $5)
+		`, storyA, noProgressStoryA, unpublishedStoryA, crossPointerStoryA, storyB,
+			versionA1, noProgressVersionA, unpublishedVersion, versionB); err != nil {
 			t.Fatalf("publish account-scoped stories: %v", err)
+		}
+		if _, err := adminDB.Exec(`
+			INSERT INTO reading_progress (
+				profile_id, story_id, story_version_id, percent, updated_at
+			) VALUES
+				($1, $4, $7, 0.42, $10),
+				($2, $5, $8, 0.73, $10),
+				($3, $4, $7, 0.99, $10 + interval '1 hour'),
+				($3, $6, $9, 0.88, $10 + interval '2 hours')
+		`,
+			profileA, profileB, profileAOther,
+			storyA, storyB, noProgressStoryA,
+			versionA1, versionB, noProgressVersionA,
+			progressTime,
+		); err != nil {
+			t.Fatalf("insert account-scoped progress: %v", err)
 		}
 
 		itemsA, err := store.Library(accountA)
 		if err != nil {
 			t.Fatalf("Library(account A): %v", err)
 		}
-		if len(itemsA) != 1 || itemsA[0].Slug != "account-a-story" {
-			t.Fatalf("Library(account A) = %#v, want only account-a-story", itemsA)
+		if len(itemsA) != 2 || itemsA[0].Slug != "no-progress" || itemsA[1].Slug != "shared-story" {
+			t.Fatalf("Library(account A) ordering/scope = %#v", itemsA)
+		}
+		if itemsA[0].Title != "No progress published" || itemsA[0].Language != "en-GB" ||
+			itemsA[0].Author != nil || itemsA[0].PublishedVersion != 1 ||
+			itemsA[0].WordCount != 9 || itemsA[0].ChapterCount != 0 || itemsA[0].Progress != nil {
+			t.Fatalf("version-owned/no-progress item = %#v", itemsA[0])
+		}
+		current := itemsA[1]
+		if current.Title != "Published version one" || current.Author == nil || *current.Author != "Published author" ||
+			current.Language != "en-GB" || current.PublishedVersion != 1 ||
+			current.WordCount != 21 || current.ChapterCount != 2 {
+			t.Fatalf("current published-version item = %#v", current)
+		}
+		if current.Progress == nil || current.Progress.Version != 1 ||
+			math.Abs(current.Progress.Percent-0.42) > 0.0001 ||
+			!current.Progress.UpdatedAt.Equal(progressTime) || !current.Progress.IsCurrentVersion {
+			t.Fatalf("current-version progress = %#v", current.Progress)
+		}
+
+		// A newer draft already changed the mutable story columns above. If the
+		// immutable published version is incomplete, fail safely instead of
+		// exposing that draft metadata through the Library response.
+		if _, err := adminDB.Exec(`
+			UPDATE story_versions
+			SET frontmatter = '{"author":"Published author","language":"en-GB"}'::jsonb
+			WHERE id = $1
+		`, versionA1); err != nil {
+			t.Fatalf("make published metadata incomplete: %v", err)
+		}
+		if _, err := store.Library(accountA); err == nil || !strings.Contains(err.Error(), "title is missing") {
+			t.Fatalf("incomplete published metadata error = %v", err)
+		}
+		if _, err := adminDB.Exec(`
+			UPDATE story_versions
+			SET frontmatter = '{"title":"Published version one","author":"Published author","language":"en-GB"}'::jsonb
+			WHERE id = $1
+		`, versionA1); err != nil {
+			t.Fatalf("restore published metadata: %v", err)
 		}
 
 		itemsB, err := store.Library(accountB)
 		if err != nil {
 			t.Fatalf("Library(account B): %v", err)
 		}
-		if len(itemsB) != 1 || itemsB[0].Slug != "account-b-story" {
-			t.Fatalf("Library(account B) = %#v, want only account-b-story", itemsB)
+		if len(itemsB) != 1 || itemsB[0].Slug != "shared-story" || itemsB[0].Title != "Account B published" ||
+			itemsB[0].Progress == nil || itemsB[0].Progress.Version != 1 ||
+			math.Abs(itemsB[0].Progress.Percent-0.73) > 0.0001 || !itemsB[0].Progress.IsCurrentVersion {
+			t.Fatalf("Library(account B) = %#v", itemsB)
+		}
+
+		if _, err := adminDB.Exec(`
+			UPDATE stories
+			SET published_version_id = $2, updated_at = updated_at
+			WHERE id = $1
+		`, storyA, versionA2); err != nil {
+			t.Fatalf("republish account A story: %v", err)
+		}
+		updatedItems, err := store.Library(accountA)
+		if err != nil {
+			t.Fatalf("Library(account A) after republish: %v", err)
+		}
+		updated := updatedItems[1]
+		if updated.Title != "Published version two" || updated.Author != nil || updated.Language != "en" ||
+			updated.PublishedVersion != 2 || updated.WordCount != 25 || updated.ChapterCount != 1 {
+			t.Fatalf("republished item = %#v", updated)
+		}
+		if updated.Progress == nil || updated.Progress.Version != 1 || updated.Progress.IsCurrentVersion ||
+			math.Abs(updated.Progress.Percent-0.42) > 0.0001 || !updated.Progress.UpdatedAt.Equal(progressTime) {
+			t.Fatalf("old-version progress = %#v", updated.Progress)
+		}
+
+		if _, err := adminDB.Exec(`UPDATE story_segments SET word_count = -1 WHERE story_version_id = $1 AND ordinal = 1`, versionA2); err != nil {
+			t.Fatalf("corrupt aggregate fixture: %v", err)
+		}
+		if _, err := store.Library(accountA); err == nil || !strings.Contains(err.Error(), "word count") {
+			t.Fatalf("malformed aggregate error = %v", err)
+		}
+		if _, err := adminDB.Exec(`UPDATE story_segments SET word_count = 4 WHERE story_version_id = $1 AND ordinal = 1`, versionA2); err != nil {
+			t.Fatalf("restore aggregate fixture: %v", err)
+		}
+
+		if _, err := adminDB.Exec(`UPDATE reading_progress SET percent = 1.5 WHERE profile_id = $1 AND story_id = $2`, profileA, storyA); err != nil {
+			t.Fatalf("corrupt progress fixture: %v", err)
+		}
+		if _, err := store.Library(accountA); err == nil || !strings.Contains(err.Error(), "progress") {
+			t.Fatalf("malformed progress error = %v", err)
+		}
+		if _, err := adminDB.Exec(`UPDATE reading_progress SET percent = 0.42 WHERE profile_id = $1 AND story_id = $2`, profileA, storyA); err != nil {
+			t.Fatalf("restore progress fixture: %v", err)
+		}
+
+		if _, err := adminDB.Exec(`UPDATE reading_progress SET story_version_id = $3 WHERE profile_id = $1 AND story_id = $2`, profileA, storyA, versionB); err != nil {
+			t.Fatalf("corrupt progress version fixture: %v", err)
+		}
+		if _, err := store.Library(accountA); err == nil || !strings.Contains(err.Error(), "progress") {
+			t.Fatalf("cross-story progress error = %v", err)
+		}
+		if _, err := adminDB.Exec(`UPDATE reading_progress SET story_version_id = $3 WHERE profile_id = $1 AND story_id = $2`, profileA, storyA, versionA1); err != nil {
+			t.Fatalf("restore progress version fixture: %v", err)
 		}
 	})
 }
@@ -372,7 +553,7 @@ func setupAccountIntegrationSchema(t *testing.T, database *sql.DB) {
 	t.Helper()
 
 	statements := []string{
-		`DROP TABLE IF EXISTS story_versions, stories, accounts CASCADE`,
+		`DROP TABLE IF EXISTS reading_progress, story_segments, story_versions, stories, profiles, accounts CASCADE`,
 		`CREATE EXTENSION IF NOT EXISTS pgcrypto`,
 		`CREATE TABLE accounts (
 			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -380,12 +561,22 @@ func setupAccountIntegrationSchema(t *testing.T, database *sql.DB) {
 			created_at timestamptz NOT NULL DEFAULT now(),
 			updated_at timestamptz NOT NULL DEFAULT now()
 		)`,
+		`CREATE TABLE profiles (
+			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+			account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+			name text NOT NULL,
+			created_at timestamptz NOT NULL DEFAULT now(),
+			updated_at timestamptz NOT NULL DEFAULT now(),
+			UNIQUE (account_id, name)
+		)`,
 		`CREATE TABLE stories (
 			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-			account_id uuid NOT NULL,
+			account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
 			slug text NOT NULL,
 			title text NOT NULL,
 			author text,
+			language text NOT NULL DEFAULT 'en-GB',
+			is_published boolean NOT NULL DEFAULT false,
 			published_version_id uuid,
 			created_at timestamptz NOT NULL DEFAULT now(),
 			updated_at timestamptz NOT NULL DEFAULT now(),
@@ -395,12 +586,34 @@ func setupAccountIntegrationSchema(t *testing.T, database *sql.DB) {
 			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 			story_id uuid NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
 			version integer NOT NULL,
+			frontmatter jsonb NOT NULL DEFAULT '{}'::jsonb,
 			rendered_html text NOT NULL,
 			UNIQUE (story_id, version)
 		)`,
 		`ALTER TABLE stories
 			ADD CONSTRAINT stories_published_version_test_fkey
 			FOREIGN KEY (published_version_id) REFERENCES story_versions(id) ON DELETE SET NULL`,
+		`CREATE TABLE story_segments (
+			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+			story_version_id uuid NOT NULL REFERENCES story_versions(id) ON DELETE CASCADE,
+			ordinal integer NOT NULL,
+			segment_kind text NOT NULL,
+			heading_level integer,
+			content_key text NOT NULL,
+			content_occurrence integer NOT NULL,
+			chapter_key text,
+			chapter_occurrence integer,
+			word_count integer NOT NULL,
+			UNIQUE (story_version_id, ordinal)
+		)`,
+		`CREATE TABLE reading_progress (
+			profile_id uuid NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+			story_id uuid NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+			story_version_id uuid NOT NULL REFERENCES story_versions(id),
+			percent real NOT NULL DEFAULT 0,
+			updated_at timestamptz NOT NULL DEFAULT now(),
+			PRIMARY KEY (profile_id, story_id)
+		)`,
 	}
 
 	for _, statement := range statements {
@@ -412,7 +625,7 @@ func setupAccountIntegrationSchema(t *testing.T, database *sql.DB) {
 
 func resetAccountIntegrationData(t *testing.T, database *sql.DB) {
 	t.Helper()
-	if _, err := database.Exec(`TRUNCATE TABLE story_versions, stories, accounts CASCADE`); err != nil {
+	if _, err := database.Exec(`TRUNCATE TABLE reading_progress, story_segments, story_versions, stories, profiles, accounts CASCADE`); err != nil {
 		t.Fatalf("reset disposable account data: %v", err)
 	}
 }

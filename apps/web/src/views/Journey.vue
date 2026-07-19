@@ -170,9 +170,13 @@ onMounted(load)
   <div class="min-h-dvh bg-[#0B1724] text-white">
     <div class="mx-auto max-w-xl px-4 py-6">
       <div class="flex items-center justify-between mb-4">
-        <h1 class="text-xl font-semibold">Personalise stories</h1>
+        <h1 class="text-xl font-semibold">Reading profile</h1>
         <div class="text-xs opacity-70">Step {{ step }} / 3</div>
       </div>
+
+      <p class="mb-4 text-sm opacity-75">
+        These parent notes are stored with the profile. They do not change the published stories in the library.
+      </p>
 
       <div v-if="errMsg" class="mb-3 rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm">
         {{ errMsg }}
@@ -247,7 +251,7 @@ onMounted(load)
               {{ x }} ✕
             </button>
             <div v-if="interests.length === 0" class="text-xs opacity-60">
-              Add a few to make stories feel “about them”.
+              Add notes you want to keep with this reading profile.
             </div>
           </div>
         </div>
@@ -284,7 +288,7 @@ onMounted(load)
         </div>
 
         <div class="rounded-2xl bg-white/5 border border-white/10 p-4">
-          <h2 class="text-base font-medium mb-3">Story style</h2>
+          <h2 class="text-base font-medium mb-3">Saved reading preferences</h2>
 
           <div class="grid grid-cols-2 gap-3">
             <label class="text-sm opacity-80">
@@ -351,7 +355,7 @@ onMounted(load)
       <div v-else class="rounded-2xl bg-white/5 border border-white/10 p-4">
         <h2 class="text-base font-medium mb-2">Done</h2>
         <p class="text-sm opacity-80">
-          Stories can now use <strong>{{ childName }}</strong> + their preferences.
+          The reading profile for <strong>{{ childName }}</strong> has been saved. It does not change the published stories in the library.
         </p>
 
         <div class="mt-4 flex gap-2">
