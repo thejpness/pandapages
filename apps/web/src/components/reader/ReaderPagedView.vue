@@ -58,6 +58,7 @@ const emit = defineEmits<{
   active: [ordinal: number]
 }>()
 
+const viewInstanceId = Symbol('paged-reader-view')
 const articleRef = ref<HTMLElement | null>(null)
 const viewportRef = ref<HTMLElement | null>(null)
 const pages = shallowRef<ReaderPage[]>([])
@@ -83,6 +84,7 @@ let horizontalProgrammatic = false
 const reflowPending = ref(false)
 let reflowDirty = false
 let pendingAnchor: ReaderScrollPosition | null = null
+let pendingPageNavigation: number | null = null
 let anchoredPosition: ReaderScrollPosition | null = null
 let anchoredPage = -1
 let settledPosition: ReaderScrollPosition | null = null
@@ -420,9 +422,16 @@ function finishProgrammaticOperation(generation: number) {
   horizontalProgrammatic = false
   reflowPending.value = false
   navigationBusy.value = false
-  if (!reflowDirty) return
-  reflowDirty = false
-  queueRebuild()
+  if (reflowDirty) {
+    reflowDirty = false
+    queueRebuild()
+    return
+  }
+  if (pendingPageNavigation !== null) {
+    const destination = pendingPageNavigation
+    pendingPageNavigation = null
+    void navigateToPage(destination)
+  }
 }
 
 async function rebuildPages(
@@ -747,13 +756,11 @@ function onPageScroll(page: ReaderPage) {
 }
 
 async function navigateToPage(index: number, allowMotion = true) {
-  if (
-    navigationBusy.value ||
-    reflowPending.value ||
-    index < 0 ||
-    index >= pageCount.value ||
-    index === currentPage.value
-  ) {
+  if (index < 0 || index >= pageCount.value || index === currentPage.value) {
+    return
+  }
+  if (navigationBusy.value || reflowPending.value || horizontalProgrammatic) {
+    pendingPageNavigation = index
     return
   }
   const generation = ++modelGeneration
@@ -909,12 +916,13 @@ onBeforeUnmount(() => {
   clearVerticalSettling()
   activeHorizontalPointers.clear()
   activeHorizontalTouches = 0
+  pendingPageNavigation = null
   headerObserver?.disconnect()
   headerObserver = null
   resolveLayoutReady()
 })
 
-defineExpose({ capture, whenReady, restore, moveToOrdinal, focusContent })
+defineExpose({ capture, whenReady, restore, moveToOrdinal, focusContent, mode: 'paged', instanceId: viewInstanceId })
 </script>
 
 <template>
@@ -922,6 +930,7 @@ defineExpose({ capture, whenReady, restore, moveToOrdinal, focusContent })
     ref="articleRef"
     class="reader-story reader-paged-story"
     data-reader-paged-view
+    data-reader-view-mode="paged"
     :data-reader-paged-ready="layoutReady ? 'true' : 'false'"
     :data-reader-current-page="currentPage + 1"
     :data-reader-page-count="pageCount"
