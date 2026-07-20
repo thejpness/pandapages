@@ -5,6 +5,7 @@ umask 077
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 verifier="$repo_root/scripts/postgresql-api-role-verify.sh"
+session_cookie_contract="$repo_root/scripts/lib/postgresql-api-role-session-cookie.awk"
 source_container=${PP_ROLE_TEST_SOURCE_CONTAINER:-}
 network=${PP_ROLE_TEST_NETWORK:-}
 api_image=${PP_ROLE_TEST_API_IMAGE:-}
@@ -45,6 +46,10 @@ done
 
 [[ -x "$verifier" ]] || {
   printf 'API role verifier is unavailable\n' >&2
+  exit 1
+}
+[[ -r "$session_cookie_contract" ]] || {
+  printf 'Signed session cookie contract is unavailable\n' >&2
   exit 1
 }
 
@@ -165,6 +170,151 @@ assert_probe_cleanup() {
   }
 }
 
+probe_admin_catalogue() {
+  local probe_status=0
+
+  # This disposable-only probe creates one generated draft so catalogue
+  # inspection must validate both the stored version and its Reader segments.
+  # The signed cookie and proxy key stay inside a protected in-container
+  # directory and never enter host arguments or output.
+  docker exec -i "$api_container" sh -eu -c '
+    umask 077
+    probe_dir=$(mktemp -d /tmp/pandapages-api-role-verify.catalogue.XXXXXX)
+    cleanup() {
+      rm -rf -- "$probe_dir"
+    }
+    trap cleanup EXIT HUP INT TERM
+    case "$probe_dir" in
+      /tmp/pandapages-api-role-verify.catalogue.*) ;;
+      *) exit 20 ;;
+    esac
+
+    test -n "${PP_PASSCODE:-}"
+    test -n "${PP_ADMIN_KEY:-}"
+
+    session_cookie_rules="$probe_dir/session-cookie.awk"
+    unlock_request="$probe_dir/unlock-request.json"
+    unlock_headers="$probe_dir/unlock-headers"
+    unlock_response="$probe_dir/unlock-response.json"
+    cookie_file="$probe_dir/cookies"
+    forbidden_request="$probe_dir/forbidden-request.http"
+    forbidden_response="$probe_dir/forbidden-response.http"
+    draft_body="$probe_dir/draft-body.json"
+    draft_request="$probe_dir/draft-request.http"
+    draft_response="$probe_dir/draft-response.http"
+    draft_response_body="$probe_dir/draft-response.json"
+    catalogue_request="$probe_dir/catalogue-request.http"
+    catalogue_response="$probe_dir/catalogue-response.http"
+    catalogue_response_body="$probe_dir/catalogue-response.json"
+
+    cat >"$session_cookie_rules"
+    test -s "$session_cookie_rules"
+
+    awk '\''BEGIN {
+      value = ENVIRON["PP_PASSCODE"]
+      if (length(value) != 6) exit 1
+      printf "{\"passcode\":\""
+      for (position = 1; position <= length(value); position++) {
+        character = substr(value, position, 1)
+        if (character ~ /[[:cntrl:]]/) exit 1
+        if (character == "\\" || character == "\"") printf "\\%s", character
+        else printf "%s", character
+      }
+      printf "\"}\n"
+    }'\'' >"$unlock_request"
+
+    wget -Y off -T 5 -S -O "$unlock_response" -o "$unlock_headers" \
+      --header="Content-Type: application/json" \
+      --post-file="$unlock_request" \
+      http://127.0.0.1:8080/api/v1/auth/unlock
+    grep -Eq '\''"ok"[[:space:]]*:[[:space:]]*true'\'' "$unlock_response"
+    awk -v session_contract=signed \
+      -f "$session_cookie_rules" "$unlock_headers" >"$cookie_file"
+
+    # The API boundary must still reject a signed session when the trusted
+    # proxy-injected administrator header is absent.
+    {
+      printf "GET /api/v1/admin/stories HTTP/1.1\r\n"
+      printf "Host: 127.0.0.1:8080\r\n"
+      printf "Connection: close\r\n"
+      printf "Cookie: "
+      cat "$cookie_file"
+      printf "\r\n\r\n"
+    } >"$forbidden_request"
+    busybox nc -w 5 127.0.0.1 8080 \
+      <"$forbidden_request" >"$forbidden_response"
+    grep -Eq '\''^HTTP/1\.[01] 403 '\'' "$forbidden_response"
+
+    cat >"$draft_body" <<JSON
+{"slug":"generated-role-catalogue","title":"Generated Role Catalogue","author":null,"markdown":"# Generated Role Catalogue\\n\\nA generated panda opens a book.\\n","language":"en","sourceUrl":null,"rights":{"label":"Generated test content"}}
+JSON
+    draft_length=$(wc -c <"$draft_body")
+    {
+      printf "POST /api/v1/admin/stories/draft HTTP/1.1\r\n"
+      printf "Host: 127.0.0.1:8080\r\n"
+      printf "Content-Type: application/json\r\n"
+      printf "Content-Length: %s\r\n" "$draft_length"
+      printf "X-PP-Admin-Key: %s\r\n" "$PP_ADMIN_KEY"
+      printf "Connection: close\r\n"
+      printf "Cookie: "
+      cat "$cookie_file"
+      printf "\r\n\r\n"
+      cat "$draft_body"
+    } >"$draft_request"
+    busybox nc -w 5 127.0.0.1 8080 \
+      <"$draft_request" >"$draft_response"
+    grep -Eq '\''^HTTP/1\.[01] 200 '\'' "$draft_response"
+    awk '\''{
+      sub(/\r$/, "")
+      if (body) print
+      else if ($0 == "") body = 1
+    }'\'' "$draft_response" >"$draft_response_body"
+    grep -Eq '\''"slug"[[:space:]]*:[[:space:]]*"generated-role-catalogue"'\'' "$draft_response_body"
+    grep -Eq '\''"outcome"[[:space:]]*:[[:space:]]*"created_story"'\'' "$draft_response_body"
+
+    {
+      printf "GET /api/v1/admin/stories HTTP/1.1\r\n"
+      printf "Host: 127.0.0.1:8080\r\n"
+      printf "X-PP-Admin-Key: %s\r\n" "$PP_ADMIN_KEY"
+      printf "Connection: close\r\n"
+      printf "Cookie: "
+      cat "$cookie_file"
+      printf "\r\n\r\n"
+    } >"$catalogue_request"
+    busybox nc -w 5 127.0.0.1 8080 \
+      <"$catalogue_request" >"$catalogue_response"
+    grep -Eq '\''^HTTP/1\.[01] 200 '\'' "$catalogue_response"
+    grep -Eiq '\''^Cache-Control:[[:space:]]*no-store\r?$'\'' "$catalogue_response"
+    grep -Eiq '\''^Content-Type:[[:space:]]*application/json\r?$'\'' "$catalogue_response"
+    awk '\''{
+      sub(/\r$/, "")
+      if (body) print
+      else if ($0 == "") body = 1
+    }'\'' "$catalogue_response" >"$catalogue_response_body"
+
+    grep -Eq '\''"items"[[:space:]]*:[[:space:]]*\['\'' "$catalogue_response_body"
+    slug_count=$(awk -F '\''"slug"[[:space:]]*:[[:space:]]*"generated-role-catalogue"'\'' \
+      '\''{ count += NF - 1 } END { print count + 0 }'\'' "$catalogue_response_body")
+    test "$slug_count" -eq 1
+    item_count=$(awk -F '\''"slug"[[:space:]]*:'\'' \
+      '\''{ count += NF - 1 } END { print count + 0 }'\'' "$catalogue_response_body")
+    test "$item_count" -eq 1
+    grep -Eq '\''"status"[[:space:]]*:[[:space:]]*"draft_only"'\'' "$catalogue_response_body"
+    grep -Eq '\''"publishedVersion"[[:space:]]*:[[:space:]]*null'\'' "$catalogue_response_body"
+    grep -Eq '\''"draftVersion"[[:space:]]*:[[:space:]]*\{'\'' "$catalogue_response_body"
+    grep -Eq '\''"versionCount"[[:space:]]*:[[:space:]]*1'\'' "$catalogue_response_body"
+    if grep -Eq '\''"(markdown|renderedHtml|segments|locator|accountId|storyId|contentHash)"[[:space:]]*:'\'' \
+      "$catalogue_response_body"; then
+      exit 21
+    fi
+  ' <"$session_cookie_contract" >/dev/null 2>&1 || probe_status=$?
+
+  if ((probe_status != 0)); then
+    printf 'Application-role Story Studio catalogue probe failed\n' >&2
+    return 1
+  fi
+}
+
 assert_no_generated_credentials() {
   local file=$1
   local content
@@ -210,6 +360,8 @@ grep -q '^api_role_verification=passed$' "$test_root/warm-cache.out"
 grep -q '^api_session_contract=signed$' "$test_root/warm-cache.out"
 assert_no_generated_credentials "$test_root/warm-cache.out"
 assert_no_generated_credentials "$test_root/warm-cache.err"
+assert_probe_cleanup
+probe_admin_catalogue
 assert_probe_cleanup
 
 # Ensure a repeated durable probe still refreshes pg_stat_activity. The

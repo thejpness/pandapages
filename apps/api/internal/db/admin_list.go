@@ -372,7 +372,10 @@ func inspectAdminVersion(
 			btrim(markdown) <> '',
 			btrim(rendered_html) <> '',
 			content_hash,
-			encode(digest(markdown, 'sha256'), 'hex')
+			pg_catalog.encode(
+				pg_catalog.sha256(pg_catalog.convert_to(markdown, 'UTF8')),
+				'hex'
+			)
 		FROM story_versions
 		WHERE id = $1
 		  AND story_id = $2
@@ -414,14 +417,20 @@ func inspectAdminVersion(
 			word_count,
 			btrim(markdown) <> '',
 			btrim(rendered_html) <> '',
-			encode(
-				digest(
-					segment_kind
-					  || chr(31)
-					  || COALESCE(heading_level, 0)::text
-					  || chr(31)
-					  || replace(replace(markdown, E'\r\n', E'\n'), E'\r', E'\n'),
-					'sha256'
+			pg_catalog.encode(
+				pg_catalog.sha256(
+					pg_catalog.convert_to(
+						segment_kind
+						  || pg_catalog.chr(31)
+						  || COALESCE(heading_level, 0)::text
+						  || pg_catalog.chr(31)
+						  || pg_catalog.replace(
+							  pg_catalog.replace(markdown, E'\r\n', E'\n'),
+							  E'\r',
+							  E'\n'
+							),
+						'UTF8'
+					)
 				),
 				'hex'
 			)

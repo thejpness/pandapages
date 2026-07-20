@@ -227,6 +227,8 @@ role_state=$(docker exec "$source_container" \
   psql -X --username="$admin_user" --dbname="$database" --tuples-only --no-align \
   --command="SELECT string_agg(rolname || ':' || rolsuper::text || ':' || rolcreatedb::text || ':' || rolcreaterole::text || ':' || rolreplication::text || ':' || rolbypassrls::text, ',' ORDER BY rolname) FROM pg_roles WHERE rolname IN ('$owner_role','$migration_role','$application_role','$backup_role');")
 [[ "$role_state" == "$application_role:false:false:false:false:false,$backup_role:false:false:false:false:false,$migration_role:false:false:false:false:false,$owner_role:false:false:false:false:false" ]]
+expect_denied 'pgcrypto digest routine' "$application_role" "$database" \
+  "SELECT public.digest('abc'::text, 'sha256'::text);"
 printf 'ok 4 - all policy roles have non-superuser non-administrative attributes\n'
 
 smoke_tmp="$test_root/api-role-smoke-tmp"
@@ -260,7 +262,7 @@ SQL
 psql_as "$application_role" --command="BEGIN; INSERT INTO accounts (name) VALUES ('Generated role test'); UPDATE accounts SET name='Generated role test updated' WHERE name='Generated role test'; DELETE FROM accounts WHERE name='Generated role test updated'; COMMIT;" >/dev/null
 psql_as "$application_role" --command="SELECT count(*) FROM stories;" >/dev/null
 psql_as "$application_role" --command="INSERT INTO stories (account_id, slug, title) SELECT id, 'generated-role-test', 'Pöndá reads 世界 🐼' FROM accounts ORDER BY created_at LIMIT 1; UPDATE stories SET title='Pöndá reads UTF-8 世界 🐼' WHERE slug='generated-role-test'; DELETE FROM stories WHERE slug='generated-role-test';" >/dev/null
-printf 'ok 5 - application role starts the API, unlocks, and performs current runtime CRUD\n'
+printf 'ok 5 - application role unlocks, serves the admin catalogue, and performs current runtime CRUD\n'
 
 expect_denied 'create database' "$application_role" "$database" 'CREATE DATABASE forbidden_database;'
 expect_denied 'create role' "$application_role" "$database" 'CREATE ROLE forbidden_role;'
