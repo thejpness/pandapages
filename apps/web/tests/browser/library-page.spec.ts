@@ -1163,6 +1163,81 @@ test.describe('Library 2 bookshelf', () => {
     await expect(titles).toHaveText([...expected.shortest])
   })
 
+  test('keeps the native sort select labelled and gives every label safe chevron spacing @webkit-library', async ({
+    page,
+  }) => {
+    await gotoReadyLibrary(page)
+
+    const sort = page.getByLabel('Sort')
+    const chevron = page.locator('.library-sort__chevron')
+    await expect(sort).toHaveJSProperty('tagName', 'SELECT')
+    await expect(chevron).toBeVisible()
+
+    const expectations = {
+      recent: UPDATED_STORY.title,
+      title: COMPLETED_STORY.title,
+      shortest: LONG_UNAUTHORED_STORY.title,
+      longest: COMPLETED_STORY.title,
+    } as const
+
+    for (const selected of [
+      'recent',
+      'title',
+      'shortest',
+      'longest',
+    ] as const) {
+      await sort.selectOption(selected)
+      await expect(sort).toHaveValue(selected)
+      await expect(page.locator('.bookshelf-card__title').first()).toHaveText(
+        expectations[selected],
+      )
+
+      const geometry = await sort.evaluate((element) => {
+        const select = element as HTMLSelectElement
+        const arrow = select.parentElement?.querySelector<SVGElement>(
+          '.library-sort__chevron',
+        )
+        if (arrow == null) throw new Error('Sort chevron is missing')
+
+        const selectBox = select.getBoundingClientRect()
+        const arrowBox = arrow.getBoundingClientRect()
+        const selectStyle = getComputedStyle(select)
+        const arrowStyle = getComputedStyle(arrow)
+        const canvas = document.createElement('canvas')
+        const context = canvas.getContext('2d')
+        if (context === null) throw new Error('Canvas context is unavailable')
+        context.font = selectStyle.font
+        const selectedText =
+          select.selectedOptions[0]?.textContent?.trim() ?? ''
+        const textWidth = context.measureText(selectedText).width
+        const textStart =
+          selectBox.left +
+          Number.parseFloat(selectStyle.paddingInlineStart)
+
+        return {
+          arrowWidth: arrowBox.width,
+          arrowHeight: arrowBox.height,
+          appearance: selectStyle.appearance,
+          display: arrowStyle.display,
+          pointerEvents: arrowStyle.pointerEvents,
+          textGap: arrowBox.left - (textStart + textWidth),
+          rightInset: selectBox.right - arrowBox.right,
+          endPadding: Number.parseFloat(selectStyle.paddingInlineEnd),
+        }
+      })
+
+      expect(geometry.arrowWidth).toBeGreaterThan(0)
+      expect(geometry.arrowHeight).toBeGreaterThan(0)
+      expect(geometry.appearance).toBe('none')
+      expect(geometry.display).not.toBe('none')
+      expect(geometry.pointerEvents).toBe('none')
+      expect(geometry.textGap).toBeGreaterThanOrEqual(6)
+      expect(geometry.rightInset).toBeGreaterThanOrEqual(14)
+      expect(geometry.rightInset).toBeLessThanOrEqual(18)
+      expect(geometry.endPadding).toBeGreaterThan(geometry.rightInset)
+    }
+  })
+
   test('uses a modal Reka dialog with naming, trapping, isolation, scroll lock, Escape, and focus restoration', async ({
     page,
   }) => {
