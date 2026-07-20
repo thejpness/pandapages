@@ -121,6 +121,287 @@ func TestReaderStoreIntegration(t *testing.T) {
 		t.Fatalf("insert unpublished Reader draft: %v", err)
 	}
 
+	t.Run("Story Studio catalogue detail source and unpublish contracts", func(t *testing.T) {
+		if firstDraft.Outcome != model.AdminDraftOutcomeCreatedStory ||
+			secondDraft.Outcome != model.AdminDraftOutcomeCreatedVersion {
+			t.Fatalf("initial draft outcomes = %q / %q", firstDraft.Outcome, secondDraft.Outcome)
+		}
+
+		emptyCatalogue, err := store.AdminListStories(readerAccountC)
+		if err != nil {
+			t.Fatalf("list empty account catalogue: %v", err)
+		}
+		if emptyCatalogue.Items == nil || len(emptyCatalogue.Items) != 0 {
+			t.Fatalf("empty account catalogue = %#v", emptyCatalogue)
+		}
+
+		catalogue, err := store.AdminListStories(readerAccountA)
+		if err != nil {
+			t.Fatalf("list account A catalogue: %v", err)
+		}
+		repeatedCatalogue, err := store.AdminListStories(readerAccountA)
+		if err != nil {
+			t.Fatalf("repeat account A catalogue: %v", err)
+		}
+		if !reflect.DeepEqual(catalogue, repeatedCatalogue) {
+			t.Fatalf("catalogue ordering/content was nondeterministic:\nfirst: %#v\nsecond: %#v", catalogue, repeatedCatalogue)
+		}
+		findStory := func(slug string) *model.AdminStorySummary {
+			for index := range catalogue.Items {
+				if catalogue.Items[index].Slug == slug {
+					return &catalogue.Items[index]
+				}
+			}
+			return nil
+		}
+		publishedWithDraft := findStory(readerSlug)
+		if publishedWithDraft == nil || publishedWithDraft.Status != model.AdminStoryStatusPublishedWithDraft ||
+			publishedWithDraft.PublishedVersion == nil || publishedWithDraft.PublishedVersion.VersionID != firstDraft.VersionID ||
+			publishedWithDraft.DraftVersion == nil || publishedWithDraft.DraftVersion.VersionID != secondDraft.VersionID ||
+			publishedWithDraft.VersionCount != 2 {
+			t.Fatalf("published-with-draft summary = %#v", publishedWithDraft)
+		}
+		draftOnly := findStory("unpublished-reader-story")
+		if draftOnly == nil || draftOnly.Status != model.AdminStoryStatusDraftOnly ||
+			draftOnly.PublishedVersion != nil || draftOnly.DraftVersion == nil {
+			t.Fatalf("draft-only summary = %#v", draftOnly)
+		}
+		for _, item := range catalogue.Items {
+			if item.Title == "Account B isolated story" {
+				t.Fatalf("account B metadata leaked into account A catalogue: %#v", item)
+			}
+		}
+		encodedCatalogue, err := json.Marshal(catalogue)
+		if err != nil {
+			t.Fatalf("marshal catalogue: %v", err)
+		}
+		for _, forbidden := range []string{"markdown", "renderedHtml", "segments", "accountId", "storyId"} {
+			if strings.Contains(string(encodedCatalogue), forbidden) {
+				t.Fatalf("catalogue leaked %q: %s", forbidden, encodedCatalogue)
+			}
+		}
+
+		detail, err := store.AdminGetStory(readerAccountA, readerSlug)
+		if err != nil {
+			t.Fatalf("get account A story detail: %v", err)
+		}
+		if detail.Status != model.AdminStoryStatusPublishedWithDraft || len(detail.Versions) != 2 ||
+			detail.Versions[0].Version != 2 || detail.Versions[1].Version != 1 ||
+			!detail.Versions[0].IsDraft || detail.Versions[0].IsPublished ||
+			detail.Versions[1].IsDraft || !detail.Versions[1].IsPublished {
+			t.Fatalf("story detail/version history = %#v", detail)
+		}
+		for _, version := range detail.Versions {
+			if version.Health != model.AdminVersionHealthReady || version.SegmentCount <= 0 || version.WordCount <= 0 {
+				t.Fatalf("healthy version summary = %#v", version)
+			}
+		}
+		encodedDetail, err := json.Marshal(detail)
+		if err != nil {
+			t.Fatalf("marshal detail: %v", err)
+		}
+		if strings.Contains(string(encodedDetail), "Opening café") || strings.Contains(string(encodedDetail), "renderedHtml") {
+			t.Fatalf("detail loaded source content: %s", encodedDetail)
+		}
+
+		source, err := store.AdminGetVersionSource(readerAccountA, readerSlug, firstDraft.VersionID)
+		if err != nil {
+			t.Fatalf("get protected version source: %v", err)
+		}
+		if source.Version != 1 || source.VersionID != firstDraft.VersionID ||
+			!strings.Contains(source.Markdown, "Opening café 世界.") ||
+			source.Health != model.AdminVersionHealthReady || !source.IsPublished || source.IsDraft {
+			t.Fatalf("protected version source = %#v", source)
+		}
+		if _, err := store.AdminGetVersionSource(readerAccountA, readerSlug, accountBDraft.VersionID); !errors.Is(err, model.ErrAdminStoryNotFound) {
+			t.Fatalf("cross-account version source error = %v", err)
+		}
+		unpublishedDetail, err := store.AdminGetStory(readerAccountA, "unpublished-reader-story")
+		if err != nil {
+			t.Fatalf("get second story detail: %v", err)
+		}
+		if _, err := store.AdminGetVersionSource(readerAccountA, readerSlug, unpublishedDetail.DraftVersion.VersionID); !errors.Is(err, model.ErrAdminStoryNotFound) {
+			t.Fatalf("cross-story version source error = %v", err)
+		}
+		if _, err := store.AdminGetStory(readerAccountC, readerSlug); !errors.Is(err, model.ErrAdminStoryNotFound) {
+			t.Fatalf("cross-account story detail error = %v", err)
+		}
+
+		var storiesBefore, versionsBefore int
+		if err := adminDB.QueryRow(`SELECT count(*) FROM stories`).Scan(&storiesBefore); err != nil {
+			t.Fatalf("count stories before preview: %v", err)
+		}
+		if err := adminDB.QueryRow(`SELECT count(*) FROM story_versions`).Scan(&versionsBefore); err != nil {
+			t.Fatalf("count versions before preview: %v", err)
+		}
+		preview, err := store.AdminPreview(model.AdminPreviewRequest{
+			Slug: "preview-only-story", Title: "Preview only", Markdown: "# Preview only\n\nNo rows.\n",
+		})
+		if err != nil || preview.SegmentCount != 2 {
+			t.Fatalf("preview-only response/error = %#v / %v", preview, err)
+		}
+		var storiesAfter, versionsAfter int
+		if err := adminDB.QueryRow(`SELECT count(*) FROM stories`).Scan(&storiesAfter); err != nil {
+			t.Fatalf("count stories after preview: %v", err)
+		}
+		if err := adminDB.QueryRow(`SELECT count(*) FROM story_versions`).Scan(&versionsAfter); err != nil {
+			t.Fatalf("count versions after preview: %v", err)
+		}
+		if storiesAfter != storiesBefore || versionsAfter != versionsBefore {
+			t.Fatalf("preview mutated rows: stories %d -> %d, versions %d -> %d", storiesBefore, storiesAfter, versionsBefore, versionsAfter)
+		}
+
+		const unpublishSlug = "story-studio-unpublish"
+		unpublishDraft, err := store.AdminDraftUpsert(readerAccountA, model.AdminDraftUpsertRequest{
+			Slug: unpublishSlug, Title: "Story Studio unpublish", Markdown: "# Story Studio unpublish\n\nReadable progress.\n",
+		})
+		if err != nil {
+			t.Fatalf("create unpublish fixture: %v", err)
+		}
+		t.Cleanup(func() { _, _ = adminDB.Exec(`DELETE FROM stories WHERE id = $1`, unpublishDraft.StoryID) })
+		publishedStatus, err := store.AdminPublishStory(readerAccountA, unpublishSlug, unpublishDraft.VersionID)
+		if err != nil || publishedStatus.Status != model.AdminStoryStatusPublished ||
+			publishedStatus.PublishedVersion == nil || publishedStatus.PublishedVersion.VersionID != unpublishDraft.VersionID {
+			t.Fatalf("typed publication response/error = %#v / %v", publishedStatus, err)
+		}
+		publishedReader, err := store.ReaderStory(readerAccountA, unpublishSlug)
+		if err != nil {
+			t.Fatalf("read unpublish fixture before unpublish: %v", err)
+		}
+		locator := locatorForReaderSegment(publishedReader.Segments[0], 0.4)
+		if err := store.ProgressPut(readerAccountA, unpublishSlug, publishedReader.Version, locator, 0.4); err != nil {
+			t.Fatalf("store progress before unpublish: %v", err)
+		}
+		var progressBefore int
+		if err := adminDB.QueryRow(`SELECT count(*) FROM reading_progress WHERE story_id = $1`, unpublishDraft.StoryID).Scan(&progressBefore); err != nil {
+			t.Fatalf("count progress before unpublish: %v", err)
+		}
+
+		unpublishedStatus, err := store.AdminUnpublish(readerAccountA, unpublishSlug)
+		if err != nil {
+			t.Fatalf("unpublish story: %v", err)
+		}
+		if unpublishedStatus.Status != model.AdminStoryStatusDraftOnly ||
+			unpublishedStatus.PublishedVersion != nil || unpublishedStatus.DraftVersion == nil ||
+			unpublishedStatus.DraftVersion.VersionID != unpublishDraft.VersionID || unpublishedStatus.VersionCount != 1 {
+			t.Fatalf("unpublish response = %#v", unpublishedStatus)
+		}
+		repeatedUnpublish, err := store.AdminUnpublish(readerAccountA, unpublishSlug)
+		if err != nil || !reflect.DeepEqual(repeatedUnpublish, unpublishedStatus) {
+			t.Fatalf("repeated unpublish response/error = %#v / %v; first %#v", repeatedUnpublish, err, unpublishedStatus)
+		}
+		var (
+			publishedPointer *string
+			draftPointer     *string
+			isPublished      bool
+			versionCount     int
+			progressAfter    int
+		)
+		if err := adminDB.QueryRow(`
+			SELECT published_version_id, draft_version_id, is_published,
+			       (SELECT count(*) FROM story_versions WHERE story_id = stories.id),
+			       (SELECT count(*) FROM reading_progress WHERE story_id = stories.id)
+			FROM stories
+			WHERE id = $1
+		`, unpublishDraft.StoryID).Scan(&publishedPointer, &draftPointer, &isPublished, &versionCount, &progressAfter); err != nil {
+			t.Fatalf("read unpublish persistence state: %v", err)
+		}
+		if publishedPointer != nil || draftPointer == nil || *draftPointer != unpublishDraft.VersionID ||
+			isPublished || versionCount != 1 || progressAfter != progressBefore || progressAfter != 1 {
+			t.Fatalf("unpublish persistence state = published %#v, draft %#v, active %v, versions %d, progress %d", publishedPointer, draftPointer, isPublished, versionCount, progressAfter)
+		}
+		if _, err := store.ReaderStory(readerAccountA, unpublishSlug); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("unpublished Reader lookup error = %v", err)
+		}
+		library, err := store.Library(readerAccountA)
+		if err != nil {
+			t.Fatalf("library after unpublish: %v", err)
+		}
+		for _, item := range library.Items {
+			if item.Slug == unpublishSlug {
+				t.Fatalf("unpublished story remained in Library: %#v", item)
+			}
+		}
+		if _, err := store.AdminUnpublish(readerAccountB, unpublishSlug); !errors.Is(err, model.ErrAdminStoryNotFound) {
+			t.Fatalf("cross-account unpublish error = %v", err)
+		}
+
+		if _, err := adminDB.Exec(`
+			UPDATE stories
+			SET draft_version_id = NULL
+			WHERE id = $1
+		`, unpublishDraft.StoryID); err != nil {
+			t.Fatalf("prepare retained-version unpublished state: %v", err)
+		}
+		retained, err := store.AdminGetStory(readerAccountA, unpublishSlug)
+		if err != nil || retained.Status != model.AdminStoryStatusUnpublished ||
+			retained.VersionCount != 1 || retained.DraftVersion != nil || retained.PublishedVersion != nil {
+			t.Fatalf("retained-version unpublished detail/error = %#v / %v", retained, err)
+		}
+	})
+
+	t.Run("Story Studio repair state never follows a foreign pointer or leaks corrupt content", func(t *testing.T) {
+		const pointerSlug = "story-studio-foreign-pointer"
+		pointerDraft, err := store.AdminDraftUpsert(readerAccountA, model.AdminDraftUpsertRequest{
+			Slug: pointerSlug, Title: "Account A pointer story", Markdown: "# Account A pointer story\n\nSafe metadata.\n",
+		})
+		if err != nil {
+			t.Fatalf("create foreign-pointer fixture: %v", err)
+		}
+		t.Cleanup(func() { _, _ = adminDB.Exec(`DELETE FROM stories WHERE id = $1`, pointerDraft.StoryID) })
+		if _, err := adminDB.Exec(`
+			UPDATE stories
+			SET draft_version_id = $2
+			WHERE id = $1
+		`, pointerDraft.StoryID, accountBDraft.VersionID); err != nil {
+			t.Fatalf("install cross-story pointer: %v", err)
+		}
+		pointerDetail, err := store.AdminGetStory(readerAccountA, pointerSlug)
+		if err != nil {
+			t.Fatalf("get foreign-pointer repair detail: %v", err)
+		}
+		if pointerDetail.Status != model.AdminStoryStatusRepairRequired || pointerDetail.DraftVersion != nil ||
+			pointerDetail.Title != "Account A pointer story" || pointerDetail.Title == "Account B isolated story" {
+			t.Fatalf("foreign-pointer repair detail = %#v", pointerDetail)
+		}
+
+		const corruptSlug = "story-studio-corrupt-version"
+		corruptDraft, err := store.AdminDraftUpsert(readerAccountA, model.AdminDraftUpsertRequest{
+			Slug: corruptSlug, Title: "Corrupt version", Markdown: "# Corrupt version\n\nSafe original.\n",
+		})
+		if err != nil {
+			t.Fatalf("create corrupt-version fixture: %v", err)
+		}
+		t.Cleanup(func() { _, _ = adminDB.Exec(`DELETE FROM stories WHERE id = $1`, corruptDraft.StoryID) })
+		const privateMarker = "SENSITIVE_CORRUPT_CONTENT_HASH"
+		if _, err := adminDB.Exec(`
+			UPDATE story_versions
+			SET content_hash = $2
+			WHERE id = $1
+		`, corruptDraft.VersionID, privateMarker); err != nil {
+			t.Fatalf("corrupt content hash: %v", err)
+		}
+		corruptDetail, err := store.AdminGetStory(readerAccountA, corruptSlug)
+		if err != nil {
+			t.Fatalf("get corrupt story detail: %v", err)
+		}
+		if corruptDetail.Status != model.AdminStoryStatusRepairRequired || len(corruptDetail.Versions) != 1 ||
+			corruptDetail.Versions[0].Health != model.AdminVersionHealthRepairRequired {
+			t.Fatalf("corrupt story detail = %#v", corruptDetail)
+		}
+		encoded, err := json.Marshal(corruptDetail)
+		if err != nil {
+			t.Fatalf("marshal corrupt detail: %v", err)
+		}
+		if strings.Contains(string(encoded), privateMarker) || strings.Contains(string(encoded), "noncanonical persisted content") {
+			t.Fatalf("corrupt detail leaked internal content/diagnostic: %s", encoded)
+		}
+		if _, err := store.AdminGetVersionSource(readerAccountA, corruptSlug, corruptDraft.VersionID); !errors.Is(err, model.ErrAdminVersionRepairRequired) ||
+			strings.Contains(err.Error(), privateMarker) {
+			t.Fatalf("corrupt version source error = %v", err)
+		}
+	})
+
 	t.Run("corrupt idempotent version requires repair instead of false reuse", func(t *testing.T) {
 		req := model.AdminDraftUpsertRequest{
 			Slug:     "idempotent-repair-story",

@@ -766,7 +766,10 @@ func setupAccountIntegrationSchema(t *testing.T, database *sql.DB) {
 			title text NOT NULL,
 			author text,
 			language text NOT NULL DEFAULT 'en-GB',
+			source jsonb NOT NULL DEFAULT '{}'::jsonb,
+			rights jsonb NOT NULL DEFAULT '{}'::jsonb,
 			is_published boolean NOT NULL DEFAULT false,
+			draft_version_id uuid,
 			published_version_id uuid,
 			created_at timestamptz NOT NULL DEFAULT now(),
 			updated_at timestamptz NOT NULL DEFAULT now(),
@@ -780,8 +783,12 @@ func setupAccountIntegrationSchema(t *testing.T, database *sql.DB) {
 			markdown text NOT NULL DEFAULT '',
 			rendered_html text NOT NULL,
 			content_hash text NOT NULL DEFAULT '',
+			created_at timestamptz NOT NULL DEFAULT now(),
 			UNIQUE (story_id, version)
 		)`,
+		`ALTER TABLE stories
+			ADD CONSTRAINT stories_draft_version_test_fkey
+			FOREIGN KEY (draft_version_id) REFERENCES story_versions(id) ON DELETE SET NULL`,
 		`ALTER TABLE stories
 			ADD CONSTRAINT stories_published_version_test_fkey
 			FOREIGN KEY (published_version_id) REFERENCES story_versions(id) ON DELETE SET NULL`,

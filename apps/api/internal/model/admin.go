@@ -1,15 +1,8 @@
 package model
 
-type AdminPreviewRequest struct {
-	Markdown string `json:"markdown"`
-}
+import "fmt"
 
-type AdminPreviewResponse struct {
-	RenderedHTML string         `json:"renderedHtml"`
-	Segments     []AdminSegment `json:"segments"`
-}
-
-type AdminDraftUpsertRequest struct {
+type AdminStoryInput struct {
 	Slug      string         `json:"slug"`
 	Title     string         `json:"title"`
 	Author    *string        `json:"author"`
@@ -19,23 +12,60 @@ type AdminDraftUpsertRequest struct {
 	Rights    map[string]any `json:"rights"`
 }
 
-type AdminDraftUpsertResponse struct {
-	StoryID        string `json:"storyId"`
-	StoryVersionID string `json:"storyVersionId"`
-	Slug           string `json:"slug"`
-	Version        int    `json:"version"`
-	SegmentsCount  int    `json:"segmentsCount"`
-	RenderedHTML   string `json:"renderedHtml"`
+// Preview and draft creation deliberately share one input contract and one
+// canonicalisation path.
+type AdminPreviewRequest = AdminStoryInput
+type AdminDraftUpsertRequest = AdminStoryInput
+
+type AdminValidationIssue struct {
+	Field   string `json:"field"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
-type AdminSegment struct {
-	Ordinal           int     `json:"ordinal"`
-	Kind              string  `json:"kind"`
-	HeadingLevel      *int    `json:"headingLevel"`
-	ContentKey        string  `json:"contentKey"`
-	ContentOccurrence int     `json:"contentOccurrence"`
-	ChapterKey        *string `json:"chapterKey"`
-	ChapterOccurrence *int    `json:"chapterOccurrence"`
-	RenderedHTML      string  `json:"renderedHtml"`
-	WordCount         int     `json:"wordCount"`
+type AdminValidationError struct {
+	Issues []AdminValidationIssue
+}
+
+func (e *AdminValidationError) Error() string {
+	return fmt.Sprintf("admin story input has %d validation issue(s)", len(e.Issues))
+}
+
+type AdminPreviewResponse struct {
+	Slug         string                 `json:"slug"`
+	Title        string                 `json:"title"`
+	Author       *string                `json:"author"`
+	Language     string                 `json:"language"`
+	Rights       map[string]any         `json:"rights"`
+	SourceURL    *string                `json:"sourceUrl"`
+	RenderedHTML string                 `json:"renderedHtml"`
+	SegmentCount int                    `json:"segmentCount"`
+	WordCount    int                    `json:"wordCount"`
+	ChapterCount int                    `json:"chapterCount"`
+	Warnings     []AdminValidationIssue `json:"warnings"`
+}
+
+type AdminDraftOutcome string
+
+const (
+	AdminDraftOutcomeCreatedStory   AdminDraftOutcome = "created_story"
+	AdminDraftOutcomeCreatedVersion AdminDraftOutcome = "created_version"
+	AdminDraftOutcomeReused         AdminDraftOutcome = "reused"
+)
+
+type AdminDraftUpsertResponse struct {
+	Slug         string            `json:"slug"`
+	VersionID    string            `json:"versionId"`
+	Version      int               `json:"version"`
+	SegmentCount int               `json:"segmentCount"`
+	WordCount    int               `json:"wordCount"`
+	ChapterCount int               `json:"chapterCount"`
+	RenderedHTML string            `json:"renderedHtml"`
+	Outcome      AdminDraftOutcome `json:"outcome"`
+
+	// These aliases keep existing Store-level tests and internal callers source
+	// compatible without exposing database story IDs or legacy field names.
+	StoryID        string `json:"-"`
+	StoryVersionID string `json:"-"`
+	SegmentsCount  int    `json:"-"`
 }
