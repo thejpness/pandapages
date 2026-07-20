@@ -7,10 +7,26 @@ const fixedDestinations = new Set([
   '/journey',
   '/admin',
   '/admin/upload',
+  '/admin/stories',
+  '/admin/stories/new',
   '/admin/ai',
 ])
 
 const storySlugPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+
+function safeAdminStoryPath(value: string): string | null {
+  const match = /^\/admin\/stories\/([^/]+)(\/edit)?$/.exec(value)
+  if (!match) return null
+  try {
+    const slug = decodeURIComponent(match[1])
+    if (!storySlugPattern.test(slug) || encodeURIComponent(slug) !== match[1]) {
+      return null
+    }
+    return `/admin/stories/${match[1]}${match[2] ?? ''}`
+  } catch {
+    return null
+  }
+}
 
 export function safeNextPath(value: unknown): string {
   if (typeof value !== 'string' || value.length === 0 || value.trim() !== value) {
@@ -22,6 +38,9 @@ export function safeNextPath(value: unknown): string {
   }
 
   if (fixedDestinations.has(value)) return value
+
+  const adminStoryPath = safeAdminStoryPath(value)
+  if (adminStoryPath) return adminStoryPath
 
   if (!value.startsWith('/read/') || value.startsWith('//')) return fallbackPath
 

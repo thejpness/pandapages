@@ -35,8 +35,28 @@ export const router = createRouter({
       component: () => import('./views/admin/AdminLayout.vue'),
       meta: { requiresUnlock: true },
       children: [
-        { path: '', redirect: { path: 'upload' } },
-        { path: 'upload', component: () => import('./views/admin/AdminUpload.vue') },
+        { path: '', redirect: { name: 'admin-stories' } },
+        { path: 'upload', redirect: { name: 'admin-story-new' } },
+        {
+          path: 'stories',
+          name: 'admin-stories',
+          component: () => import('./views/admin/StoryStudioList.vue'),
+        },
+        {
+          path: 'stories/new',
+          name: 'admin-story-new',
+          component: () => import('./views/admin/StoryStudioEditor.vue'),
+        },
+        {
+          path: 'stories/:slug/edit',
+          name: 'admin-story-edit',
+          component: () => import('./views/admin/StoryStudioEditor.vue'),
+        },
+        {
+          path: 'stories/:slug',
+          name: 'admin-story-detail',
+          component: () => import('./views/admin/StoryStudioDetail.vue'),
+        },
         { path: 'ai', component: () => import('./views/admin/AdminAI.vue') },
       ],
     },

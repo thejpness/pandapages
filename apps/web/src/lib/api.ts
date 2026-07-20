@@ -1092,10 +1092,12 @@ export function parseAdminStoryStatusResponse(
 
 export async function adminPreview(
   payload: AdminPreviewRequest,
+  signal?: AbortSignal,
 ): Promise<AdminPreviewResponse> {
   const data = await request<unknown>('/api/v1/admin/preview', {
     method: 'POST',
     body: JSON.stringify(payload),
+    signal,
   })
   return parseAdminPreviewResponse(data)
 }
@@ -1110,14 +1112,20 @@ export async function adminDraftUpsertStory(
   return parseAdminDraftUpsertResponse(data)
 }
 
-export async function adminListStories(): Promise<AdminStoriesListResponse> {
-  const data = await request<unknown>('/api/v1/admin/stories')
+export async function adminListStories(
+  signal?: AbortSignal,
+): Promise<AdminStoriesListResponse> {
+  const data = await request<unknown>('/api/v1/admin/stories', { signal })
   return parseAdminStoriesListResponse(data)
 }
 
-export async function adminGetStory(slug: string): Promise<AdminStoryDetail> {
+export async function adminGetStory(
+  slug: string,
+  signal?: AbortSignal,
+): Promise<AdminStoryDetail> {
   const data = await request<unknown>(
     `/api/v1/admin/stories/${encodeURIComponent(slug)}`,
+    { signal },
   )
   return parseAdminStoryDetail(data)
 }
@@ -1125,9 +1133,11 @@ export async function adminGetStory(slug: string): Promise<AdminStoryDetail> {
 export async function adminGetVersionSource(
   slug: string,
   versionId: string,
+  signal?: AbortSignal,
 ): Promise<AdminVersionSource> {
   const data = await request<unknown>(
     `/api/v1/admin/stories/${encodeURIComponent(slug)}/versions/${encodeURIComponent(versionId)}`,
+    { signal },
   )
   return parseAdminVersionSource(data)
 }
