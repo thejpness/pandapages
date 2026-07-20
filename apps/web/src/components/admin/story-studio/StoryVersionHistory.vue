@@ -80,7 +80,7 @@ const dateFormatter = new Intl.DateTimeFormat('en-GB', {
 
 <style scoped>
 .version-history h2 {
-  font-family: 'Literata Variable', Georgia, serif;
+  font-family: var(--panda-serif);
   font-size: 1.3rem;
   font-weight: 650;
 }
@@ -101,9 +101,9 @@ const dateFormatter = new Intl.DateTimeFormat('en-GB', {
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 1rem;
-  border: 1px solid var(--studio-line);
-  border-radius: 1rem;
-  background: var(--studio-card);
+  border: 1px solid var(--panda-line-strong);
+  border-radius: var(--panda-radius-card);
+  background: var(--panda-paper-raised);
   padding: 1rem;
 }
 
@@ -116,7 +116,7 @@ const dateFormatter = new Intl.DateTimeFormat('en-GB', {
 .version-row__choice input {
   width: 1.15rem;
   height: 1.15rem;
-  accent-color: var(--studio-green);
+  accent-color: var(--panda-ink);
 }
 
 .version-row__number {
@@ -139,7 +139,7 @@ const dateFormatter = new Intl.DateTimeFormat('en-GB', {
 }
 
 .version-row__body .version-row__notice {
-  color: #8a3f27;
+  color: var(--panda-warning);
   font-weight: 650;
 }
 

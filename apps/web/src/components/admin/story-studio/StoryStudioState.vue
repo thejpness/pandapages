@@ -28,12 +28,12 @@ const emit = defineEmits<{ action: [] }>()
   justify-items: center;
   max-width: 42rem;
   margin: 3rem auto;
-  border: 1px solid var(--studio-line);
-  border-radius: 1.25rem;
-  background: var(--studio-card);
+  border: 1px solid var(--panda-line-strong);
+  border-radius: var(--panda-radius-card);
+  background: var(--panda-paper-raised);
   padding: clamp(1.5rem, 6vw, 3.5rem);
   text-align: center;
-  box-shadow: var(--studio-shadow-soft);
+  box-shadow: var(--panda-shadow-soft);
 }
 
 .studio-state__mark {
@@ -41,16 +41,17 @@ const emit = defineEmits<{ action: [] }>()
   place-items: center;
   width: 3rem;
   height: 3rem;
-  border-radius: 1rem;
-  background: var(--studio-wash);
-  color: var(--studio-green);
+  border: 2px solid var(--panda-ink);
+  border-radius: var(--panda-radius-compact);
+  background: var(--panda-ink);
+  color: var(--panda-white);
   font-size: 1.35rem;
   font-weight: 800;
 }
 
 .studio-state h2 {
   margin-top: 1rem;
-  font-family: 'Literata Variable', Georgia, serif;
+  font-family: var(--panda-serif);
   font-size: 1.3rem;
 }
 
@@ -62,4 +63,16 @@ const emit = defineEmits<{ action: [] }>()
 }
 
 .studio-state .studio-button { margin-top: 1.2rem; }
+
+.studio-state[data-kind='repair'] .studio-state__mark {
+  border-color: var(--panda-warning);
+  background: var(--panda-warning-surface);
+  color: var(--panda-warning);
+}
+
+.studio-state:is([data-kind='error'], [data-kind='forbidden']) .studio-state__mark {
+  border-color: var(--panda-danger);
+  background: var(--panda-danger-surface);
+  color: var(--panda-danger);
+}
 </style>

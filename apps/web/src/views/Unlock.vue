@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import PandaAuthShell from '../components/app/PandaAuthShell.vue'
 import { getAPIErrorStatus, unlock } from '../lib/api'
 import { haptic } from '../lib/haptics'
 import { authState } from '../lib/session'
@@ -173,185 +174,157 @@ const keypad = [
 </script>
 
 <template>
-  <div class="min-h-dvh bg-[#0B1724] text-white relative overflow-hidden">
-    <!-- Animated panda patch backdrop -->
-    <div class="pp-backdrop pointer-events-none absolute inset-0">
-      <div class="pp-vignette absolute inset-0"></div>
-      <div class="pp-dots absolute inset-0 opacity-[0.35]"></div>
+  <PandaAuthShell
+    eyebrow="Parent lock"
+    title="Unlock Panda Pages"
+    description="Enter your secret passcode"
+  >
+    <div class="unlock-entry">
+      <div
+        class="unlock-code"
+        :class="{ 'unlock-code--shake': shake }"
+        :aria-label="`Passcode entry, ${code.length} of 6 digits entered`"
+        role="button"
+        tabindex="0"
+        @click="focusOtp"
+        @keydown.enter.prevent="focusOtp"
+      >
+        <span
+          v-for="(digit, index) in digits"
+          :key="index"
+          class="unlock-code__digit"
+          :class="{ 'unlock-code__digit--filled': digit }"
+          aria-hidden="true"
+        >
+          •
+        </span>
+      </div>
 
-      <div class="pp-patch pp-patch--a"></div>
-      <div class="pp-patch pp-patch--b"></div>
-      <div class="pp-patch pp-patch--c"></div>
-      <div class="pp-patch pp-patch--d"></div>
+      <label class="unlock-visually-hidden" for="unlock-passcode">Six-digit passcode</label>
+      <input
+        id="unlock-passcode"
+        ref="otpEl"
+        v-model="code"
+        inputmode="numeric"
+        pattern="[0-9]*"
+        autocomplete="one-time-code"
+        class="unlock-visually-hidden"
+        :aria-invalid="err ? 'true' : undefined"
+        :aria-describedby="err ? 'unlock-passcode-error' : 'unlock-passcode-help'"
+      />
+
+      <p v-if="err" id="unlock-passcode-error" class="unlock-message unlock-message--error" role="alert">
+        {{ err }}
+      </p>
+      <p v-else id="unlock-passcode-help" class="unlock-message">
+        Tap the passcode row to paste or use one-time-code autofill, or type with your keyboard.
+      </p>
+
+      <div class="unlock-actions">
+        <button
+          type="button"
+          class="unlock-button unlock-button--primary"
+          :disabled="busy || code.length !== 6"
+          @click="submit"
+        >
+          {{ busy ? 'Unlocking…' : 'Unlock' }}
+        </button>
+
+        <button
+          type="button"
+          class="unlock-button unlock-button--secondary"
+          :disabled="busy || code.length === 0"
+          aria-label="Clear code"
+          title="Clear"
+          @click="clearAll"
+        >
+          Clear
+        </button>
+      </div>
     </div>
 
-    <div
-      class="relative mx-auto flex min-h-dvh max-w-lg flex-col px-4 pt-[calc(1.25rem+env(safe-area-inset-top))] pb-[calc(1.25rem+env(safe-area-inset-bottom))]"
-    >
-      <!-- Header -->
-      <header class="mt-2">
-        <div class="flex items-center justify-between">
-          <div class="flex items-center gap-3">
-            <div
-              class="grid h-12 w-12 place-items-center rounded-2xl border border-white/10 bg-white/5 shadow-sm overflow-hidden"
-            >
-              <img
-                src="/logo.png"
-                alt="Panda Pages"
-                class="h-12 w-12"
-                loading="lazy"
-                decoding="async"
-              />
-            </div>
-
-            <div>
-              <h1 class="text-xl font-semibold leading-tight">Panda Pages</h1>
-              <p class="text-sm opacity-80">Enter your secret passcode</p>
-            </div>
-          </div>
-
-          <div class="text-xs opacity-80 rounded-full border border-white/10 bg-white/5 px-3 py-1">
-            Parent lock
-          </div>
-        </div>
-      </header>
-
-      <!-- Card -->
-      <main class="mt-6 flex-1">
-        <div
-          class="relative rounded-3xl border border-white/10 bg-white/5 p-5
-                 shadow-[0_0_0_1px_rgba(255,255,255,0.02)_inset]
-                 backdrop-blur"
-          @pointerdown="focusOtp"
+    <div class="unlock-keypad" role="group" aria-label="Passcode keypad">
+      <div class="unlock-keypad__grid">
+        <button
+          v-for="key in keypad.flat()"
+          :key="key"
+          type="button"
+          class="unlock-key"
+          :class="{ 'unlock-key--word': key === 'clear' || key === 'back' }"
+          :disabled="busy"
+          :aria-label="key === 'clear' ? 'Clear code' : key === 'back' ? 'Backspace' : `Digit ${key}`"
+          @click="
+            key === 'clear'
+              ? clearAll()
+              : key === 'back'
+                ? backspace()
+                : pressDigit(String(key))
+          "
         >
-          <div class="pp-watermark pointer-events-none absolute -right-10 -top-10 opacity-[0.12]"></div>
+          <template v-if="key === 'clear'">Clear</template>
+          <template v-else-if="key === 'back'"><span aria-hidden="true">⌫</span> Back</template>
+          <template v-else>{{ key }}</template>
+        </button>
+      </div>
 
-          <!-- Big “bubbles” -->
-          <div
-            class="mx-auto mt-2 w-full select-none"
-            :class="shake ? 'pp-shake' : ''"
-            aria-label="Passcode entry"
-            role="button"
-            tabindex="0"
-            @click="focusOtp"
-            @keydown.enter.prevent="focusOtp"
-          >
-            <div class="flex justify-between gap-2">
-              <div
-                v-for="(d, i) in digits"
-                :key="i"
-                class="flex h-14 flex-1 items-center justify-center rounded-2xl border border-white/10 bg-black/20 text-xl font-semibold"
-                :class="d ? 'ring-2 ring-white/25' : 'opacity-95'"
-              >
-                <span v-if="d" class="translate-y-px">•</span>
-                <span v-else class="text-white/15">•</span>
-              </div>
-            </div>
-
-            <p v-if="err" class="mt-3 text-sm text-red-300">{{ err }}</p>
-            <p v-else class="mt-3 text-sm opacity-70">
-              Tip: tap here to paste / use OTP autofill, or type with your keyboard.
-            </p>
-          </div>
-
-          <!-- Hidden input (paste / OTP autofill) -->
-          <input
-            ref="otpEl"
-            v-model="code"
-            inputmode="numeric"
-            pattern="[0-9]*"
-            autocomplete="one-time-code"
-            class="sr-only"
-          />
-
-          <!-- Actions -->
-          <div class="mt-5 flex gap-2">
-            <button
-              type="button"
-              class="flex-1 rounded-2xl bg-white text-black py-3 font-semibold
-                     disabled:opacity-60 active:scale-[0.99] transition"
-              :disabled="busy || code.length !== 6"
-              @click="submit"
-            >
-              {{ busy ? 'Unlocking…' : 'Unlock' }}
-            </button>
-
-            <button
-              type="button"
-              class="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm
-                     hover:bg-white/10 active:scale-[0.99] transition disabled:opacity-60"
-              :disabled="busy || code.length === 0"
-              @click="clearAll"
-              aria-label="Clear code"
-              title="Clear"
-            >
-              Clear
-            </button>
-          </div>
-        </div>
-
-        <!-- Keypad -->
-        <div class="mt-5 rounded-3xl border border-white/10 bg-white/5 p-4 backdrop-blur">
-          <div class="grid grid-cols-3 gap-3">
-            <button
-              v-for="key in keypad.flat()"
-              :key="key"
-              type="button"
-              class="pp-key h-14 rounded-2xl border border-white/10 bg-black/20
-                     text-lg font-semibold transition disabled:opacity-60"
-              :class="
-                key === 'clear'
-                  ? 'text-sm font-medium'
-                  : key === 'back'
-                    ? 'text-sm font-medium'
-                    : ''
-              "
-              :disabled="busy"
-              @click="
-                key === 'clear'
-                  ? clearAll()
-                  : key === 'back'
-                    ? backspace()
-                    : pressDigit(String(key))
-              "
-            >
-              <span v-if="key === 'clear'">🧼 Clear</span>
-              <span v-else-if="key === 'back'">⌫ Back</span>
-              <span v-else>{{ key }}</span>
-            </button>
-          </div>
-
-          <div class="mt-4 flex items-center justify-between text-xs opacity-70">
-            <span>Made for tiny readers 🐾</span>
-            <span class="rounded-full border border-white/10 bg-white/5 px-2 py-1">6 digits</span>
-          </div>
-        </div>
-      </main>
-
-      <!-- Footer branding -->
-      <footer class="mt-6 text-center text-xs opacity-70">
-        <div>Keep stories safe from curious paws 🐼</div>
-        <a
-          class="mt-2 inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 hover:bg-white/10 transition"
-          href="https://southcoastapps.co.uk"
-          target="_blank"
-          rel="noreferrer"
-          aria-label="South Coast Apps"
-          title="South Coast Apps"
-        >
-          <span class="opacity-90">A South Coast App</span>
-          <span class="opacity-60">·</span>
-          <span class="opacity-90">southcoastapps.co.uk</span>
-        </a>
-      </footer>
+      <div class="unlock-keypad__note">
+        <span>Made for tiny readers</span>
+        <span class="unlock-keypad__count">6 digits</span>
+      </div>
     </div>
-  </div>
+
+    <template #footer>
+      <p class="unlock-footer-copy">Keep stories safe from curious paws.</p>
+      <a
+        class="unlock-footer-link"
+        href="https://southcoastapps.co.uk"
+        target="_blank"
+        rel="noreferrer"
+        aria-label="South Coast Apps"
+        title="South Coast Apps"
+      >
+        <span>A South Coast App</span>
+        <span aria-hidden="true">·</span>
+        <span>southcoastapps.co.uk</span>
+      </a>
+    </template>
+  </PandaAuthShell>
 </template>
 
 <style scoped>
-/* unchanged styles… (keep your existing style block) */
-.pp-shake { animation: pp-shake 420ms ease-in-out; }
-@keyframes pp-shake {
+.unlock-entry,
+.unlock-keypad {
+  border: 1px solid var(--panda-line);
+  border-radius: var(--panda-radius-compact);
+  padding: clamp(0.8rem, 4vw, 1rem);
+  background: var(--panda-white);
+}
+
+.unlock-code {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: clamp(0.25rem, 2vw, 0.5rem);
+  width: 100%;
+  cursor: text;
+  user-select: none;
+}
+
+.unlock-code:focus-visible {
+  border-radius: var(--panda-radius-compact);
+  outline: 3px solid var(--panda-focus);
+  outline-offset: 0.35rem;
+}
+
+.unlock-entry:has(#unlock-passcode:focus-visible) .unlock-code {
+  outline: 3px solid var(--panda-focus);
+  outline-offset: 0.35rem;
+}
+
+.unlock-code--shake {
+  animation: unlock-shake 420ms ease-in-out;
+}
+
+@keyframes unlock-shake {
   0% { transform: translateX(0); }
   20% { transform: translateX(-10px); }
   40% { transform: translateX(10px); }
@@ -360,98 +333,195 @@ const keypad = [
   100% { transform: translateX(0); }
 }
 
-.pp-key {
-  transform: translateZ(0);
-  box-shadow:
-    0 0 0 1px rgba(255,255,255,0.02) inset,
-    0 10px 30px rgba(0,0,0,0.25);
-}
-.pp-key:hover { background-color: rgba(255,255,255,0.08); }
-.pp-key:active {
-  transform: scale(0.99);
-  box-shadow:
-    0 0 0 1px rgba(255,255,255,0.05) inset,
-    0 6px 18px rgba(0,0,0,0.22);
-}
-
-/* rest of your existing CSS kept as-is */
-.pp-vignette {
-  background: radial-gradient(900px 460px at 50% 10%, rgba(255,255,255,0.06), transparent 65%),
-              radial-gradient(900px 520px at 50% 110%, rgba(0,0,0,0.35), transparent 60%);
+.unlock-code__digit {
+  display: grid;
+  min-width: 0;
+  min-height: 3.5rem;
+  place-items: center;
+  border: 1px solid var(--panda-line-strong);
+  border-radius: var(--panda-radius-compact);
+  background: var(--panda-paper);
+  color: color-mix(in srgb, var(--panda-muted) 34%, transparent);
+  font-size: 1.35rem;
+  font-weight: 800;
 }
 
-.pp-dots {
-  background-image:
-    radial-gradient(rgba(255,255,255,0.18) 1px, transparent 1px),
-    radial-gradient(rgba(255,255,255,0.10) 1px, transparent 1px);
-  background-size: 42px 42px, 64px 64px;
-  background-position: 0 0, 20px 10px;
-  animation: pp-drift 18s linear infinite;
-  mask-image: radial-gradient(closest-side, rgba(0,0,0,1), rgba(0,0,0,0));
-  mask-position: 50% 0%;
-  mask-size: 140% 100%;
-  mask-repeat: no-repeat;
-}
-@keyframes pp-drift {
-  from { transform: translate3d(0, 0, 0); }
-  to   { transform: translate3d(0, -120px, 0); }
+.unlock-code__digit--filled {
+  border-color: var(--panda-ink);
+  background: var(--panda-white);
+  color: var(--panda-ink);
+  box-shadow: inset 0 0 0 1px var(--panda-ink);
 }
 
-/* Panda patch (geometric) */
-.pp-patch,
-.pp-watermark {
-  position: absolute;
-  width: 240px;
-  height: 240px;
-  border-radius: 48px;
-  background:
-    radial-gradient(40px 40px at 22% 18%, rgba(0,0,0,0.75), transparent 62%),
-    radial-gradient(40px 40px at 78% 18%, rgba(0,0,0,0.75), transparent 62%),
-    radial-gradient(140px 120px at 50% 55%, rgba(255,255,255,0.10), transparent 60%),
-    linear-gradient(135deg, rgba(255,255,255,0.10), rgba(255,255,255,0.03));
-  border: 1px solid rgba(255,255,255,0.08);
-  box-shadow:
-    0 0 0 1px rgba(0,0,0,0.18) inset,
-    0 30px 80px rgba(0,0,0,0.35);
+.unlock-visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  overflow: hidden !important;
+  clip: rect(0 0 0 0) !important;
+  clip-path: inset(50%) !important;
+  white-space: nowrap !important;
 }
 
-.pp-patch::before,
-.pp-patch::after,
-.pp-watermark::before,
-.pp-watermark::after {
-  content: '';
-  position: absolute;
-  width: 72px;
-  height: 72px;
-  border-radius: 999px;
-  background: rgba(0,0,0,0.70);
-  top: -22px;
-  box-shadow: 0 0 0 1px rgba(255,255,255,0.06) inset;
+.unlock-message {
+  min-height: 2.5rem;
+  margin: 0.75rem 0 0;
+  color: var(--panda-muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
 }
-.pp-patch::before,
-.pp-watermark::before { left: 22px; }
-.pp-patch::after,
-.pp-watermark::after { right: 22px; }
 
-.pp-patch--a { left: -60px; top: 90px; opacity: 0.20; transform: rotate(-8deg); animation: pp-float-a 14s ease-in-out infinite; }
-.pp-patch--b { right: -90px; top: 40px; opacity: 0.14; transform: rotate(10deg); animation: pp-float-b 16s ease-in-out infinite; }
-.pp-patch--c { left: -80px; bottom: -40px; opacity: 0.12; transform: rotate(14deg); animation: pp-float-c 18s ease-in-out infinite; }
-.pp-patch--d { right: -70px; bottom: 140px; opacity: 0.10; transform: rotate(-14deg); animation: pp-float-d 20s ease-in-out infinite; }
+.unlock-message--error {
+  border: 1px solid color-mix(in srgb, var(--panda-danger) 45%, transparent);
+  border-radius: var(--panda-radius-compact);
+  padding: 0.55rem 0.7rem;
+  background: var(--panda-danger-surface);
+  color: var(--panda-danger);
+  font-weight: 700;
+}
 
-@keyframes pp-float-a { 0%,100% { transform: translate3d(0,0,0) rotate(-8deg);} 50% { transform: translate3d(14px,-10px,0) rotate(-4deg);} }
-@keyframes pp-float-b { 0%,100% { transform: translate3d(0,0,0) rotate(10deg);} 50% { transform: translate3d(-16px,12px,0) rotate(6deg);} }
-@keyframes pp-float-c { 0%,100% { transform: translate3d(0,0,0) rotate(14deg);} 50% { transform: translate3d(18px,10px,0) rotate(18deg);} }
-@keyframes pp-float-d { 0%,100% { transform: translate3d(0,0,0) rotate(-14deg);} 50% { transform: translate3d(-12px,-14px,0) rotate(-10deg);} }
+.unlock-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.6rem;
+  margin-top: 0.9rem;
+}
 
-.pp-watermark { width: 220px; height: 220px; box-shadow: none; border-color: rgba(255,255,255,0.06); }
+.unlock-button,
+.unlock-key {
+  min-height: 2.75rem;
+  border: 1px solid var(--panda-ink);
+  border-radius: var(--panda-radius-compact);
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.unlock-button--primary {
+  padding: 0.7rem 1rem;
+  background: var(--panda-ink);
+  color: var(--panda-paper-raised);
+}
+
+.unlock-button--secondary {
+  padding: 0.7rem 0.9rem;
+  background: var(--panda-paper);
+  color: var(--panda-ink);
+}
+
+.unlock-button:hover:not(:disabled),
+.unlock-key:hover:not(:disabled) {
+  box-shadow: inset 0 0 0 2px var(--panda-ink);
+}
+
+.unlock-button:active:not(:disabled),
+.unlock-key:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.unlock-button:disabled,
+.unlock-key:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.unlock-keypad {
+  margin-top: 0.8rem;
+  background: var(--panda-paper);
+}
+
+.unlock-keypad__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+.unlock-key {
+  min-width: 0;
+  min-height: 3.3rem;
+  padding: 0.45rem;
+  background: var(--panda-white);
+  color: var(--panda-ink);
+  font-size: 1.05rem;
+  box-shadow: 0 0.18rem 0 var(--panda-line-strong);
+}
+
+.unlock-key--word {
+  font-size: 0.78rem;
+}
+
+.unlock-keypad__note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.8rem;
+  color: var(--panda-muted);
+  font-size: 0.72rem;
+}
+
+.unlock-keypad__count {
+  border: 1px solid var(--panda-line-strong);
+  border-radius: var(--panda-radius-pill);
+  padding: 0.2rem 0.55rem;
+  background: var(--panda-paper-raised);
+  color: var(--panda-soft-ink);
+  font-weight: 750;
+}
+
+.unlock-footer-copy {
+  margin: 0;
+}
+
+.unlock-footer-link {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  min-height: 2.75rem;
+  margin-top: 0.25rem;
+  border-radius: var(--panda-radius-pill);
+  padding: 0.45rem 0.7rem;
+  color: var(--panda-soft-ink);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.unlock-footer-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+
+@media (max-width: 24rem) {
+  .unlock-actions {
+    grid-template-columns: 1fr;
+  }
+}
 
 @media (prefers-reduced-motion: reduce) {
-  .pp-dots,
-  .pp-patch--a,
-  .pp-patch--b,
-  .pp-patch--c,
-  .pp-patch--d {
+  .unlock-code--shake {
     animation: none !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .unlock-code__digit,
+  .unlock-entry,
+  .unlock-keypad,
+  .unlock-button,
+  .unlock-key {
+    border-color: CanvasText;
+    background: Canvas;
+    color: CanvasText;
+    box-shadow: none;
+  }
+
+  .unlock-code__digit--filled {
+    forced-color-adjust: none;
+    background: Highlight;
+    color: HighlightText;
   }
 }
 </style>

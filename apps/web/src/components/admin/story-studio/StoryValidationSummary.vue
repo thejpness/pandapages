@@ -22,12 +22,12 @@ const emit = defineEmits<{ focus: [field: string] }>()
 
 <style scoped>
 .validation-summary {
-  border: 1px solid #e1a68e;
+  border: 1px solid var(--panda-danger);
   border-left-width: 4px;
-  border-radius: 0.9rem;
-  background: #fff4ee;
+  border-radius: var(--panda-radius-compact);
+  background: var(--panda-danger-surface);
   padding: 1rem 1.1rem;
-  color: #753a27;
+  color: var(--panda-danger);
 }
 
 .validation-summary h2 {

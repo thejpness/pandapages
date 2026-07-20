@@ -63,7 +63,7 @@ const emit = defineEmits<{ focus: [field: string] }>()
 }
 
 .preview-pane__eyebrow {
-  color: var(--studio-green);
+  color: var(--panda-soft-ink);
   font-size: 0.72rem;
   font-weight: 760;
   letter-spacing: 0.08em;
@@ -72,15 +72,16 @@ const emit = defineEmits<{ focus: [field: string] }>()
 
 .preview-pane h2 {
   margin-top: 0.15rem;
-  font-family: 'Literata Variable', Georgia, serif;
+  font-family: var(--panda-serif);
   font-size: 1.15rem;
   font-weight: 650;
 }
 
 .preview-pane__outdated {
-  border-radius: 999px;
-  background: #f7e9cc;
-  color: #795514;
+  border: 1px solid var(--panda-warning);
+  border-radius: var(--panda-radius-pill);
+  background: var(--panda-warning-surface);
+  color: var(--panda-warning);
   padding: 0.35rem 0.65rem;
   font-size: 0.72rem;
   font-weight: 720;
@@ -92,8 +93,8 @@ const emit = defineEmits<{ focus: [field: string] }>()
   place-content: center;
   margin-top: 1.1rem;
   border: 1px dashed var(--studio-line-strong);
-  border-radius: 1rem;
-  background: #fbfcf8;
+  border-radius: var(--panda-radius-card);
+  background: var(--panda-paper-raised);
   padding: 2rem;
   color: var(--studio-muted);
   text-align: center;
@@ -130,8 +131,8 @@ const emit = defineEmits<{ focus: [field: string] }>()
   overflow: auto;
   margin-top: 1rem;
   border: 1px solid var(--studio-line);
-  border-radius: 1rem;
-  background: white;
+  border-radius: var(--panda-radius-card);
+  background: var(--panda-white);
   padding: clamp(1rem, 4vw, 2.2rem);
 }
 </style>

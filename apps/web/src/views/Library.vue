@@ -501,18 +501,18 @@ function navigateFromLibrary(path: string) {
 }
 
 .library-page {
-  --library-ink: #11110f;
-  --library-paper: #f4f1e9;
-  --library-white: #fffefa;
-  --library-mist: #e7e3d9;
-  --library-muted: #625f58;
-  --library-line: rgba(17, 17, 15, 0.14);
-  --library-line-strong: rgba(17, 17, 15, 0.24);
+  --library-ink: var(--panda-ink);
+  --library-paper: var(--panda-paper);
+  --library-white: var(--panda-white);
+  --library-mist: var(--panda-mist);
+  --library-muted: var(--panda-muted);
+  --library-line: var(--panda-line);
+  --library-line-strong: var(--panda-line-strong);
   --library-accent: #f2c75c;
   --library-accent-soft: #d9e5d2;
-  --library-serif: "Literata Variable", Georgia, serif;
-  --library-sans: "Atkinson Hyperlegible Next Variable", ui-sans-serif, sans-serif;
-  --reader-focus: #1b6754;
+  --library-serif: var(--panda-serif);
+  --library-sans: var(--panda-sans);
+  --reader-focus: var(--panda-focus);
   min-height: 100dvh;
   overflow-x: clip;
   background:

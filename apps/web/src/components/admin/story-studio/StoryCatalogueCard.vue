@@ -55,11 +55,11 @@ const dateFormatter = new Intl.DateTimeFormat('en-GB', {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  border: 1px solid var(--studio-line);
-  border-radius: 1.15rem;
-  background: var(--studio-card);
+  border: 1px solid var(--panda-line-strong);
+  border-radius: var(--panda-radius-card);
+  background: var(--panda-paper-raised);
   padding: 1.2rem;
-  box-shadow: var(--studio-shadow-soft);
+  box-shadow: var(--panda-shadow-soft);
 }
 
 .story-card__topline {
@@ -78,7 +78,7 @@ const dateFormatter = new Intl.DateTimeFormat('en-GB', {
   overflow-wrap: anywhere;
   margin-top: 1rem;
   color: var(--studio-ink);
-  font-family: 'Literata Variable', Georgia, serif;
+  font-family: var(--panda-serif);
   font-size: 1.28rem;
   font-weight: 650;
   line-height: 1.25;
@@ -93,7 +93,7 @@ const dateFormatter = new Intl.DateTimeFormat('en-GB', {
 .story-card code {
   overflow-wrap: anywhere;
   margin-top: 0.7rem;
-  color: #607174;
+  color: var(--panda-muted);
   font-size: 0.75rem;
 }
 
@@ -136,9 +136,13 @@ const dateFormatter = new Intl.DateTimeFormat('en-GB', {
   min-height: 2.75rem;
   margin-top: auto;
   padding-top: 1rem;
-  color: var(--studio-green);
+  border: 1px solid var(--panda-ink);
+  border-radius: var(--panda-radius-compact);
+  background: var(--panda-ink);
+  color: var(--panda-white);
   font-weight: 720;
+  padding: 0.65rem 0.8rem;
 }
 
-.story-card__open:hover { color: var(--studio-green-dark); }
+.story-card__open:hover { background: var(--panda-soft-ink); }
 </style>

@@ -23,16 +23,17 @@ async function generate() {
 </script>
 
 <template>
-  <section class="rounded-2xl border border-white/10 bg-white/5 p-5">
-    <div class="flex items-start justify-between gap-4">
+  <section class="admin-ai studio-panel">
+    <div class="admin-ai__heading">
       <div>
-        <h2 class="text-lg font-semibold">AI create</h2>
-        <p class="mt-1 text-sm opacity-75">Generate markdown you can then save as a story.</p>
+        <p class="admin-ai__eyebrow">Story Studio</p>
+        <h1>AI create</h1>
+        <p>Generate markdown you can then save as a story.</p>
       </div>
 
       <button
         type="button"
-        class="rounded-xl bg-white text-black px-4 py-2 text-sm font-medium disabled:opacity-60"
+        class="studio-button studio-button--primary"
         :disabled="generating || !prompt.trim()"
         @click="generate"
       >
@@ -40,19 +41,18 @@ async function generate() {
       </button>
     </div>
 
-    <div class="mt-5 grid grid-cols-1 md:grid-cols-3 gap-3">
-      <label class="text-xs opacity-80">
+    <div class="admin-ai__options">
+      <label>
         Target age
         <input
           v-model.number="targetAge"
           type="number"
           min="1"
           max="12"
-          class="mt-2 w-full rounded-xl bg-black/20 border border-white/10 px-3 py-2 text-sm outline-none focus:border-white/25"
         />
       </label>
 
-      <label class="text-xs opacity-80">
+      <label>
         Max chars
         <input
           v-model.number="maxChars"
@@ -60,27 +60,146 @@ async function generate() {
           min="1000"
           max="5000000"
           step="500"
-          class="mt-2 w-full rounded-xl bg-black/20 border border-white/10 px-3 py-2 text-sm outline-none focus:border-white/25"
         />
       </label>
 
-      <div class="text-xs opacity-80 flex items-end">
-        <div class="opacity-70">Later: style presets, safety filters, rhyme toggle, etc.</div>
+      <div class="admin-ai__later">
+        <div>Later: style presets, safety filters, rhyme toggle, etc.</div>
       </div>
     </div>
 
-    <label class="block mt-4 text-xs opacity-80">
+    <label class="admin-ai__prompt">
       Prompt
       <textarea
         v-model="prompt"
-        class="mt-2 w-full min-h-40 rounded-2xl bg-black/20 border border-white/10 px-4 py-3 text-sm outline-none focus:border-white/25"
         placeholder="Write a calming bedtime story about a panda learning to share…"
       />
     </label>
 
-    <div v-if="result" class="mt-4">
-      <div class="text-xs uppercase tracking-wide opacity-60 mb-2">Result (markdown)</div>
-      <pre class="whitespace-pre-wrap rounded-2xl border border-white/10 bg-black/30 p-4 text-sm overflow-auto">{{ result }}</pre>
+    <div v-if="result" class="admin-ai__result">
+      <div>Result (markdown)</div>
+      <pre>{{ result }}</pre>
     </div>
   </section>
 </template>
+
+<style scoped>
+.admin-ai {
+  color: var(--panda-ink);
+}
+
+.admin-ai__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.admin-ai__eyebrow {
+  color: var(--panda-muted);
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.admin-ai h1 {
+  margin-top: 0.2rem;
+  font-family: var(--panda-serif);
+  font-size: clamp(1.7rem, 4vw, 2.4rem);
+  font-weight: 650;
+}
+
+.admin-ai__heading p:last-child {
+  margin-top: 0.35rem;
+  color: var(--panda-muted);
+}
+
+.admin-ai__options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: end;
+  gap: 0.8rem;
+  margin-top: 1.25rem;
+}
+
+.admin-ai label {
+  color: var(--panda-soft-ink);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.admin-ai input,
+.admin-ai textarea {
+  display: block;
+  width: 100%;
+  margin-top: 0.45rem;
+  border: 1px solid var(--panda-line-strong);
+  border-radius: var(--panda-radius-compact);
+  background: var(--panda-white);
+  color: var(--panda-ink);
+  padding: 0.7rem 0.8rem;
+  font-size: max(1rem, 16px);
+}
+
+.admin-ai input {
+  min-height: 2.75rem;
+}
+
+.admin-ai textarea {
+  min-height: 10rem;
+  resize: vertical;
+}
+
+.admin-ai__later {
+  display: flex;
+  align-items: flex-end;
+  min-height: 2.75rem;
+  color: var(--panda-muted);
+  font-size: 0.78rem;
+}
+
+.admin-ai__prompt {
+  display: block;
+  margin-top: 1rem;
+}
+
+.admin-ai__result {
+  margin-top: 1rem;
+}
+
+.admin-ai__result > div {
+  margin-bottom: 0.45rem;
+  color: var(--panda-muted);
+  font-size: 0.72rem;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.admin-ai__result pre {
+  overflow: auto;
+  border: 1px solid var(--panda-line-strong);
+  border-radius: var(--panda-radius-compact);
+  background: var(--panda-mist);
+  padding: 1rem;
+  color: var(--panda-ink);
+  font-size: 0.9rem;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 44rem) {
+  .admin-ai__heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .admin-ai__heading .studio-button {
+    width: 100%;
+  }
+
+  .admin-ai__options {
+    grid-template-columns: 1fr;
+  }
+}
+</style>

@@ -455,11 +455,54 @@ async function openCatalogue(page: Page, api: StudioAPI) {
   await expect(page.getByRole('heading', { level: 1, name: 'Stories' })).toBeVisible()
 }
 
+async function expectPandaVisualShell(page: Page) {
+  const shell = page.locator('.story-studio-shell')
+  await expect(shell).toHaveClass(/panda-print-surface/)
+  await expect(page.locator('.studio-brand__panda')).toHaveAttribute('src', '/logo.png')
+  expect(
+    await shell.evaluate((element) => {
+      const style = getComputedStyle(element)
+      const texture = getComputedStyle(element, '::before')
+      return {
+        background: style.backgroundColor,
+        color: style.color,
+        colorScheme: style.colorScheme,
+        font: style.fontFamily,
+        texture: texture.backgroundImage,
+      }
+    }),
+  ).toEqual({
+    background: 'rgb(244, 241, 233)',
+    color: 'rgb(17, 17, 15)',
+    colorScheme: 'light',
+    font: expect.stringContaining('Atkinson Hyperlegible Next Variable'),
+    texture: expect.stringContaining('radial-gradient'),
+  })
+  await expect(page.locator('.studio-nav__new')).toHaveCSS(
+    'background-color',
+    'rgb(17, 17, 15)',
+  )
+  expect(
+    await page.locator('.studio-page-heading h1').evaluate(
+      (element) => getComputedStyle(element).fontFamily,
+    ),
+  ).toContain('Literata Variable')
+}
+
+async function expectNoHorizontalOverflow(page: Page) {
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    ),
+  ).toBeLessThanOrEqual(1)
+}
+
 test('catalogue loads human statuses and supports deterministic search and filtering', async ({
   page,
 }) => {
   const api = new StudioAPI()
   await openCatalogue(page, api)
+  await expectPandaVisualShell(page)
 
   const catalogue = page.getByLabel('Story catalogue')
   await expect(catalogue.getByText('Published · New draft')).toBeVisible()
@@ -587,6 +630,10 @@ test('repair-required save conflict and repair summaries disable unsafe actions'
   await leave.getByRole('button', { name: 'Discard changes and leave' }).click()
   await page.getByRole('heading', { name: 'The Tangled Story' }).locator('..').getByRole('button', { name: 'Review story' }).click()
   await expect(page.getByRole('heading', { level: 2, name: 'Needs attention' })).toBeVisible()
+  await expect(page.locator('.repair-banner')).toHaveCSS(
+    'background-color',
+    'rgb(255, 242, 216)',
+  )
   await expect(page.getByRole('button', { name: 'Publish selected version' })).toBeDisabled()
   await expect(page.getByText('This stored version cannot safely be reused or published.')).toBeVisible()
   expect(await seriousOrCriticalViolations(page)).toEqual([])
@@ -598,6 +645,9 @@ test('publish is deliberate, retains history and exposes Reader only after succe
   const api = new StudioAPI()
   await api.install(page)
   await page.goto('/admin/stories/panda-tale')
+  await expect(page.locator('.detail-overview')).toBeVisible()
+  await expect(page.locator('.version-row')).toHaveCount(2)
+  expect(await seriousOrCriticalViolations(page)).toEqual([])
   await page.getByLabel('Select version 2 for publication').check()
   await page.getByRole('button', { name: 'Publish selected version' }).click()
   const dialog = page.getByRole('dialog', { name: 'Publish this version?' })
@@ -621,6 +671,8 @@ test('unpublish removes Reader availability while retaining drafts and version h
   await page.getByRole('button', { name: 'Unpublish' }).click()
   const dialog = page.getByRole('dialog', { name: 'Unpublish this story?' })
   await expect(dialog.getByText(/Drafts, immutable versions and historical reading progress remain/)).toBeVisible()
+  await expect(dialog).toHaveCSS('background-color', 'rgb(255, 254, 250)')
+  expect(await seriousOrCriticalViolations(page)).toEqual([])
   await dialog.getByRole('button', { name: 'Unpublish story' }).click()
   await expect(page.getByText(/Story unpublished/)).toBeVisible()
   await expect(page.getByRole('link', { name: 'Open published story' })).toBeHidden()
@@ -634,11 +686,17 @@ test('dirty navigation requires an accessible decision while clean navigation do
 }) => {
   const api = new StudioAPI()
   await api.install(page)
+  await page.setViewportSize({ width: 844, height: 390 })
   await page.goto('/admin/stories/new')
   await page.getByLabel('Title').fill('Unsaved Panda')
   await page.getByRole('button', { name: 'Stories', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Leave with unsaved changes?' })
   await expect(dialog).toBeVisible()
+  const dialogBox = await dialog.boundingBox()
+  expect(dialogBox).not.toBeNull()
+  expect(dialogBox!.y).toBeGreaterThanOrEqual(0)
+  expect(dialogBox!.y + dialogBox!.height).toBeLessThanOrEqual(390)
+  expect(await seriousOrCriticalViolations(page)).toEqual([])
   await page.keyboard.press('Escape')
   await expect(dialog).toBeHidden()
   await expect(page).toHaveURL(/\/admin\/stories\/new$/)
@@ -666,6 +724,20 @@ test('401 goes to Unlock with a safe next while 403 and retryable failures stay 
   api.listFailure = { status: 500, code: 'list_failed', message: 'story catalogue unavailable' }
   await page.reload()
   await expect(page.getByRole('button', { name: 'Try again' })).toBeVisible()
+  const errorState = page.locator('.studio-state[data-kind="error"]')
+  await expect(errorState).toHaveCSS(
+    'background-color',
+    'rgb(251, 249, 243)',
+  )
+  await expect(errorState.locator('.studio-state__mark')).toHaveCSS(
+    'background-color',
+    'rgb(255, 240, 236)',
+  )
+  await expect(errorState.locator('.studio-state__mark')).toHaveCSS(
+    'color',
+    'rgb(123, 48, 40)',
+  )
+  expect(await seriousOrCriticalViolations(page)).toEqual([])
   await page.getByRole('button', { name: 'Try again' }).click()
   await expect(page.getByRole('heading', { name: 'The Panda Tale' })).toBeVisible()
 
@@ -703,26 +775,20 @@ test('mobile and desktop editor layouts do not overflow', async ({ page }) => {
     { width: 390, height: 844 },
     { width: 844, height: 390 },
     { width: 768, height: 1024 },
+    { width: 1024, height: 768 },
     { width: 1440, height: 900 },
   ]) {
     await page.setViewportSize(viewport)
     await page.goto('/admin/stories/new')
-    const overflow = await page.evaluate(
-      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
-    )
-    expect(overflow).toBeLessThanOrEqual(1)
+    await expectNoHorizontalOverflow(page)
     await expect(page.getByLabel('Markdown')).toBeVisible()
   }
-  await page.setViewportSize({ width: 390, height: 700 })
+  await page.setViewportSize({ width: 720, height: 450 })
   await page.goto('/admin/stories/new')
-  await page.evaluate(() => {
-    document.documentElement.style.fontSize = '200%'
+  await page.addStyleTag({
+    content: 'html { font-size: 32px !important; }',
   })
-  expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
-    ),
-  ).toBeLessThanOrEqual(1)
+  await expectNoHorizontalOverflow(page)
   await expect(page.getByRole('button', { name: 'Save draft', exact: true }).last()).toBeVisible()
   expect(await seriousOrCriticalViolations(page)).toEqual([])
 })

@@ -120,7 +120,7 @@ function update<K extends keyof StoryStudioForm>(key: K, value: StoryStudioForm[
 
 .metadata-form legend {
   color: var(--studio-ink);
-  font-family: 'Literata Variable', Georgia, serif;
+  font-family: var(--panda-serif);
   font-size: 1.15rem;
   font-weight: 650;
 }

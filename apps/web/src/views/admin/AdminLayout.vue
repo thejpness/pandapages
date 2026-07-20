@@ -130,7 +130,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="story-studio-shell">
+  <div class="story-studio-shell panda-print-surface">
     <a class="studio-skip-link" href="#studio-main">Skip to main content</a>
     <StoryStudioHeader
       :current-path="route.path"
@@ -165,39 +165,41 @@ onBeforeUnmount(() => {
 
 <style>
 .story-studio-shell {
-  --studio-paper: #f5f4ec;
-  --studio-card: #fffef9;
-  --studio-wash: #e7efe9;
-  --studio-ink: #173338;
-  --studio-muted: #5c7072;
-  --studio-green: #247064;
-  --studio-green-dark: #15564d;
-  --studio-line: #d9dfd9;
-  --studio-line-strong: #bdc8c2;
-  --studio-shadow: 0 20px 55px rgb(20 47 50 / 14%);
-  --studio-shadow-soft: 0 8px 24px rgb(20 47 50 / 7%);
+  --studio-paper: var(--panda-paper);
+  --studio-card: var(--panda-paper-raised);
+  --studio-wash: var(--panda-mist);
+  --studio-ink: var(--panda-ink);
+  --studio-muted: var(--panda-muted);
+  --studio-line: var(--panda-line);
+  --studio-line-strong: var(--panda-line-strong);
+  --studio-shadow: var(--panda-shadow);
+  --studio-shadow-soft: var(--panda-shadow-soft);
   min-height: 100dvh;
-  background:
-    radial-gradient(circle at 8% 8%, rgb(220 239 232 / 65%), transparent 28rem),
-    var(--studio-paper);
+  background: var(--panda-paper);
   color: var(--studio-ink);
+  color-scheme: light;
+  font-family: var(--panda-sans);
+  -webkit-font-smoothing: antialiased;
 }
 
 .studio-main {
-  width: min(86rem, 100%);
+  position: relative;
+  z-index: 1;
+  width: min(var(--panda-content-width), 100%);
   margin-inline: auto;
-  padding: clamp(1.25rem, 3vw, 2.5rem) max(1rem, env(safe-area-inset-right)) max(2rem, calc(2rem + env(safe-area-inset-bottom))) max(1rem, env(safe-area-inset-left));
+  padding: clamp(1.25rem, 3vw, 2.5rem) var(--panda-safe-right) max(2rem, var(--panda-safe-bottom)) var(--panda-safe-left);
 }
 
 .studio-skip-link {
   position: fixed;
   z-index: 100;
-  top: 0.5rem;
-  left: 0.5rem;
+  top: var(--panda-safe-top);
+  left: var(--panda-safe-left);
   transform: translateY(-150%);
-  border-radius: 0.6rem;
-  background: var(--studio-ink);
-  color: white;
+  border: 2px solid var(--panda-ink);
+  border-radius: var(--panda-radius-compact);
+  background: var(--panda-white);
+  color: var(--panda-ink);
   padding: 0.7rem 1rem;
 }
 
@@ -206,11 +208,11 @@ onBeforeUnmount(() => {
 .studio-shell-alert {
   width: min(82rem, calc(100% - 2rem));
   margin: 1rem auto 0;
-  border: 1px solid #dfa187;
-  border-radius: 0.8rem;
-  background: #fff1e9;
+  border: 1px solid var(--panda-danger);
+  border-radius: var(--panda-radius-compact);
+  background: var(--panda-danger-surface);
   padding: 0.8rem 1rem;
-  color: #763923;
+  color: var(--panda-danger);
 }
 
 .studio-page-heading {
@@ -222,7 +224,7 @@ onBeforeUnmount(() => {
 }
 
 .studio-page-heading__eyebrow {
-  color: var(--studio-green);
+  color: var(--panda-soft-ink);
   font-size: 0.75rem;
   font-weight: 780;
   letter-spacing: 0.1em;
@@ -233,7 +235,7 @@ onBeforeUnmount(() => {
   overflow-wrap: anywhere;
   margin-top: 0.25rem;
   color: var(--studio-ink);
-  font-family: 'Literata Variable', Georgia, serif;
+  font-family: var(--panda-serif);
   font-size: clamp(1.8rem, 4vw, 2.75rem);
   font-weight: 650;
   letter-spacing: -0.025em;
@@ -253,7 +255,7 @@ onBeforeUnmount(() => {
   justify-content: center;
   min-height: 2.75rem;
   border: 1px solid transparent;
-  border-radius: 0.75rem;
+  border-radius: var(--panda-radius-compact);
   padding: 0.65rem 1rem;
   font-size: 0.9rem;
   font-weight: 720;
@@ -261,12 +263,24 @@ onBeforeUnmount(() => {
   text-align: center;
 }
 
-.studio-button--primary { background: var(--studio-green); color: white; }
-.studio-button--primary:hover { background: var(--studio-green-dark); }
-.studio-button--quiet { border-color: var(--studio-line-strong); background: var(--studio-card); color: var(--studio-ink); }
-.studio-button--quiet:hover { background: var(--studio-wash); }
-.studio-button--danger { background: #a84b36; color: white; }
-.studio-button--danger:hover { background: #843827; }
+.studio-button--primary {
+  border-color: var(--panda-ink);
+  background: var(--panda-ink);
+  color: var(--panda-white);
+}
+.studio-button--primary:hover { background: var(--panda-soft-ink); }
+.studio-button--quiet {
+  border-color: var(--panda-line-strong);
+  background: var(--panda-paper-raised);
+  color: var(--panda-ink);
+}
+.studio-button--quiet:hover { background: var(--panda-mist); }
+.studio-button--danger {
+  border-color: var(--panda-danger);
+  background: var(--panda-danger);
+  color: var(--panda-white);
+}
+.studio-button--danger:hover { filter: brightness(0.88); }
 .studio-button:disabled { cursor: not-allowed; opacity: 0.52; }
 
 .studio-button:focus-visible,
@@ -275,7 +289,7 @@ onBeforeUnmount(() => {
 .story-studio-shell input:focus-visible,
 .story-studio-shell select:focus-visible,
 .story-studio-shell textarea:focus-visible {
-  outline: 3px solid #e3a848;
+  outline: 3px solid var(--panda-focus);
   outline-offset: 3px;
 }
 
@@ -307,29 +321,29 @@ onBeforeUnmount(() => {
   min-height: 2.85rem;
   margin-top: 0.4rem;
   border: 1px solid var(--studio-line-strong);
-  border-radius: 0.75rem;
-  background: #fbfcf7;
+  border-radius: var(--panda-radius-compact);
+  background: var(--panda-white);
   color: var(--studio-ink);
   padding: 0.65rem 0.75rem;
   font-size: max(1rem, 16px);
 }
 
-.studio-field input[readonly] { background: #edf0ea; color: #607174; }
-.studio-field input[aria-invalid='true'] { border-color: #b65b3d; }
+.studio-field input[readonly] { background: var(--panda-mist); color: var(--panda-muted); }
+.studio-field input[aria-invalid='true'] { border-color: var(--panda-danger); }
 .studio-field__hint { margin-top: 0.3rem; color: var(--studio-muted); font-size: 0.76rem; line-height: 1.45; }
-.studio-field__error { margin-top: 0.4rem; color: #9b4028; font-size: 0.82rem; font-weight: 650; }
+.studio-field__error { margin-top: 0.4rem; color: var(--panda-danger); font-size: 0.82rem; font-weight: 650; }
 
 .studio-panel {
   border: 1px solid var(--studio-line);
-  border-radius: 1.15rem;
+  border-radius: var(--panda-radius-card);
   background: var(--studio-card);
   padding: clamp(1rem, 3vw, 1.5rem);
   box-shadow: var(--studio-shadow-soft);
 }
 
 .studio-rendered-story {
-  color: #243b3f;
-  font-family: 'Literata Variable', Georgia, serif;
+  color: var(--panda-soft-ink);
+  font-family: var(--panda-serif);
   font-size: 1rem;
   line-height: 1.75;
 }
@@ -338,7 +352,7 @@ onBeforeUnmount(() => {
 .studio-rendered-story h2,
 .studio-rendered-story h3 {
   margin-block: 1.3em 0.5em;
-  color: #173338;
+  color: var(--panda-ink);
   font-weight: 680;
   line-height: 1.25;
 }
