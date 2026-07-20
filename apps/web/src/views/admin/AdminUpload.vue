@@ -92,16 +92,6 @@ function toMsg(e: unknown, fallback: string) {
   return e instanceof Error && e.message ? e.message : fallback
 }
 
-function isDuplicateContentErr(e: unknown): boolean {
-  const msg = (e instanceof Error ? e.message : '').toLowerCase()
-  return (
-    msg.includes('content_hash') ||
-    msg.includes('story_versions_story_id_content_hash_key') ||
-    msg.includes('sqlstate 23505') ||
-    msg.includes('duplicate key value')
-  )
-}
-
 function resolveReaderPath(storySlug: string): string {
   const routes = router.getRoutes()
   const pick =
@@ -214,7 +204,6 @@ function onSlugInput(v: string) {
 
 /* --------------------------- computed ---------------------------- */
 
-const canPreview = computed(() => markdown.value.trim().length > 0)
 const canSave = computed(() => {
   return (
     title.value.trim().length > 0 &&
@@ -222,10 +211,11 @@ const canSave = computed(() => {
     markdown.value.trim().length > 0
   )
 })
+const canPreview = canSave
 
 const previewSegmentsCount = computed(() => {
-  if (preview.value?.segments?.length) return preview.value.segments.length
-  if (lastDraft.value) return lastDraft.value.segmentsCount
+  if (preview.value) return preview.value.segmentCount
+  if (lastDraft.value) return lastDraft.value.segmentCount
   return 0
 })
 
@@ -320,15 +310,21 @@ async function runPreview() {
   preview.value = null
 
   if (!canPreview.value) {
-    error.value = 'Paste some markdown first.'
+    error.value = 'Title, slug, and markdown are required.'
     return
   }
 
   previewing.value = true
   try {
-    const out = await adminPreview({ markdown: markdown.value })
+    const out = await adminPreview({
+      slug: slug.value.trim(),
+      title: title.value.trim(),
+      author: author.value.trim() || null,
+      markdown: markdown.value,
+      sourceUrl: sourceUrl.value.trim() || null,
+    })
     preview.value = out
-    message.value = `Preview ready (${out.segments.length} segments)`
+    message.value = `Preview ready (${out.segmentCount} segments)`
   } catch (e) {
     error.value = toMsg(e, 'Preview failed')
   } finally {
@@ -358,11 +354,11 @@ async function submit() {
     })
 
     lastDraft.value = draft
-    preview.value = { renderedHtml: draft.renderedHtml, segments: [] }
+    preview.value = null
 
     let didPublish = false
     if (publish.value) {
-      await adminPublishStory(draft.slug, draft.storyVersionId)
+      await adminPublishStory(draft.slug, draft.versionId)
       didPublish = true
     }
 
@@ -390,25 +386,7 @@ async function submit() {
     // Premium: auto-route unless user interacts
     scheduleAutoRoute(info.slug)
   } catch (e) {
-    if (isDuplicateContentErr(e)) {
-      const s = slug.value.trim()
-      message.value = 'No changes detected — that exact content was already uploaded.'
-      error.value = null
-
-      if (s) {
-        successInfo.value = {
-          slug: s,
-          title: title.value.trim() || s,
-          version: lastDraft.value?.version ?? 1,
-          published: publish.value,
-        }
-        showSuccess.value = true
-        await Promise.all([refreshLibrary(), refreshAllStories()])
-        scheduleAutoRoute(s)
-      }
-    } else {
-      error.value = toMsg(e, 'Save failed')
-    }
+    error.value = toMsg(e, 'Save failed')
   } finally {
     saving.value = false
   }
@@ -722,7 +700,7 @@ onMounted(async () => {
             <div class="truncate text-xs opacity-70">
               {{ it.slug }}
               <span v-if="it.author"> · {{ it.author }}</span>
-              · {{ it.isPublished ? 'published' : 'draft' }}
+              · {{ it.status.replaceAll('_', ' ') }}
             </div>
           </div>
           <div class="text-xs opacity-70">Open</div>

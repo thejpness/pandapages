@@ -52,12 +52,14 @@ test('UTF-8 imported text is sent unchanged to the fixed draft path', async (t) 
   globalThis.fetch = async (url, init) => {
     request = { url, init }
     return jsonResponse({
-      storyId: 'story-id',
-      storyVersionId: 'version-id',
       slug: 'cafe-panda',
+      versionId: '11111111-1111-4111-8111-111111111111',
       version: 1,
-      segmentsCount: 2,
+      segmentCount: 2,
+      wordCount: 7,
+      chapterCount: 0,
       renderedHtml: '<h1>Café Panda 🐼</h1>',
+      outcome: 'created_story',
     })
   }
 
