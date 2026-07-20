@@ -193,7 +193,7 @@ test.describe('Reader progress decisions and persistence', () => {
     const put = api.deferProgressPut(READER_SLUG)
 
     await gotoReader(page, api, READER_SLUG)
-    const dialog = page.getByRole('dialog', { name: 'This story has changed' })
+    const dialog = page.getByRole('dialog', { name: 'Story updated' })
     await expect(dialog).toBeVisible()
     await expect(dialog.getByRole('button', { name: 'Resume' })).toHaveCount(0)
     await expectNoProgressPut(page, api, READER_SLUG)

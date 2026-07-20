@@ -5,6 +5,10 @@ import {
   saveProgress,
   type ProgressState,
 } from '../lib/api'
+import {
+  mapReaderProgressAcrossVersions,
+  type CrossVersionMapping,
+} from '../lib/reader-cross-version-progress'
 import { findReaderResumeSegment } from '../lib/reader-scroll-location'
 import type { ReaderLocatorV2, ReaderStorySegment } from '../lib/reader-locator-v2'
 import {
@@ -32,7 +36,11 @@ export type ReaderCapturedPosition = {
 
 export type ReaderProgressDecision =
   | { kind: 'resume'; locator: ReaderLocatorV2; percent: number }
-  | { kind: 'changed'; savedVersion: number }
+  | {
+      kind: 'changed'
+      savedVersion: number
+      mapping: CrossVersionMapping
+    }
 
 export type UseReaderProgressOptions = {
   capture: () => ReaderCapturedPosition | null
@@ -88,6 +96,7 @@ export function useReaderProgress(options: UseReaderProgressOptions) {
   const announcement = ref('')
 
   let context: StoryContext | null = null
+  let preparedSlug: string | null = null
   let generation = 0
   let baselineController: ProgressBaselineController<ProgressState | null> | null = null
   let unsubscribeBaseline: (() => void) | null = null
@@ -171,6 +180,7 @@ export function useReaderProgress(options: UseReaderProgressOptions) {
     disposeBaseline()
     disposeCoordinator()
     context = null
+    preparedSlug = null
     baselineOrigin = null
     movedBeforeReady = false
     awaitingIntent = false
@@ -185,16 +195,24 @@ export function useReaderProgress(options: UseReaderProgressOptions) {
     announcement.value = ''
   }
 
-  async function sessionLoss(active: StoryContext) {
+  async function sessionLossFor(
+    slug: string,
+    activeGeneration: number,
+  ) {
     if (
       handlingSessionLoss ||
-      context?.generation !== active.generation
+      generation !== activeGeneration ||
+      preparedSlug !== slug
     ) return
     handlingSessionLoss = true
     leaveAfterSaveFailure.value = false
     disposeBaseline()
     disposeCoordinator()
-    await options.onSessionLoss(active.slug)
+    await options.onSessionLoss(slug)
+  }
+
+  async function sessionLoss(active: StoryContext) {
+    await sessionLossFor(active.slug, active.generation)
   }
 
   function createCoordinator(active: StoryContext): ProgressSaveCoordinator {
@@ -253,8 +271,20 @@ export function useReaderProgress(options: UseReaderProgressOptions) {
     const recoveredAfterMovement = attempt > 1 && movedBeforeReady
 
     if (progress && progress.version !== active.version) {
+      const mapping = mapReaderProgressAcrossVersions({
+        oldVersion: progress.version,
+        oldLocator: progress.locator,
+        oldPercent: progress.percent,
+        currentVersion: active.version,
+        currentSegments: active.segments,
+      })
+      if (context?.generation !== active.generation) return
       created.initialize(null, null)
-      decision.value = { kind: 'changed', savedVersion: progress.version }
+      decision.value = {
+        kind: 'changed',
+        savedVersion: progress.version,
+        mapping,
+      }
       awaitingIntent = false
       movedBeforeReady = false
       return
@@ -298,35 +328,54 @@ export function useReaderProgress(options: UseReaderProgressOptions) {
     movedBeforeReady = false
   }
 
-  function begin(
-    slug: string,
-    version: number,
-    segments: readonly ReaderStorySegment[],
-  ) {
+  function prepare(slug: string) {
     dispose()
-    generation += 1
-    const active: StoryContext = { slug, version, segments, generation }
-    context = active
-    baselineOrigin = snapshot(options.capture(), active)
-    baselineState.value = initialBaseline()
-
+    preparedSlug = slug
+    const activeGeneration = generation
     const created = createProgressBaselineController({
       load: async () => (await getProgress(slug)).progress,
     })
     baselineController = created
     unsubscribeBaseline = created.subscribe((state) => {
-      if (context?.generation !== active.generation) return
+      if (
+        generation !== activeGeneration ||
+        preparedSlug !== slug
+      ) return
       baselineState.value = state
-      if (state.status === 'ready') {
+      const active = context
+      if (
+        state.status === 'ready' &&
+        active?.generation === activeGeneration
+      ) {
         initializeReadyBaseline(state.value, state.attempt, active)
       } else if (
         state.status === 'unavailable' &&
         getAPIErrorStatus(state.error) === 401
       ) {
-        void sessionLoss(active)
+        void sessionLossFor(slug, activeGeneration)
       }
     })
     void created.load()
+  }
+
+  function begin(
+    slug: string,
+    version: number,
+    segments: readonly ReaderStorySegment[],
+  ) {
+    if (preparedSlug !== slug || !baselineController) prepare(slug)
+    if (handlingSessionLoss) return
+
+    const active: StoryContext = { slug, version, segments, generation }
+    context = active
+    baselineOrigin = snapshot(options.capture(), active)
+    if (baselineState.value.status === 'ready') {
+      initializeReadyBaseline(
+        baselineState.value.value,
+        baselineState.value.attempt,
+        active,
+      )
+    }
   }
 
   function movement(position: ReaderCapturedPosition) {
@@ -390,34 +439,102 @@ export function useReaderProgress(options: UseReaderProgressOptions) {
     }
   }
 
+  async function continueUpdated(
+    restore: (locator: ReaderLocatorV2) => Promise<boolean>,
+  ): Promise<boolean> {
+    const offer = decision.value
+    const activeGeneration = context?.generation
+    if (
+      offer?.kind !== 'changed' ||
+      offer.mapping.kind === 'none' ||
+      activeGeneration === undefined
+    ) {
+      return false
+    }
+
+    const releaseCaptureSuppression = suppressCapture()
+    let restored: boolean
+    try {
+      restored = await restore(offer.mapping.locator)
+    } finally {
+      releaseCaptureSuppression()
+    }
+    if (
+      !restored ||
+      context?.generation !== activeGeneration ||
+      decision.value !== offer
+    ) {
+      return false
+    }
+
+    decision.value = null
+    awaitingIntent = true
+    announcement.value =
+      offer.mapping.confidence === 'high'
+        ? 'The same reading place was restored.'
+        : offer.mapping.confidence === 'medium'
+          ? 'The same chapter was restored.'
+          : 'An approximate reading place was restored.'
+    return true
+  }
+
   async function startCurrentVersion(
     moveToBeginning: () => Promise<ReaderCapturedPosition | null>,
-  ) {
+  ): Promise<boolean> {
+    const offer = decision.value
     const activeGeneration = context?.generation
-    if (activeGeneration === undefined) return
+    if (!offer || activeGeneration === undefined) return false
     const releaseCaptureSuppression = suppressCapture()
-    decision.value = null
-    awaitingIntent = false
     try {
       const beginning = await moveToBeginning()
-      if (context?.generation !== activeGeneration) return
-      desired(beginning, { force: true, debounce: false })
-      if (baselineState.value.status === 'ready') {
-        try {
-          await coordinator?.flush()
-        } catch {
-          // The normal save-error state remains visible and retryable.
-        }
+      if (
+        !beginning ||
+        context?.generation !== activeGeneration ||
+        decision.value !== offer
+      ) {
+        return false
       }
+      const current = snapshot(beginning)
+      if (!current || baselineState.value.status !== 'ready') return false
+
+      decision.value = null
+      awaitingIntent = false
+      coordinator?.update(current, { force: true, debounce: false })
+      try {
+        await coordinator?.flush()
+      } catch {
+        // The normal save-error state remains visible and retryable.
+      }
+      return true
     } finally {
       releaseCaptureSuppression()
     }
   }
 
   function dismissDecision() {
-    if (!decision.value) return
+    if (decision.value?.kind !== 'resume') return
     decision.value = null
     awaitingIntent = true
+  }
+
+  async function returnToLibraryFromVersionDecision() {
+    if (
+      decision.value?.kind !== 'changed' ||
+      navigatingToLibrary.value
+    ) {
+      return
+    }
+    leaveAfterSaveFailure.value = false
+    navigatingToLibrary.value = true
+    lifecycleSuppressed = true
+    try {
+      await options.navigateToLibrary()
+    } catch {
+      lifecycleSuppressed = false
+      options.onNavigationError('The Library could not be opened. Try again.')
+    } finally {
+      navigatingToLibrary.value = false
+    }
   }
 
   async function goLibrary() {
@@ -511,13 +628,16 @@ export function useReaderProgress(options: UseReaderProgressOptions) {
     retryKind,
     retryDisabled,
     saveActive,
+    prepare,
     begin,
     movement,
     desired,
     retry,
     resume,
+    continueUpdated,
     startCurrentVersion,
     dismissDecision,
+    returnToLibraryFromVersionDecision,
     goLibrary,
     leaveAnyway,
     pageHide,

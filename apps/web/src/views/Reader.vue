@@ -18,6 +18,7 @@ import ReaderResumeDialog from '../components/reader/ReaderResumeDialog.vue'
 import ReaderScrollView from '../components/reader/ReaderScrollView.vue'
 import ReaderSettingsDialog from '../components/reader/ReaderSettingsDialog.vue'
 import ReaderStoryState from '../components/reader/ReaderStoryState.vue'
+import ReaderStoryUpdatedDialog from '../components/reader/ReaderStoryUpdatedDialog.vue'
 import { useReaderPreferences } from '../composables/useReaderPreferences'
 import {
   useReaderProgress,
@@ -29,6 +30,7 @@ import {
   currentReaderChapter,
   type ReaderChapter,
 } from '../lib/reader-chapters'
+import type { CrossVersionMapping } from '../lib/reader-cross-version-progress'
 import type { ReaderLocatorV2 } from '../lib/reader-locator-v2'
 import { planReaderModeTransition } from '../lib/reader-mode-transition'
 import {
@@ -157,6 +159,7 @@ const pagedReaderView = ref<ReaderView | null>(null)
 const readerInitialized = ref(false)
 const settingsOpen = ref(false)
 const chaptersOpen = ref(false)
+const versionDecisionBusy = ref(false)
 const activeOrdinal = ref(1)
 const percent = ref(0)
 const navigationMessage = ref('')
@@ -292,19 +295,41 @@ const chapter = computed(() =>
 const themeClass = computed(
   () => 'reader-theme--' + preferences.value.theme,
 )
-const resumeOpen = computed(
+const decisionCanOpen = computed(
   () =>
-    progress.decision.value !== null &&
     !settingsOpen.value &&
     !chaptersOpen.value &&
     !readerPlacementQueue.preferencePending.value &&
     !readerPlacementQueue.chapterPending.value,
 )
-const resumeKind = computed(() => progress.decision.value?.kind ?? 'resume')
+const resumeOpen = computed(
+  () =>
+    progress.decision.value?.kind === 'resume' &&
+    decisionCanOpen.value,
+)
+const storyUpdatedOpen = computed(
+  () =>
+    progress.decision.value?.kind === 'changed' &&
+    decisionCanOpen.value,
+)
+const decisionDialogOpen = computed(
+  () => resumeOpen.value || storyUpdatedOpen.value,
+)
 const resumePercent = computed(() =>
   progress.decision.value?.kind === 'resume'
     ? progress.decision.value.percent
     : 0,
+)
+const storyUpdatedMapping = computed<CrossVersionMapping>(() =>
+  progress.decision.value?.kind === 'changed'
+    ? progress.decision.value.mapping
+    : { kind: 'none', confidence: 'none' },
+)
+const readerControlsEnabled = computed(
+  () =>
+    readerInitialized.value &&
+    progress.decision.value === null &&
+    !readerPlacementQueue.preferencePending.value,
 )
 
 function onPosition(position: ReaderCapturedPosition) {
@@ -316,32 +341,87 @@ function onActive(ordinal: number) {
   activeOrdinal.value = ordinal
 }
 
-async function restore(locator: ReaderLocatorV2): Promise<boolean> {
+function sameSemanticAnchor(
+  expected: ReaderLocatorV2,
+  actual: ReaderLocatorV2,
+): boolean {
+  const expectedChapter = expected.chapter
+  const actualChapter = actual.chapter
+  return (
+    actual.segment.key === expected.segment.key &&
+    actual.segment.occurrence === expected.segment.occurrence &&
+    actual.segment.ordinal === expected.segment.ordinal &&
+    Math.abs(actual.segment.offset - expected.segment.offset) <= 0.1 &&
+    Boolean(actualChapter) === Boolean(expectedChapter) &&
+    actualChapter?.key === expectedChapter?.key &&
+    actualChapter?.occurrence === expectedChapter?.occurrence
+  )
+}
+
+async function restore(
+  locator: ReaderLocatorV2,
+  options: { allowMotion?: boolean; verifySemanticAnchor?: boolean } = {},
+): Promise<boolean> {
   const activeGeneration = readerGeneration
-  const restored = await currentReaderView()?.restore(locator)
-  if (activeGeneration !== readerGeneration) return false
-  const current = captureCurrent()
+  const targetView = currentReaderView()
+  if (!targetView) return false
+  const targetInstance = targetView.instanceId
+  const restored = await targetView.restore(locator, {
+    allowMotion: options.allowMotion,
+  })
+  if (
+    activeGeneration !== readerGeneration ||
+    currentReaderView() !== targetView ||
+    targetView.instanceId !== targetInstance
+  ) {
+    return false
+  }
+
+  const current = targetView.capture()
+  if (
+    !restored ||
+    (options.verifySemanticAnchor &&
+      (!current || !sameSemanticAnchor(locator, current.locator)))
+  ) {
+    return false
+  }
   if (current) {
     percent.value = current.percent
     activeOrdinal.value = current.locator.segment.ordinal
   }
-  if (restored) resumeFocusPending = true
-  return restored ?? false
+  resumeFocusPending = true
+  return true
+}
+
+async function restoreUpdated(locator: ReaderLocatorV2): Promise<boolean> {
+  return restore(locator, {
+    allowMotion: false,
+    verifySemanticAnchor: true,
+  })
 }
 
 async function moveToBeginning(): Promise<ReaderCapturedPosition | null> {
   const activeGeneration = readerGeneration
   const first = story.story.value?.segments[0]
-  if (!first) return null
-  const position = await currentReaderView()?.moveToOrdinal(
+  const targetView = currentReaderView()
+  if (!first || !targetView) return null
+  const targetInstance = targetView.instanceId
+  const position = await targetView.moveToOrdinal(
     first.ordinal,
     0,
     { allowMotion: false },
   )
-  if (activeGeneration !== readerGeneration) return null
+  if (
+    activeGeneration !== readerGeneration ||
+    currentReaderView() !== targetView ||
+    targetView.instanceId !== targetInstance
+  ) {
+    return null
+  }
   if (position) {
     percent.value = position.percent
     activeOrdinal.value = first.ordinal
+    resumeFocusPending = true
   }
   return position ?? null
 }
@@ -558,8 +638,35 @@ async function resumeCurrentVersion() {
   }
 }
 
+async function continueUpdatedStory() {
+  const activeGeneration = readerGeneration
+  const releasePlacement = await acquireReaderPlacement(
+    readerPlacementQueue,
+    'decision',
+    () => activeGeneration === readerGeneration,
+  )
+  if (!releasePlacement) return
+
+  versionDecisionBusy.value = true
+  try {
+    if (activeGeneration !== readerGeneration) return
+    preferenceGeneration += 1
+    const continued = await progress.continueUpdated(restoreUpdated)
+    if (!continued && activeGeneration === readerGeneration) {
+      navigationMessage.value =
+        'Your reading place could not be restored in this version.'
+    }
+  } finally {
+    releasePlacement()
+    if (activeGeneration === readerGeneration) {
+      versionDecisionBusy.value = false
+    }
+  }
+}
+
 async function startCurrentVersion() {
   const activeGeneration = readerGeneration
+  const changedDecision = progress.decision.value?.kind === 'changed'
   const releasePlacement = await acquireReaderPlacement(
     readerPlacementQueue,
     'decision',
@@ -572,19 +679,33 @@ async function startCurrentVersion() {
     placementReleased = true
     releasePlacement()
   }
+
+  if (changedDecision) versionDecisionBusy.value = true
   try {
     if (activeGeneration !== readerGeneration) return
     preferenceGeneration += 1
-    await progress.startCurrentVersion(async () => {
+    const started = await progress.startCurrentVersion(async () => {
       try {
         return await moveToBeginning()
       } finally {
         releasePlacementOnce()
       }
     })
+    if (!started && activeGeneration === readerGeneration) {
+      navigationMessage.value =
+        'The beginning of this version could not be restored.'
+    }
   } finally {
     releasePlacementOnce()
+    if (changedDecision && activeGeneration === readerGeneration) {
+      versionDecisionBusy.value = false
+    }
   }
+}
+
+async function returnToLibraryFromVersionDecision() {
+  if (versionDecisionBusy.value) return
+  await progress.returnToLibraryFromVersionDecision()
 }
 
 function closeResume(open: boolean) {
@@ -593,6 +714,7 @@ function closeResume(open: boolean) {
 
 async function loadCurrentStory() {
   navigationMessage.value = ''
+  progress.prepare(slug.value)
   await story.load(slug.value)
 }
 
@@ -615,6 +737,7 @@ async function routeChanged(nextSlug: string) {
   readerInitialized.value = false
   settingsOpen.value = false
   chaptersOpen.value = false
+  versionDecisionBusy.value = false
   navigationMessage.value = ''
   resumeFocusPending = false
   percent.value = 0
@@ -643,7 +766,16 @@ watch(
 )
 
 watch(
-  resumeOpen,
+  () => progress.decision.value?.kind,
+  (kind) => {
+    if (kind !== 'changed') return
+    settingsOpen.value = false
+    chaptersOpen.value = false
+  },
+)
+
+watch(
+  decisionDialogOpen,
   async (open, wasOpen) => {
     if (open || !wasOpen || !resumeFocusPending) return
     resumeFocusPending = false
@@ -709,7 +841,7 @@ onBeforeUnmount(() => {
         :retry-kind="progress.retryKind.value"
         :retry-disabled="progress.retryDisabled.value"
         :chapters-available="chapters.length > 0"
-        :reader-ready="readerInitialized && !readerPlacementQueue.preferencePending.value"
+        :reader-ready="readerControlsEnabled"
         :settings-open="settingsOpen"
         :chapters-open="chaptersOpen"
         :navigating="progress.navigatingToLibrary.value"
@@ -765,7 +897,7 @@ onBeforeUnmount(() => {
           :content-width="preferences.contentWidth"
           :capture-enabled="progress.captureEnabled.value"
           :reduced-motion="reducedMotion === 'reduce'"
-          :keyboard-enabled="!settingsOpen && !chaptersOpen && !resumeOpen"
+          :keyboard-enabled="!settingsOpen && !chaptersOpen && !decisionDialogOpen"
           @position="onPosition"
           @active="onActive"
         />
@@ -786,13 +918,19 @@ onBeforeUnmount(() => {
       />
       <ReaderResumeDialog
         :open="resumeOpen"
-        :kind="resumeKind"
         :percent="resumePercent"
         @update:open="closeResume"
         @resume="resumeCurrentVersion"
         @start-over="startCurrentVersion"
-        @library="progress.goLibrary"
         @dismiss="progress.dismissDecision"
+      />
+      <ReaderStoryUpdatedDialog
+        :open="storyUpdatedOpen"
+        :mapping="storyUpdatedMapping"
+        :busy="versionDecisionBusy"
+        @continue="continueUpdatedStory"
+        @start="startCurrentVersion"
+        @library="returnToLibraryFromVersionDecision"
       />
 
       <p class="reader-sr-only" role="status" aria-live="polite" aria-atomic="true">

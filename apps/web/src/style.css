@@ -593,6 +593,13 @@ input {
   font-size: 0.9rem;
 }
 
+.reader-dialog-supporting-copy {
+  margin: 0.85rem 0 0;
+  color: var(--reader-muted);
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
 .reader-dialog-actions {
   display: flex;
   flex-wrap: wrap;
