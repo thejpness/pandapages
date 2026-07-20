@@ -254,6 +254,18 @@ func ingest(in Input, bodyAlreadySplit bool, presetFrontmatter map[string]any) (
 	if in.Language == "" {
 		in.Language = "en-GB"
 	}
+	if len(in.Rights) == 0 {
+		if rawRights, exists := fm["rights"]; exists {
+			rights, ok := rawRights.(map[string]any)
+			if !ok {
+				return Output{}, fmt.Errorf("rights must be an object")
+			}
+			in.Rights = make(map[string]any, len(rights))
+			for key, value := range rights {
+				in.Rights[key] = value
+			}
+		}
+	}
 	if in.Rights == nil {
 		in.Rights = map[string]any{}
 	}
@@ -366,6 +378,13 @@ func ingest(in Input, bodyAlreadySplit bool, presetFrontmatter map[string]any) (
 	}
 	if u := strings.TrimSpace(in.SourceURL); u != "" {
 		frontmatter["sourceUrl"] = u
+	}
+	if len(in.Rights) > 0 {
+		rights := make(map[string]any, len(in.Rights))
+		for key, value := range in.Rights {
+			rights[key] = value
+		}
+		frontmatter["rights"] = rights
 	}
 
 	// merge fm → frontmatter (but keep explicit fields authoritative)

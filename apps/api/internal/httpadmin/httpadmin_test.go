@@ -37,6 +37,11 @@ type fakeAdminStore struct {
 	draftErr       error
 	publishErr     error
 	publishCalls   int
+	unpublishErr   error
+	unpublishCalls int
+	detailErr      error
+	versionErr     error
+	previewErr     error
 }
 
 func (s *fakeAdminStore) AccountExists(accountID string) (bool, error) {
@@ -58,25 +63,50 @@ func (s *fakeAdminStore) AdminDraftUpsert(accountID string, req model.AdminDraft
 		StoryID:        "story-id",
 		StoryVersionID: "version-id",
 		Slug:           req.Slug,
+		VersionID:      "version-id",
 		Version:        1,
 		SegmentsCount:  2,
+		SegmentCount:   2,
 		RenderedHTML:   "<h1>" + req.Title + "</h1>",
+		Outcome:        model.AdminDraftOutcomeCreatedStory,
 	}, nil
 }
 
-func (s *fakeAdminStore) AdminPublish(_, _, _ string) error {
+func (s *fakeAdminStore) AdminPublishStory(_, slug, versionID string) (model.AdminStoryStatusResponse, error) {
 	s.publishCalls++
-	return s.publishErr
+	return model.AdminStoryStatusResponse{
+		Slug:   slug,
+		Status: model.AdminStoryStatusPublished,
+		PublishedVersion: &model.AdminVersionPointerSummary{
+			VersionID: versionID,
+			Version:   1,
+		},
+	}, s.publishErr
 }
 
-func (*fakeAdminStore) AdminPreview(req model.AdminPreviewRequest) (model.AdminPreviewResponse, error) {
-	return model.AdminPreviewResponse{RenderedHTML: "<p>" + req.Markdown + "</p>"}, nil
+func (s *fakeAdminStore) AdminUnpublish(_, slug string) (model.AdminStoryStatusResponse, error) {
+	s.unpublishCalls++
+	return model.AdminStoryStatusResponse{Slug: slug, Status: model.AdminStoryStatusDraftOnly}, s.unpublishErr
+}
+
+func (s *fakeAdminStore) AdminPreview(req model.AdminPreviewRequest) (model.AdminPreviewResponse, error) {
+	return model.AdminPreviewResponse{Slug: req.Slug, Title: req.Title, RenderedHTML: "<p>" + req.Markdown + "</p>"}, s.previewErr
 }
 
 func (s *fakeAdminStore) AdminListStories(accountID string) (model.AdminStoriesListResponse, error) {
 	s.listCalls++
 	s.listAccount = accountID
 	return s.listResponse, nil
+}
+
+func (s *fakeAdminStore) AdminGetStory(_ string, slug string) (model.AdminStoryDetailResponse, error) {
+	return model.AdminStoryDetailResponse{Slug: slug, Status: model.AdminStoryStatusDraftOnly}, s.detailErr
+}
+
+func (s *fakeAdminStore) AdminGetVersionSource(_, slug, versionID string) (model.AdminVersionSourceResponse, error) {
+	return model.AdminVersionSourceResponse{
+		Slug: slug, VersionID: versionID, Version: 1, Health: model.AdminVersionHealthReady,
+	}, s.versionErr
 }
 
 func newAdminSessionManager(t *testing.T) *session.Manager {
@@ -132,14 +162,14 @@ func TestAdminListStoriesAuthorised(t *testing.T) {
 	author := "A. Author"
 	store := &fakeAdminStore{
 		listResponse: model.AdminStoriesListResponse{
-			Items: []model.AdminStoryListItem{{
-				Slug:        "safe-story",
-				Title:       "Safe Story",
-				Author:      &author,
-				Language:    "en-GB",
-				IsPublished: true,
-				UpdatedAt:   "2026-07-12T12:00:00Z",
-				CreatedAt:   "2026-07-11T12:00:00Z",
+			Items: []model.AdminStorySummary{{
+				Slug:      "safe-story",
+				Title:     "Safe Story",
+				Author:    &author,
+				Language:  "en-GB",
+				Rights:    map[string]any{},
+				Status:    model.AdminStoryStatusPublished,
+				UpdatedAt: "2026-07-12T12:00:00Z",
 			}},
 		},
 	}
@@ -168,12 +198,12 @@ func TestAdminListStoriesAuthorised(t *testing.T) {
 	if !ok {
 		t.Fatalf("item shape = %#v", items[0])
 	}
-	for _, forbiddenField := range []string{"markdown", "renderedHtml", "contentHash", "rights", "source"} {
+	for _, forbiddenField := range []string{"markdown", "renderedHtml", "contentHash", "segments", "accountId"} {
 		if _, exists := item[forbiddenField]; exists {
 			t.Errorf("unsafe field %q present in admin list item", forbiddenField)
 		}
 	}
-	if item["slug"] != "safe-story" || item["title"] != "Safe Story" || item["isPublished"] != true {
+	if item["slug"] != "safe-story" || item["title"] != "Safe Story" || item["status"] != "published" {
 		t.Fatalf("unexpected safe list shape: %#v", item)
 	}
 }
@@ -190,14 +220,33 @@ func TestAdminPublishReturnsSafeValidationFailure(t *testing.T) {
 		testAdminKey,
 	)
 
-	if rec.Code != http.StatusBadRequest || store.publishCalls != 1 {
+	if rec.Code != http.StatusConflict || store.publishCalls != 1 {
 		t.Fatalf("publish response/calls = %d/%d; body = %s", rec.Code, store.publishCalls, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"code":"publish_invalid"`) ||
+	if !strings.Contains(rec.Body.String(), `"code":"publish_repair_required"`) ||
 		!strings.Contains(rec.Body.String(), "story version is unavailable or unreadable") ||
 		strings.Contains(rec.Body.String(), "private validation detail") {
 		t.Fatalf("safe publish validation response = %s", rec.Body.String())
 	}
+}
+
+func TestAdminPublishRejectsMalformedVersionIdentifierBeforeStore(t *testing.T) {
+	store := &fakeAdminStore{}
+	rec := serveAdmin(
+		t,
+		store,
+		http.MethodPost,
+		"/api/v1/admin/stories/safe-story/publish",
+		[]byte("{\"versionId\":\"not-a-version-id\"}"),
+		"valid",
+		testAdminKey,
+	)
+
+	if rec.Code != http.StatusBadRequest || store.publishCalls != 0 ||
+		!strings.Contains(rec.Body.String(), "\"code\":\"publish_invalid\"") {
+		t.Fatalf("malformed publish response/calls = %d/%d; body = %s", rec.Code, store.publishCalls, rec.Body.String())
+	}
+	assertAdminResponseHeaders(t, rec)
 }
 
 func TestAdminPublishHidesUnexpectedStorageFailure(t *testing.T) {
@@ -273,10 +322,10 @@ func TestAdminPublishPreservesMissingVersionResponse(t *testing.T) {
 		testAdminKey,
 	)
 
-	if rec.Code != http.StatusBadRequest || store.publishCalls != 1 {
+	if rec.Code != http.StatusNotFound || store.publishCalls != 1 {
 		t.Fatalf("missing publish response/calls = %d/%d; body = %s", rec.Code, store.publishCalls, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"code":"publish_failed"`) ||
+	if !strings.Contains(rec.Body.String(), `"code":"publish_not_found"`) ||
 		!strings.Contains(rec.Body.String(), "story version was not found") ||
 		strings.Contains(rec.Body.String(), "private ownership detail") {
 		t.Fatalf("missing publish response changed or leaked detail: %s", rec.Body.String())
@@ -413,5 +462,156 @@ func TestAdminDraftRejectsOversizedBody(t *testing.T) {
 	}
 	if store.draftCalls != 0 {
 		t.Fatal("store called for oversized request")
+	}
+}
+
+func TestAdminPreviewReturnsStructuredValidationIssues(t *testing.T) {
+	store := &fakeAdminStore{previewErr: &model.AdminValidationError{Issues: []model.AdminValidationIssue{{
+		Field: "title", Code: "required", Message: "Enter a title",
+	}}}}
+	rec := serveAdmin(
+		t,
+		store,
+		http.MethodPost,
+		"/api/v1/admin/preview",
+		[]byte(`{"slug":"story","title":"","markdown":"# Story"}`),
+		"valid",
+		testAdminKey,
+	)
+	if rec.Code != http.StatusBadRequest ||
+		!strings.Contains(rec.Body.String(), `"code":"preview_invalid"`) ||
+		!strings.Contains(rec.Body.String(), `"field":"title"`) ||
+		strings.Contains(rec.Body.String(), "admin story input has") {
+		t.Fatalf("preview validation response = %d %s", rec.Code, rec.Body.String())
+	}
+	assertAdminResponseHeaders(t, rec)
+}
+
+func TestAdminDetailAndVersionUseSafeScopedErrors(t *testing.T) {
+	t.Run("story not found", func(t *testing.T) {
+		store := &fakeAdminStore{detailErr: fmt.Errorf("foreign account detail: %w", model.ErrAdminStoryNotFound)}
+		rec := serveAdmin(t, store, http.MethodGet, "/api/v1/admin/stories/private-story", nil, "valid", testAdminKey)
+		if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), `"code":"story_not_found"`) ||
+			strings.Contains(rec.Body.String(), "foreign account") {
+			t.Fatalf("detail response = %d %s", rec.Code, rec.Body.String())
+		}
+		assertAdminResponseHeaders(t, rec)
+	})
+
+	t.Run("version repair required", func(t *testing.T) {
+		store := &fakeAdminStore{versionErr: fmt.Errorf("private invariant: %w", model.ErrAdminVersionRepairRequired)}
+		rec := serveAdmin(
+			t,
+			store,
+			http.MethodGet,
+			"/api/v1/admin/stories/safe-story/versions/11111111-1111-4111-8111-111111111111",
+			nil,
+			"valid",
+			testAdminKey,
+		)
+		if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"code":"version_repair_required"`) ||
+			strings.Contains(rec.Body.String(), "private invariant") {
+			t.Fatalf("version response = %d %s", rec.Code, rec.Body.String())
+		}
+		assertAdminResponseHeaders(t, rec)
+	})
+}
+
+func TestAdminPublishAndUnpublishReturnTypedStatus(t *testing.T) {
+	versionID := "11111111-1111-4111-8111-111111111111"
+	store := &fakeAdminStore{}
+	publish := serveAdmin(
+		t,
+		store,
+		http.MethodPost,
+		"/api/v1/admin/stories/safe-story/publish",
+		[]byte(`{"versionId":"`+versionID+`"}`),
+		"valid",
+		testAdminKey,
+	)
+	if publish.Code != http.StatusOK || !strings.Contains(publish.Body.String(), `"status":"published"`) ||
+		!strings.Contains(publish.Body.String(), `"versionId":"`+versionID+`"`) {
+		t.Fatalf("publish response = %d %s", publish.Code, publish.Body.String())
+	}
+	assertAdminResponseHeaders(t, publish)
+
+	unpublish := serveAdmin(
+		t,
+		store,
+		http.MethodPost,
+		"/api/v1/admin/stories/safe-story/unpublish",
+		nil,
+		"valid",
+		testAdminKey,
+	)
+	if unpublish.Code != http.StatusOK || store.unpublishCalls != 1 ||
+		!strings.Contains(unpublish.Body.String(), `"status":"draft_only"`) {
+		t.Fatalf("unpublish response/calls = %d/%d %s", unpublish.Code, store.unpublishCalls, unpublish.Body.String())
+	}
+	assertAdminResponseHeaders(t, unpublish)
+}
+
+func TestAdminMalformedJSONAndUnexpectedFailuresAreFixedAndSafe(t *testing.T) {
+	t.Run("malformed JSON", func(t *testing.T) {
+		const marker = "SENSITIVE_UNKNOWN_FIELD"
+		rec := serveAdmin(
+			t,
+			&fakeAdminStore{},
+			http.MethodPost,
+			"/api/v1/admin/preview",
+			[]byte(`{"markdown":"story","`+marker+`":true}`),
+			"valid",
+			testAdminKey,
+		)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"code":"bad_json"`) ||
+			strings.Contains(rec.Body.String(), marker) {
+			t.Fatalf("bad JSON response = %d %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("malformed UTF-8", func(t *testing.T) {
+		body := append([]byte(`{"slug":"story","title":"Story","markdown":"`), 0xff)
+		body = append(body, []byte(`"}`)...)
+		rec := serveAdmin(
+			t,
+			&fakeAdminStore{},
+			http.MethodPost,
+			"/api/v1/admin/preview",
+			body,
+			"valid",
+			testAdminKey,
+		)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"code":"bad_json"`) {
+			t.Fatalf("malformed UTF-8 response = %d %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("unpublish storage failure", func(t *testing.T) {
+		const marker = "SENSITIVE_DATABASE_DETAIL"
+		store := &fakeAdminStore{unpublishErr: errors.New(marker)}
+		rec := serveAdmin(
+			t,
+			store,
+			http.MethodPost,
+			"/api/v1/admin/stories/safe-story/unpublish",
+			nil,
+			"valid",
+			testAdminKey,
+		)
+		if rec.Code != http.StatusInternalServerError ||
+			!strings.Contains(rec.Body.String(), `"code":"unpublish_failed"`) ||
+			strings.Contains(rec.Body.String(), marker) {
+			t.Fatalf("unpublish failure = %d %s", rec.Code, rec.Body.String())
+		}
+	})
+}
+
+func assertAdminResponseHeaders(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	if rec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("Cache-Control = %q", rec.Header().Get("Cache-Control"))
+	}
+	if contentType := rec.Header().Get("Content-Type"); !strings.Contains(contentType, "application/json") {
+		t.Fatalf("Content-Type = %q", contentType)
 	}
 }

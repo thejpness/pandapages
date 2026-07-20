@@ -17,6 +17,9 @@ var (
 	// ErrAdminVersionRepairRequired marks a corrupt idempotency target that must
 	// not be reused or mutated as though it were a healthy immutable version.
 	ErrAdminVersionRepairRequired = errors.New("stored story version requires repair")
+	// ErrAdminStoryNotFound intentionally covers missing, cross-account, and
+	// cross-story admin targets so ownership boundaries are not disclosed.
+	ErrAdminStoryNotFound = errors.New("admin story resource was not found")
 )
 
 type StoryItem struct {

@@ -1,6 +1,7 @@
 package httpadmin
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
@@ -8,7 +9,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"pandapages/api/internal/httpauth"
 	"pandapages/api/internal/model"
@@ -18,10 +21,13 @@ type Store interface {
 	AccountExists(accountID string) (bool, error)
 
 	AdminDraftUpsert(accountID string, req model.AdminDraftUpsertRequest) (model.AdminDraftUpsertResponse, error)
-	AdminPublish(accountID string, slug string, versionID string) error
+	AdminPublishStory(accountID string, slug string, versionID string) (model.AdminStoryStatusResponse, error)
+	AdminUnpublish(accountID string, slug string) (model.AdminStoryStatusResponse, error)
 	AdminPreview(req model.AdminPreviewRequest) (model.AdminPreviewResponse, error)
 
 	AdminListStories(accountID string) (model.AdminStoriesListResponse, error)
+	AdminGetStory(accountID string, slug string) (model.AdminStoryDetailResponse, error)
+	AdminGetVersionSource(accountID string, slug string, versionID string) (model.AdminVersionSourceResponse, error)
 }
 
 const (
@@ -29,6 +35,8 @@ const (
 	// Keep public APIs small; only admin gets this.
 	maxJSONBodyBytes = 20 << 20 // 20MB
 )
+
+var adminVersionIDPattern = regexp.MustCompile("(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 
 type ctxKey string
 
@@ -84,7 +92,13 @@ func New(cfg Config, store Store) http.Handler {
 
 		out, err := store.AdminPreview(body)
 		if err != nil {
-			writeErr(w, http.StatusBadRequest, "preview_failed", err.Error())
+			var validationErr *model.AdminValidationError
+			if errors.As(err, &validationErr) {
+				writeIssues(w, http.StatusBadRequest, "preview_invalid", "Story content is invalid", validationErr.Issues)
+				return
+			}
+			slog.Error("admin story preview failed")
+			writeErr(w, http.StatusInternalServerError, "preview_failed", "story preview failed")
 			return
 		}
 
@@ -103,11 +117,17 @@ func New(cfg Config, store Store) http.Handler {
 		aid := accountIDFromCtx(r)
 		out, err := store.AdminDraftUpsert(aid, body)
 		if err != nil {
+			var validationErr *model.AdminValidationError
+			if errors.As(err, &validationErr) {
+				writeIssues(w, http.StatusBadRequest, "draft_invalid", "Story content is invalid", validationErr.Issues)
+				return
+			}
 			if errors.Is(err, model.ErrAdminVersionRepairRequired) {
 				writeErr(w, http.StatusConflict, "draft_repair_required", "stored story version requires repair")
 				return
 			}
-			writeErr(w, http.StatusBadRequest, "draft_failed", err.Error())
+			slog.Error("admin story draft failed")
+			writeErr(w, http.StatusInternalServerError, "draft_failed", "story draft could not be saved")
 			return
 		}
 
@@ -120,10 +140,49 @@ func New(cfg Config, store Store) http.Handler {
 
 		out, err := store.AdminListStories(aid)
 		if err != nil {
-			writeErr(w, http.StatusBadRequest, "list_failed", err.Error())
+			slog.Error("admin story catalogue failed")
+			writeErr(w, http.StatusInternalServerError, "list_failed", "story catalogue unavailable")
 			return
 		}
 
+		noStore(w)
+		writeJSON(w, http.StatusOK, out)
+	}))
+
+	// GET /api/v1/admin/stories/{slug}
+	mux.HandleFunc("GET /api/v1/admin/stories/{slug}", withAdmin(func(w http.ResponseWriter, r *http.Request) {
+		slug := strings.TrimSpace(r.PathValue("slug"))
+		out, err := store.AdminGetStory(accountIDFromCtx(r), slug)
+		if err != nil {
+			if errors.Is(err, model.ErrAdminStoryNotFound) {
+				writeErr(w, http.StatusNotFound, "story_not_found", "story was not found")
+				return
+			}
+			slog.Error("admin story detail failed")
+			writeErr(w, http.StatusInternalServerError, "story_failed", "story details unavailable")
+			return
+		}
+		noStore(w)
+		writeJSON(w, http.StatusOK, out)
+	}))
+
+	// GET /api/v1/admin/stories/{slug}/versions/{versionId}
+	mux.HandleFunc("GET /api/v1/admin/stories/{slug}/versions/{versionId}", withAdmin(func(w http.ResponseWriter, r *http.Request) {
+		slug := strings.TrimSpace(r.PathValue("slug"))
+		versionID := strings.TrimSpace(r.PathValue("versionId"))
+		out, err := store.AdminGetVersionSource(accountIDFromCtx(r), slug, versionID)
+		if err != nil {
+			switch {
+			case errors.Is(err, model.ErrAdminStoryNotFound):
+				writeErr(w, http.StatusNotFound, "version_not_found", "story version was not found")
+			case errors.Is(err, model.ErrAdminVersionRepairRequired):
+				writeErr(w, http.StatusConflict, "version_repair_required", "story version requires repair")
+			default:
+				slog.Error("admin story version source failed")
+				writeErr(w, http.StatusInternalServerError, "version_failed", "story version unavailable")
+			}
+			return
+		}
 		noStore(w)
 		writeJSON(w, http.StatusOK, out)
 	}))
@@ -145,13 +204,19 @@ func New(cfg Config, store Store) http.Handler {
 		}
 
 		aid := accountIDFromCtx(r)
-		if err := store.AdminPublish(aid, slug, strings.TrimSpace(body.VersionID)); err != nil {
+		body.VersionID = strings.TrimSpace(body.VersionID)
+		if !adminVersionIDPattern.MatchString(body.VersionID) {
+			writeErr(w, http.StatusBadRequest, "publish_invalid", "versionId must be a valid identifier")
+			return
+		}
+		out, err := store.AdminPublishStory(aid, slug, body.VersionID)
+		if err != nil {
 			if errors.Is(err, model.ErrAdminPublishNotFound) {
-				writeErr(w, http.StatusBadRequest, "publish_failed", "story version was not found")
+				writeErr(w, http.StatusNotFound, "publish_not_found", "story version was not found")
 				return
 			}
 			if errors.Is(err, model.ErrAdminPublishInvalid) {
-				writeErr(w, http.StatusBadRequest, "publish_invalid", "story version is unavailable or unreadable")
+				writeErr(w, http.StatusConflict, "publish_repair_required", "story version is unavailable or unreadable")
 				return
 			}
 			// Driver errors may contain connection or query detail. Keep both the
@@ -162,7 +227,24 @@ func New(cfg Config, store Store) http.Handler {
 		}
 
 		noStore(w)
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		writeJSON(w, http.StatusOK, out)
+	}))
+
+	// POST /api/v1/admin/stories/{slug}/unpublish
+	mux.HandleFunc("POST /api/v1/admin/stories/{slug}/unpublish", withAdmin(func(w http.ResponseWriter, r *http.Request) {
+		slug := strings.TrimSpace(r.PathValue("slug"))
+		out, err := store.AdminUnpublish(accountIDFromCtx(r), slug)
+		if err != nil {
+			if errors.Is(err, model.ErrAdminStoryNotFound) {
+				writeErr(w, http.StatusNotFound, "unpublish_not_found", "story was not found")
+				return
+			}
+			slog.Error("admin story unpublish failed")
+			writeErr(w, http.StatusInternalServerError, "unpublish_failed", "story could not be unpublished")
+			return
+		}
+		noStore(w)
+		writeJSON(w, http.StatusOK, out)
 	}))
 
 	// Actually apply middleware stack (you already wrote these helpers)
@@ -195,7 +277,14 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
 	defer r.Body.Close()
 
-	dec := json.NewDecoder(r.Body)
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		return err
+	}
+	if !utf8.Valid(raw) {
+		return errors.New("request body is not valid UTF-8")
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 
 	if err := dec.Decode(dst); err != nil {
@@ -213,7 +302,7 @@ func writeDecodeError(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusRequestEntityTooLarge, "body_too_large", "request body too large")
 		return
 	}
-	writeErr(w, http.StatusBadRequest, "bad_json", err.Error())
+	writeErr(w, http.StatusBadRequest, "bad_json", "request body must be valid JSON")
 }
 
 func writeErr(w http.ResponseWriter, status int, code string, msg string) {
@@ -222,6 +311,17 @@ func writeErr(w http.ResponseWriter, status int, code string, msg string) {
 		"error": map[string]any{
 			"code":    code,
 			"message": msg,
+		},
+	})
+}
+
+func writeIssues(w http.ResponseWriter, status int, code string, msg string, issues []model.AdminValidationIssue) {
+	noStore(w)
+	writeJSON(w, status, map[string]any{
+		"error": map[string]any{
+			"code":    code,
+			"message": msg,
+			"issues":  issues,
 		},
 	})
 }
