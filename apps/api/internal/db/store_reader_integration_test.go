@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"pandapages/api/internal/httpadmin"
 	"pandapages/api/internal/httpapi"
 	"pandapages/api/internal/model"
 	"pandapages/api/internal/readercontract"
@@ -337,6 +339,181 @@ func TestReaderStoreIntegration(t *testing.T) {
 		if err != nil || retained.Status != model.AdminStoryStatusUnpublished ||
 			retained.VersionCount != 1 || retained.DraftVersion != nil || retained.PublishedVersion != nil {
 			t.Fatalf("retained-version unpublished detail/error = %#v / %v", retained, err)
+		}
+	})
+
+	t.Run("Story Studio catalogue quarantines malformed immutable metadata per story", func(t *testing.T) {
+		const (
+			corruptSlug              = "catalogue-corrupt-frontmatter"
+			privateBodyMarker        = "TEST_ONLY_PRIVATE_STORY_BODY_MARKER"
+			privateFrontmatterMarker = "TEST_ONLY_PRIVATE_FRONTMATTER_MARKER"
+			adminKey                 = "reader-store-integration-admin-key"
+		)
+		fixtureSlugs := []string{
+			corruptSlug,
+			"catalogue-valid-1",
+			"catalogue-valid-2",
+			"catalogue-valid-3",
+			"catalogue-valid-4",
+			"catalogue-valid-5",
+		}
+		drafts := make(map[string]model.AdminDraftUpsertResponse, len(fixtureSlugs))
+		for index, slug := range fixtureSlugs {
+			title := fmt.Sprintf("Catalogue fixture %d", index+1)
+			markdown := fmt.Sprintf("# %s\n\nSynthetic readable body %d.\n", title, index+1)
+			if slug == corruptSlug {
+				markdown = fmt.Sprintf("# %s\n\n%s\n", title, privateBodyMarker)
+			}
+			draft, err := store.AdminDraftUpsert(readerAccountC, model.AdminDraftUpsertRequest{
+				Slug:     slug,
+				Title:    title,
+				Language: &language,
+				Markdown: markdown,
+			})
+			if err != nil {
+				t.Fatalf("create %s catalogue fixture: %v", slug, err)
+			}
+			storyID := draft.StoryID
+			t.Cleanup(func() {
+				if _, err := adminDB.Exec(`DELETE FROM stories WHERE id = $1`, storyID); err != nil {
+					t.Errorf("remove catalogue fixture %s: %v", storyID, err)
+				}
+			})
+			if err := store.AdminPublish(readerAccountC, slug, draft.VersionID); err != nil {
+				t.Fatalf("publish %s catalogue fixture: %v", slug, err)
+			}
+			drafts[slug] = draft
+		}
+
+		fixedTimestamp := time.Date(2026, time.July, 19, 12, 0, 0, 0, time.UTC)
+		for _, draft := range drafts {
+			if _, err := adminDB.Exec(`
+				UPDATE stories
+				SET created_at = $2, updated_at = $2
+				WHERE id = $1
+			`, draft.StoryID, fixedTimestamp); err != nil {
+				t.Fatalf("normalize catalogue fixture ordering: %v", err)
+			}
+		}
+		if _, err := adminDB.Exec(`
+			UPDATE story_versions
+			SET frontmatter = jsonb_build_object('testOnlyPrivateMarker', $2::text)
+			WHERE id = $1
+		`, drafts[corruptSlug].VersionID, privateFrontmatterMarker); err != nil {
+			t.Fatalf("install malformed immutable frontmatter: %v", err)
+		}
+		var (
+			frontmatterType string
+			hasTitle        bool
+			hasLanguage     bool
+		)
+		if err := adminDB.QueryRow(`
+			SELECT jsonb_typeof(frontmatter), frontmatter ? 'title', frontmatter ? 'language'
+			FROM story_versions
+			WHERE id = $1
+		`, drafts[corruptSlug].VersionID).Scan(&frontmatterType, &hasTitle, &hasLanguage); err != nil {
+			t.Fatalf("verify malformed immutable frontmatter: %v", err)
+		}
+		if frontmatterType != "object" || hasTitle || hasLanguage {
+			t.Fatalf("malformed immutable frontmatter shape = type %q / title %t / language %t", frontmatterType, hasTitle, hasLanguage)
+		}
+
+		catalogue, err := store.AdminListStories(readerAccountC)
+		if err != nil {
+			t.Fatalf("list catalogue with malformed immutable frontmatter: %v", err)
+		}
+		repeated, err := store.AdminListStories(readerAccountC)
+		if err != nil {
+			t.Fatalf("repeat catalogue with malformed immutable frontmatter: %v", err)
+		}
+		if !reflect.DeepEqual(catalogue, repeated) {
+			t.Fatalf("mixed-health catalogue was nondeterministic:\nfirst: %#v\nsecond: %#v", catalogue, repeated)
+		}
+		if len(catalogue.Items) != len(fixtureSlugs) {
+			t.Fatalf("mixed-health catalogue has %d stories, want %d: %#v", len(catalogue.Items), len(fixtureSlugs), catalogue)
+		}
+		validCount := 0
+		corruptCount := 0
+		for index, item := range catalogue.Items {
+			if item.Slug != fixtureSlugs[index] {
+				t.Fatalf("catalogue order[%d] = %q, want %q", index, item.Slug, fixtureSlugs[index])
+			}
+			if item.Slug == corruptSlug {
+				corruptCount++
+				if item.Status != model.AdminStoryStatusRepairRequired || item.Title != "Story requires repair" ||
+					item.Language != "und" || item.Author != nil || item.SourceURL != nil || len(item.Rights) != 0 ||
+					item.VersionCount != 1 {
+					t.Fatalf("malformed-frontmatter catalogue fallback = %#v", item)
+				}
+				continue
+			}
+			if item.Status != model.AdminStoryStatusPublished || item.VersionCount != 1 {
+				t.Fatalf("valid catalogue story = %#v", item)
+			}
+			validCount++
+		}
+		if validCount != 5 || corruptCount != 1 {
+			t.Fatalf("mixed-health catalogue counts = valid %d / corrupt %d", validCount, corruptCount)
+		}
+		encodedCatalogue, err := json.Marshal(catalogue)
+		if err != nil {
+			t.Fatalf("marshal mixed-health catalogue: %v", err)
+		}
+		for _, forbidden := range []string{
+			privateBodyMarker,
+			privateFrontmatterMarker,
+			`"markdown"`,
+			`"renderedHtml"`,
+			`"segments"`,
+			`"contentHash"`,
+			`"accountId"`,
+			`"storyId"`,
+		} {
+			if strings.Contains(string(encodedCatalogue), forbidden) {
+				t.Fatalf("mixed-health catalogue leaked %q: %s", forbidden, encodedCatalogue)
+			}
+		}
+
+		sessions, err := session.New("reader-store-integration-admin-session-secret", false)
+		if err != nil {
+			t.Fatalf("create admin catalogue session: %v", err)
+		}
+		token, err := sessions.Issue(readerAccountC)
+		if err != nil {
+			t.Fatalf("issue admin catalogue session: %v", err)
+		}
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/admin/stories", nil)
+		request.AddCookie(&http.Cookie{Name: session.CookieName, Value: token})
+		request.Header.Set("X-PP-Admin-Key", adminKey)
+		response := httptest.NewRecorder()
+		httpadmin.New(httpadmin.Config{AdminKey: adminKey, Sessions: sessions}, store).ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("mixed-health catalogue HTTP response = %d %s", response.Code, response.Body.String())
+		}
+		if response.Header().Get("Cache-Control") != "no-store" ||
+			!strings.Contains(response.Header().Get("Content-Type"), "application/json") {
+			t.Fatalf("mixed-health catalogue HTTP headers = %#v", response.Header())
+		}
+		var httpCatalogue model.AdminStoriesListResponse
+		if err := json.Unmarshal(response.Body.Bytes(), &httpCatalogue); err != nil {
+			t.Fatalf("decode mixed-health catalogue HTTP response: %v", err)
+		}
+		if !reflect.DeepEqual(httpCatalogue, catalogue) {
+			t.Fatalf("mixed-health HTTP catalogue differs from Store result:\nHTTP: %#v\nStore: %#v", httpCatalogue, catalogue)
+		}
+
+		library, err := store.Library(readerAccountC)
+		if err != nil {
+			t.Fatalf("list Library with malformed immutable frontmatter: %v", err)
+		}
+		if len(library.Items) != 5 || library.UnavailableItemCount != 1 {
+			t.Fatalf("mixed-health Library = %#v, want five visible and one unavailable", library)
+		}
+		for index, item := range library.Items {
+			wantSlug := fixtureSlugs[index+1]
+			if item.Slug != wantSlug {
+				t.Fatalf("mixed-health Library order[%d] = %q, want %q", index, item.Slug, wantSlug)
+			}
 		}
 	})
 

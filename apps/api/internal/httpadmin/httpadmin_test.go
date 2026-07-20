@@ -31,6 +31,7 @@ type fakeAdminStore struct {
 	listResponse   model.AdminStoriesListResponse
 	listCalls      int
 	listAccount    string
+	listErr        error
 	draftRequest   model.AdminDraftUpsertRequest
 	draftCalls     int
 	draftAccount   string
@@ -96,7 +97,7 @@ func (s *fakeAdminStore) AdminPreview(req model.AdminPreviewRequest) (model.Admi
 func (s *fakeAdminStore) AdminListStories(accountID string) (model.AdminStoriesListResponse, error) {
 	s.listCalls++
 	s.listAccount = accountID
-	return s.listResponse, nil
+	return s.listResponse, s.listErr
 }
 
 func (s *fakeAdminStore) AdminGetStory(_ string, slug string) (model.AdminStoryDetailResponse, error) {
@@ -205,6 +206,63 @@ func TestAdminListStoriesAuthorised(t *testing.T) {
 	}
 	if item["slug"] != "safe-story" || item["title"] != "Safe Story" || item["status"] != "published" {
 		t.Fatalf("unexpected safe list shape: %#v", item)
+	}
+}
+
+func TestAdminListStoriesHidesUnexpectedStorageFailure(t *testing.T) {
+	const sensitiveMarker = "SENSITIVE_DATABASE_HOST_RELATION_DETAIL"
+	var capturedLogs bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&capturedLogs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+	store := &fakeAdminStore{listErr: errors.New(sensitiveMarker)}
+	rec := serveAdmin(t, store, http.MethodGet, "/api/v1/admin/stories", nil, "valid", testAdminKey)
+
+	response := rec.Result()
+	t.Cleanup(func() { _ = response.Body.Close() })
+	if rec.Code != http.StatusInternalServerError || response.StatusCode != http.StatusInternalServerError ||
+		response.Status != "500 Internal Server Error" || store.listCalls != 1 {
+		t.Fatalf("catalogue response/calls = %d/%d; body = %s", rec.Code, store.listCalls, rec.Body.String())
+	}
+	if store.listAccount != testAccount {
+		t.Fatalf("catalogue account = %q, want %q", store.listAccount, testAccount)
+	}
+	assertAdminResponseHeaders(t, rec)
+	for key, values := range response.Header {
+		if strings.Contains(key, sensitiveMarker) {
+			t.Fatalf("unexpected catalogue failure leaked detail in header key %q", key)
+		}
+		for _, value := range values {
+			if strings.Contains(value, sensitiveMarker) {
+				t.Fatalf("unexpected catalogue failure leaked detail in header %s: %q", key, value)
+			}
+		}
+	}
+	var payload struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode unexpected catalogue failure: %v", err)
+	}
+	if payload.Error.Code != "list_failed" || payload.Error.Message != "story catalogue unavailable" {
+		t.Fatalf("unexpected catalogue error envelope = %#v", payload.Error)
+	}
+	for boundary, value := range map[string]string{
+		"decoded code":    payload.Error.Code,
+		"decoded message": payload.Error.Message,
+		"raw body":        rec.Body.String(),
+		"captured logs":   capturedLogs.String(),
+	} {
+		if strings.Contains(value, sensitiveMarker) {
+			t.Fatalf("unexpected catalogue failure leaked detail in %s: %s", boundary, value)
+		}
+	}
+	if !strings.Contains(capturedLogs.String(), "admin story catalogue failed") {
+		t.Fatalf("unexpected catalogue failure omitted safe diagnostic: %s", capturedLogs.String())
 	}
 }
 
