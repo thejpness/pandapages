@@ -174,11 +174,11 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   gap: 1rem;
   margin-bottom: 1rem;
-  border: 1px solid #e2ae94;
-  border-radius: 0.9rem;
-  background: #fff3ec;
+  border: 1px solid var(--panda-danger);
+  border-radius: var(--panda-radius-compact);
+  background: var(--panda-danger-surface);
   padding: 0.9rem 1rem;
-  color: #763923;
+  color: var(--panda-danger);
 }
 
 .catalogue-error p { margin-top: 0.2rem; font-size: 0.88rem; }

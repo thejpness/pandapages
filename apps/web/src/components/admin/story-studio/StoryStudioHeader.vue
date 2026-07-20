@@ -32,7 +32,7 @@ function navigate(path: string) {
         aria-label="Story Studio stories"
         @click="navigate('/admin/stories')"
       >
-        <span class="studio-brand__panda" aria-hidden="true">PP</span>
+        <img class="studio-brand__panda" src="/logo.png" alt="" aria-hidden="true" />
         <span>
           <strong>Panda Pages</strong>
           <small>Story Studio</small>
@@ -91,18 +91,18 @@ function navigate(path: string) {
   position: sticky;
   z-index: 40;
   top: 0;
-  border-bottom: 1px solid var(--studio-line);
-  background: color-mix(in srgb, var(--studio-paper) 92%, transparent);
-  backdrop-filter: blur(18px);
+  border-bottom: 1px solid var(--panda-line-strong);
+  background: color-mix(in srgb, var(--panda-paper) 94%, transparent);
+  backdrop-filter: blur(14px);
 }
 
 .studio-header__inner {
   display: flex;
   align-items: center;
-  width: min(86rem, 100%);
+  width: min(var(--panda-content-width), 100%);
   min-height: calc(4.5rem + env(safe-area-inset-top));
   margin-inline: auto;
-  padding: calc(0.75rem + env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) 0.75rem max(1rem, env(safe-area-inset-left));
+  padding: var(--panda-safe-top) var(--panda-safe-right) 0.75rem var(--panda-safe-left);
   gap: 1.5rem;
 }
 
@@ -111,21 +111,15 @@ function navigate(path: string) {
   align-items: center;
   min-height: 2.75rem;
   gap: 0.7rem;
-  color: var(--studio-ink);
+  color: var(--panda-ink);
   text-align: left;
 }
 
 .studio-brand__panda {
-  display: grid;
-  place-items: center;
   width: 2.5rem;
   height: 2.5rem;
-  border-radius: 0.8rem;
-  background: var(--studio-green);
-  color: white;
-  font-size: 0.72rem;
-  font-weight: 800;
-  letter-spacing: 0.08em;
+  flex: 0 0 auto;
+  object-fit: contain;
 }
 
 .studio-brand strong,
@@ -134,14 +128,14 @@ function navigate(path: string) {
 }
 
 .studio-brand strong {
-  font-family: 'Literata Variable', Georgia, serif;
+  font-family: var(--panda-serif);
   font-size: 1rem;
   line-height: 1.1;
 }
 
 .studio-brand small {
   margin-top: 0.18rem;
-  color: var(--studio-muted);
+  color: var(--panda-muted);
   font-size: 0.75rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -157,29 +151,35 @@ function navigate(path: string) {
 .studio-nav button,
 .studio-header__menu {
   min-height: 2.75rem;
-  border-radius: 0.75rem;
+  border-radius: var(--panda-radius-compact);
   padding: 0.65rem 0.85rem;
-  color: var(--studio-muted);
+  color: var(--panda-muted);
   font-size: 0.9rem;
   font-weight: 650;
 }
 
 .studio-nav button:hover,
 .studio-nav button[aria-current='page'] {
-  background: var(--studio-wash);
-  color: var(--studio-ink);
+  background: var(--panda-mist);
+  color: var(--panda-ink);
 }
 
 .studio-nav .studio-nav__new {
-  background: var(--studio-green);
-  color: white;
+  border: 1px solid var(--panda-ink);
+  background: var(--panda-ink);
+  color: var(--panda-white);
+}
+
+.studio-nav .studio-nav__new:hover {
+  background: var(--panda-soft-ink);
+  color: var(--panda-white);
 }
 
 .studio-nav__divider {
   width: 1px;
   height: 1.7rem;
   margin-inline: 0.35rem;
-  background: var(--studio-line);
+  background: var(--panda-line-strong);
 }
 
 .studio-nav .studio-nav__secondary {
@@ -187,14 +187,14 @@ function navigate(path: string) {
 }
 
 .studio-nav .studio-nav__lock {
-  border: 1px solid var(--studio-line-strong);
-  color: var(--studio-ink);
+  border: 1px solid var(--panda-line-strong);
+  color: var(--panda-ink);
 }
 
 .studio-header__menu {
   display: none;
   margin-left: auto;
-  border: 1px solid var(--studio-line-strong);
+  border: 1px solid var(--panda-line-strong);
 }
 
 @media (max-width: 760px) {
@@ -210,14 +210,14 @@ function navigate(path: string) {
     display: none;
     position: absolute;
     top: calc(100% - 0.2rem);
-    right: max(1rem, env(safe-area-inset-right));
-    left: max(1rem, env(safe-area-inset-left));
+    right: var(--panda-safe-right);
+    left: var(--panda-safe-left);
     flex-direction: column;
     align-items: stretch;
-    border: 1px solid var(--studio-line);
-    border-radius: 1rem;
-    background: var(--studio-paper);
-    box-shadow: var(--studio-shadow);
+    border: 1px solid var(--panda-line-strong);
+    border-radius: var(--panda-radius-card);
+    background: var(--panda-paper-raised);
+    box-shadow: var(--panda-shadow);
     padding: 0.6rem;
   }
 
@@ -229,6 +229,12 @@ function navigate(path: string) {
     width: 100%;
     height: 1px;
     margin: 0.25rem 0;
+  }
+}
+
+@media (max-height: 30rem) {
+  .studio-header {
+    position: relative;
   }
 }
 </style>

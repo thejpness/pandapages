@@ -460,8 +460,8 @@ onBeforeUnmount(() => {
 <style scoped>
 .editor-heading { align-items: center; }
 .editor-heading__actions { display: flex; flex-wrap: wrap; gap: 0.6rem; }
-.editor-dirty { width: fit-content; margin: -0.5rem 0 1rem; border-radius: 999px; background: #f7e9cc; color: #795514; padding: 0.35rem 0.7rem; font-size: 0.78rem; font-weight: 720; }
-.editor-error { margin-bottom: 1rem; border: 1px solid #e2ae94; border-radius: 0.9rem; background: #fff3ec; padding: 0.9rem 1rem; color: #763923; }
+.editor-dirty { width: fit-content; margin: -0.5rem 0 1rem; border: 1px solid var(--panda-warning); border-radius: var(--panda-radius-pill); background: var(--panda-warning-surface); color: var(--panda-warning); padding: 0.35rem 0.7rem; font-size: 0.78rem; font-weight: 720; }
+.editor-error { margin-bottom: 1rem; border: 1px solid var(--panda-danger); border-radius: var(--panda-radius-compact); background: var(--panda-danger-surface); padding: 0.9rem 1rem; color: var(--panda-danger); }
 .editor-error p { margin-top: 0.25rem; line-height: 1.5; }
 .editor-metadata { margin-top: 1rem; }
 .editor-workspace { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(20rem, 0.92fr); align-items: start; gap: 1rem; margin-top: 1rem; }

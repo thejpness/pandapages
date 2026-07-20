@@ -38,15 +38,16 @@ const tone = computed(() => {
   align-items: center;
   min-height: 1.8rem;
   max-width: 100%;
-  border-radius: 999px;
+  border: 1px solid currentColor;
+  border-radius: var(--panda-radius-pill);
   padding: 0.3rem 0.65rem;
   font-size: 0.75rem;
   font-weight: 750;
   line-height: 1.15;
 }
 
-.studio-status--good { background: #dcefe8; color: #15584f; }
-.studio-status--draft { background: #e8e6f6; color: #4d4885; }
-.studio-status--attention { background: #f9e2d7; color: #8a3f27; }
-.studio-status--quiet { background: #e9ece8; color: #536467; }
+.studio-status--good { background: var(--panda-success-surface); color: var(--panda-success); }
+.studio-status--draft { background: var(--panda-mist); color: var(--panda-soft-ink); }
+.studio-status--attention { background: var(--panda-warning-surface); color: var(--panda-warning); }
+.studio-status--quiet { background: var(--panda-paper); color: var(--panda-muted); }
 </style>

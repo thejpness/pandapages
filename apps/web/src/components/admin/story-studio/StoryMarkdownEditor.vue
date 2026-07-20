@@ -71,7 +71,7 @@ function fileChosen(event: Event) {
 }
 
 .markdown-editor h2 {
-  font-family: 'Literata Variable', Georgia, serif;
+  font-family: var(--panda-serif);
   font-size: 1.15rem;
   font-weight: 650;
 }
@@ -85,8 +85,8 @@ function fileChosen(event: Event) {
 }
 
 .markdown-editor__source {
-  border-radius: 0.7rem;
-  background: var(--studio-wash);
+  border-radius: var(--panda-radius-compact);
+  background: var(--panda-mist);
   padding: 0.7rem 0.8rem;
 }
 
@@ -97,8 +97,8 @@ function fileChosen(event: Event) {
   resize: vertical;
   margin-top: 1rem;
   border: 1px solid var(--studio-line-strong);
-  border-radius: 0.9rem;
-  background: #fbfcf7;
+  border-radius: var(--panda-radius-compact);
+  background: var(--panda-white);
   color: var(--studio-ink);
   padding: 1rem;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -108,8 +108,9 @@ function fileChosen(event: Event) {
 }
 
 .markdown-editor textarea:focus {
-  border-color: var(--studio-green);
-  outline: 3px solid color-mix(in srgb, var(--studio-green) 22%, transparent);
+  border-color: var(--panda-focus);
+  outline: 3px solid color-mix(in srgb, var(--panda-focus) 24%, transparent);
+  outline-offset: 2px;
 }
 
 @media (max-width: 500px) {

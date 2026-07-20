@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import PandaAuthShell from '../components/app/PandaAuthShell.vue'
 import { authState } from '../lib/session'
 import { safeNextPath } from '../lib/session-navigation'
 import { navigationDidFail } from '../lib/session-transitions'
@@ -41,23 +42,66 @@ async function retry() {
 </script>
 
 <template>
-  <main class="grid min-h-dvh place-items-center bg-[#0B1724] px-4 text-white">
-    <section class="w-full max-w-md rounded-3xl border border-white/10 bg-white/5 p-6">
-      <h1 class="text-xl font-semibold">Panda Pages could not verify the session</h1>
-      <p class="mt-3 text-sm text-white/75">
-        The server or database may be temporarily unavailable. Your session has not been treated as signed out.
-      </p>
-      <p v-if="retryError" class="mt-3 text-sm text-red-300" role="alert">
-        {{ retryError }}
-      </p>
-      <button
-        type="button"
-        class="mt-5 w-full rounded-2xl bg-white py-3 font-semibold text-[#0B1724] disabled:opacity-60"
-        :disabled="retrying"
-        @click="retry"
-      >
-        {{ retrying ? 'Checking…' : 'Try again' }}
-      </button>
-    </section>
-  </main>
+  <PandaAuthShell
+    eyebrow="Session check"
+    title="Panda Pages could not verify the session"
+    description="The server or database may be temporarily unavailable. Your session has not been treated as signed out."
+  >
+    <p v-if="retryError" class="session-unavailable__error" role="alert">
+      {{ retryError }}
+    </p>
+    <button
+      type="button"
+      class="session-unavailable__retry"
+      :disabled="retrying"
+      @click="retry"
+    >
+      {{ retrying ? 'Checking…' : 'Try again' }}
+    </button>
+  </PandaAuthShell>
 </template>
+
+<style scoped>
+.session-unavailable__error {
+  margin: 0 0 0.9rem;
+  border: 1px solid color-mix(in srgb, var(--panda-danger) 45%, transparent);
+  border-radius: var(--panda-radius-compact);
+  padding: 0.75rem 0.85rem;
+  background: var(--panda-danger-surface);
+  color: var(--panda-danger);
+  font-size: 0.86rem;
+  font-weight: 650;
+  line-height: 1.5;
+}
+
+.session-unavailable__retry {
+  width: 100%;
+  min-height: 2.75rem;
+  border: 1px solid var(--panda-ink);
+  border-radius: var(--panda-radius-compact);
+  padding: 0.7rem 1rem;
+  background: var(--panda-ink);
+  color: var(--panda-paper-raised);
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.session-unavailable__retry:hover:not(:disabled) {
+  box-shadow: inset 0 0 0 2px var(--panda-paper-raised);
+}
+
+.session-unavailable__retry:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+@media (forced-colors: active) {
+  .session-unavailable__error,
+  .session-unavailable__retry {
+    border-color: CanvasText;
+    background: Canvas;
+    color: CanvasText;
+  }
+}
+</style>

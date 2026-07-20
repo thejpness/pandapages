@@ -159,7 +159,6 @@ defineExpose({ focusSearch })
                   :prioritize-position="true"
                   position-strategy="fixed"
                   sticky="always"
-                  style="position: relative; z-index: 80; max-height: 60dvh; overflow: auto"
                   @open-auto-focus="$event.preventDefault()"
                   @close-auto-focus="handleParentCloseAutoFocus"
                   @keydown.capture="handleParentMenuKeydown"
@@ -509,8 +508,7 @@ defineExpose({ focusSearch })
   position: relative;
 }
 
-.parent-menu {
-  position: relative;
+:global(.parent-menu) {
   z-index: 80;
   box-sizing: border-box;
   width: min(
@@ -518,15 +516,19 @@ defineExpose({ focusSearch })
     calc(100vw - 2rem - env(safe-area-inset-left) - env(safe-area-inset-right))
   );
   max-width: var(--reka-popover-content-available-width);
-  max-height: 60dvh;
+  max-height: min(
+    60dvh,
+    var(--reka-popover-content-available-height, 60dvh)
+  );
   overflow: auto;
-  border: 1px solid rgba(17, 17, 15, 0.2);
-  border-radius: 1rem;
+  overscroll-behavior: contain;
+  border: 1px solid var(--panda-line-strong);
+  border-radius: var(--panda-radius-card);
   padding: 0.35rem;
-  background: #fffefa;
-  color: #11110f;
-  box-shadow: 0 1.1rem 3rem rgba(17, 17, 15, 0.18);
-  font-family: "Atkinson Hyperlegible Next Variable", ui-sans-serif, sans-serif;
+  background: var(--panda-white);
+  color: var(--panda-ink);
+  box-shadow: var(--panda-shadow);
+  font-family: var(--panda-sans);
 }
 
 .parent-menu__item {
@@ -535,7 +537,7 @@ defineExpose({ focusSearch })
   min-height: 2.75rem;
   align-items: center;
   gap: 0.65rem;
-  border-radius: 0.7rem;
+  border-radius: var(--panda-radius-compact);
   padding: 0.55rem 0.7rem;
   font-size: 0.88rem;
   font-weight: 760;
@@ -549,6 +551,11 @@ defineExpose({ focusSearch })
 
 .parent-menu__item:hover,
 .parent-menu__item:focus-visible {
-  background: #e7e3d9;
+  background: var(--panda-mist);
+}
+
+.parent-menu__item:focus-visible {
+  outline: 3px solid var(--panda-focus);
+  outline-offset: -3px;
 }
 </style>

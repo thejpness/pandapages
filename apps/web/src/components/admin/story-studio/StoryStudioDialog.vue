@@ -36,7 +36,7 @@ const emit = defineEmits<{
     <DialogPortal>
       <DialogOverlay class="studio-dialog__overlay" />
       <DialogContent class="studio-dialog__content" @escape-key-down="busy && $event.preventDefault()">
-        <div class="studio-dialog__mark" aria-hidden="true">PP</div>
+        <img class="studio-dialog__mark" src="/logo.png" alt="" aria-hidden="true" />
         <DialogTitle class="studio-dialog__title">{{ title }}</DialogTitle>
         <DialogDescription class="studio-dialog__description">
           {{ description }}
@@ -73,7 +73,7 @@ const emit = defineEmits<{
   position: fixed;
   z-index: 90;
   inset: 0;
-  background: rgb(9 24 29 / 72%);
+  background: var(--panda-overlay);
   backdrop-filter: blur(4px);
 }
 
@@ -86,31 +86,25 @@ const emit = defineEmits<{
   max-height: min(38rem, calc(100dvh - 2rem));
   overflow: auto;
   transform: translate(-50%, -50%);
-  border: 1px solid #d8ded8;
-  border-radius: 1.4rem;
-  background: #fffef9;
-  color: #173338;
-  box-shadow: 0 28px 80px rgb(9 24 29 / 28%);
+  border: 1px solid var(--panda-line-strong);
+  border-radius: var(--panda-radius-card);
+  background: var(--panda-white);
+  color: var(--panda-ink);
+  box-shadow: var(--panda-shadow);
   padding: 1.5rem;
   padding-bottom: max(1.5rem, env(safe-area-inset-bottom));
+  font-family: var(--panda-sans);
 }
 
 .studio-dialog__mark {
-  display: grid;
-  place-items: center;
   width: 2.25rem;
   height: 2.25rem;
   margin-bottom: 1rem;
-  border-radius: 0.75rem;
-  background: #dcefe8;
-  color: #1d6258;
-  font-size: 0.72rem;
-  font-weight: 800;
-  letter-spacing: 0.08em;
+  object-fit: contain;
 }
 
 .studio-dialog__title {
-  font-family: 'Literata Variable', Georgia, serif;
+  font-family: var(--panda-serif);
   font-size: clamp(1.25rem, 4vw, 1.6rem);
   font-weight: 650;
   line-height: 1.25;
@@ -118,16 +112,16 @@ const emit = defineEmits<{
 
 .studio-dialog__description {
   margin-top: 0.55rem;
-  color: #52686b;
+  color: var(--panda-muted);
   line-height: 1.55;
 }
 
 .studio-dialog__body {
   margin-top: 1rem;
   padding: 0.9rem 1rem;
-  border-radius: 0.9rem;
-  background: #f3f4ed;
-  color: #435c5f;
+  border-radius: var(--panda-radius-compact);
+  background: var(--panda-mist);
+  color: var(--panda-soft-ink);
   font-size: 0.92rem;
 }
 
@@ -143,6 +137,13 @@ const emit = defineEmits<{
   .studio-dialog__content {
     top: 1rem;
     transform: translateX(-50%);
+  }
+}
+
+@media (max-width: 30rem) {
+  .studio-dialog__actions,
+  .studio-dialog__actions .studio-button {
+    width: 100%;
   }
 }
 

@@ -522,6 +522,70 @@ function boxesOverlap(
   )
 }
 
+async function expectParentMenuPresented(page: Page): Promise<void> {
+  const menu = page.locator('.parent-menu')
+  await expect(menu).toBeVisible()
+
+  const presentation = await menu.evaluate((element) => {
+    const rect = element.getBoundingClientRect()
+    const wrapper = element.closest('[data-reka-popper-content-wrapper]')
+    const header = document.querySelector('.library-header')
+    const style = getComputedStyle(element)
+    const wrapperStyle = wrapper ? getComputedStyle(wrapper) : null
+    const headerStyle = header ? getComputedStyle(header) : null
+    const target = document.elementFromPoint(
+      rect.x + rect.width / 2,
+      rect.y + rect.height / 2,
+    )
+
+    const rgb = (value: string) => {
+      const channels = value.match(/[\d.]+/g)?.map(Number) ?? []
+      return channels.slice(0, 3)
+    }
+    const luminance = (channels: number[]) => {
+      const linear = channels.map((channel) => {
+        const value = channel / 255
+        return value <= 0.04045
+          ? value / 12.92
+          : ((value + 0.055) / 1.055) ** 2.4
+      })
+      return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+    }
+    const foreground = luminance(rgb(style.color))
+    const background = luminance(rgb(style.backgroundColor))
+    const contrast =
+      (Math.max(foreground, background) + 0.05) /
+      (Math.min(foreground, background) + 0.05)
+
+    return {
+      box: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      hit: Boolean(target?.closest('.parent-menu')),
+      wrapperPosition: wrapperStyle?.position ?? null,
+      wrapperZ: Number.parseInt(wrapperStyle?.zIndex ?? '', 10),
+      headerZ: Number.parseInt(headerStyle?.zIndex ?? '', 10),
+      backgroundAlpha: Number(style.backgroundColor.match(/[\d.]+/g)?.[3] ?? 1),
+      contrast,
+    }
+  })
+
+  expect(presentation.box.width).toBeGreaterThan(0)
+  expect(presentation.box.height).toBeGreaterThan(0)
+  expect(presentation.box.x).toBeGreaterThanOrEqual(0)
+  expect(presentation.box.y).toBeGreaterThanOrEqual(0)
+  expect(presentation.box.x + presentation.box.width).toBeLessThanOrEqual(
+    presentation.viewport.width,
+  )
+  expect(presentation.box.y + presentation.box.height).toBeLessThanOrEqual(
+    presentation.viewport.height,
+  )
+  expect(presentation.wrapperPosition).toBe('fixed')
+  expect(presentation.wrapperZ).toBeGreaterThan(presentation.headerZ)
+  expect(presentation.hit).toBe(true)
+  expect(presentation.backgroundAlpha).toBe(1)
+  expect(presentation.contrast).toBeGreaterThanOrEqual(7)
+}
+
 async function expectNoSeriousOrCriticalViolations(
   page: Page,
 ): Promise<void> {
@@ -1403,6 +1467,7 @@ test.describe('Library 2 bookshelf', () => {
 
     const menu = page.getByRole('dialog', { name: 'Parent options' })
     await expect(menu).toBeVisible()
+    await expectParentMenuPresented(page)
     await expect(
       menu.getByRole('button', { name: 'Reading profile' }),
     ).toBeVisible()
@@ -1423,6 +1488,14 @@ test.describe('Library 2 bookshelf', () => {
     await page.keyboard.press('Shift+Tab')
     await expect(menu).toBeHidden()
     await expect(trigger).toBeFocused()
+
+    await trigger.click()
+    await expectParentMenuPresented(page)
+    const search = page.getByRole('searchbox', { name: 'Search the library' })
+    await search.click()
+    await expect(menu).toBeHidden()
+    await expect(search).toBeFocused()
+    await trigger.focus()
 
     await trigger.click()
     await page.keyboard.press('Tab')
@@ -1713,14 +1786,8 @@ test.describe('Library 2 bookshelf', () => {
     expect(boxesOverlap(parentBox!, lockBox!)).toBe(false)
 
     await parent.click()
-    const menu = page.locator('.parent-menu')
-    await expect(menu).toBeVisible()
-    const menuBox = await menu.boundingBox()
-    expect(menuBox).not.toBeNull()
-    expect(menuBox!.x).toBeGreaterThanOrEqual(0)
-    expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(390)
-    expect(menuBox!.y).toBeGreaterThanOrEqual(0)
-    expect(menuBox!.y + menuBox!.height).toBeLessThanOrEqual(375)
+    await expectParentMenuPresented(page)
+    await expectNoSeriousOrCriticalViolations(page)
     await page.keyboard.press('Escape')
     await expect(parent).toBeFocused()
 

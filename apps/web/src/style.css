@@ -38,6 +38,35 @@
 
 :root {
   color-scheme: dark;
+  --panda-paper: #f4f1e9;
+  --panda-paper-raised: #fbf9f3;
+  --panda-white: #fffefa;
+  --panda-ink: #11110f;
+  --panda-soft-ink: #45433e;
+  --panda-muted: #625f58;
+  --panda-line: rgb(17 17 15 / 14%);
+  --panda-line-strong: rgb(17 17 15 / 24%);
+  --panda-mist: #e7e3d9;
+  --panda-focus: #1b6754;
+  --panda-warning: #704400;
+  --panda-warning-surface: #fff2d8;
+  --panda-danger: #7b3028;
+  --panda-danger-surface: #fff0ec;
+  --panda-success: #285f50;
+  --panda-success-surface: #e3eee7;
+  --panda-overlay: rgb(17 17 15 / 62%);
+  --panda-shadow: 0 1.25rem 3.5rem rgb(17 17 15 / 16%);
+  --panda-shadow-soft: 0 0.5rem 1.5rem rgb(17 17 15 / 8%);
+  --panda-serif: "Literata Variable", Georgia, serif;
+  --panda-sans: "Atkinson Hyperlegible Next Variable", ui-sans-serif, sans-serif;
+  --panda-radius-compact: 0.7rem;
+  --panda-radius-card: 1.15rem;
+  --panda-radius-pill: 999px;
+  --panda-content-width: 86rem;
+  --panda-safe-top: max(1rem, env(safe-area-inset-top));
+  --panda-safe-right: max(1rem, env(safe-area-inset-right));
+  --panda-safe-bottom: max(1rem, env(safe-area-inset-bottom));
+  --panda-safe-left: max(1rem, env(safe-area-inset-left));
   --reader-background: #08131e;
   --reader-surface: #102130;
   --reader-surface-elevated: #172b3b;
@@ -78,6 +107,33 @@ input {
 :where(a, button, input):focus-visible {
   outline: 3px solid var(--reader-focus, #9ed8ff);
   outline-offset: 3px;
+}
+
+.panda-print-surface {
+  position: relative;
+  isolation: isolate;
+}
+
+.panda-print-surface::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  background:
+    radial-gradient(circle at 8% 7%, rgb(255 254 250 / 88%), transparent 23rem),
+    radial-gradient(circle, rgb(17 17 15 / 7%) 0 0.08rem, transparent 0.1rem) 0 0 / 1.4rem 1.4rem;
+  opacity: 0.46;
+  pointer-events: none;
+}
+
+@media (forced-colors: active) {
+  .panda-print-surface {
+    background: Canvas;
+  }
+
+  .panda-print-surface::before {
+    display: none;
+  }
 }
 
 .reader-sr-only,
