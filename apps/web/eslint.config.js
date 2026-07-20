@@ -69,7 +69,7 @@ export default withVueTs(
     files: [
       'src/components/reader/ReaderScrollView.vue',
       'src/components/reader/ReaderPagedView.vue',
-      'src/views/admin/AdminUpload.vue',
+      'src/components/admin/story-studio/StoryPreviewPane.vue',
     ],
     rules: {
       // Story HTML is rendered by Goldmark's safe mode in the API. Regression

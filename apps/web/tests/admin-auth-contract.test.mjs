@@ -136,7 +136,9 @@ test('PWA caches static assets only and protected routes are split', async () =>
     './views/Reader.vue',
     './views/Journey.vue',
     './views/admin/AdminLayout.vue',
-    './views/admin/AdminUpload.vue',
+    './views/admin/StoryStudioList.vue',
+    './views/admin/StoryStudioDetail.vue',
+    './views/admin/StoryStudioEditor.vue',
     './views/admin/AdminAI.vue',
   ]) {
     assert.ok(routerSource.includes(`import('${modulePath}')`))

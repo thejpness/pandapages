@@ -964,7 +964,7 @@ test.describe('Library 2 bookshelf', () => {
 
   for (const destination of [
     { action: 'Reading profile', path: '/journey' },
-    { action: 'Admin', path: '/admin/upload' },
+    { action: 'Admin', path: '/admin/stories' },
   ]) {
     test(`pending search ownership is released for ${destination.action} navigation`, async ({
       page,

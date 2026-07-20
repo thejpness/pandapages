@@ -411,7 +411,7 @@ function navigateFromLibrary(path: string) {
       @clear="clearSearch"
       @surprise="goSurprise"
       @journey="navigateFromLibrary('/journey')"
-      @admin="navigateFromLibrary('/admin/upload')"
+      @admin="navigateFromLibrary('/admin/stories')"
       @lock="lockLibrary"
       @sticky-offset="setStickyHeaderOffset"
     />
@@ -467,7 +467,7 @@ function navigateFromLibrary(path: string) {
           v-if="stories.length === 0"
           :kind="unavailableItemCount > 0 ? 'unavailable' : 'empty'"
           :unavailable-count="unavailableItemCount"
-          @admin="navigateFromLibrary('/admin/upload')"
+          @admin="navigateFromLibrary('/admin/stories')"
         />
 
         <LibraryEmptyState
