@@ -234,6 +234,14 @@ defineExpose({ focusSearch })
             <option value="shortest">Shortest first</option>
             <option value="longest">Longest first</option>
           </select>
+          <svg
+            class="library-sort__chevron"
+            viewBox="0 0 16 16"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <path d="m4 6 4 4 4-4" />
+          </svg>
         </div>
 
         <button
@@ -412,6 +420,7 @@ defineExpose({ focusSearch })
 }
 
 .library-sort {
+  position: relative;
   display: grid;
   min-width: min(100%, 8rem);
   flex: 0 1 10.5rem;
@@ -427,9 +436,25 @@ defineExpose({ focusSearch })
 }
 
 .library-sort select {
-  appearance: auto;
-  padding: 0.6rem 0.8rem;
+  appearance: none;
+  padding-block: 0.6rem;
+  padding-inline: 0.8rem 2.6rem;
   font-weight: 750;
+}
+
+.library-sort__chevron {
+  position: absolute;
+  top: 50%;
+  inset-inline-end: 1rem;
+  width: 0.75rem;
+  height: 0.75rem;
+  transform: translateY(-50%);
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  pointer-events: none;
 }
 
 .surprise-button {
@@ -499,6 +524,17 @@ defineExpose({ focusSearch })
 @media (max-height: 30rem) {
   .library-header {
     position: relative;
+  }
+}
+
+@media (forced-colors: active) {
+  .library-sort select {
+    appearance: auto;
+    padding-inline: 0.8rem;
+  }
+
+  .library-sort__chevron {
+    display: none;
   }
 }
 </style>
