@@ -170,6 +170,24 @@ assert_probe_cleanup() {
   }
 }
 
+probe_api_readiness() {
+  local response_file="$test_root/readiness-response.json"
+  local error_file="$test_root/readiness-response.err"
+
+  for ((attempt = 0; attempt < 20; attempt++)); do
+    if docker exec "$api_container" \
+      wget -Y off -T 5 -q -O - http://127.0.0.1:8080/readyz \
+      >"$response_file" 2>"$error_file" \
+      && grep -Eq '"status"[[:space:]]*:[[:space:]]*"ready"' "$response_file"; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  printf 'Application-role readiness probe did not report the current Goose schema\n' >&2
+  return 1
+}
+
 probe_admin_catalogue() {
   local probe_status=0
 
@@ -351,6 +369,7 @@ fi
 grep -q 'DATABASE_URL is required' "$test_root/missing-runtime.err"
 
 start_api "$application_role" "$application_password" "$expected_application_name"
+probe_api_readiness
 if ! "$verifier" "${verify_arguments[@]}" >"$test_root/warm-cache.out" 2>"$test_root/warm-cache.err"; then
   printf 'Positive API role verification failed: ' >&2
   sed 's/^postgresql-api-role-verify: //' "$test_root/warm-cache.err" >&2

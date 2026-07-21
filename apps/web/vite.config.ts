@@ -3,6 +3,10 @@ import vue from '@vitejs/plugin-vue'
 import { VitePWA } from 'vite-plugin-pwa'
 import tailwindcss from '@tailwindcss/vite'
 import { fileURLToPath, URL } from 'node:url'
+import {
+  createDevelopmentProxy,
+  createNavigationFallbackDenylist,
+} from './vite-route-policy'
 
 export default defineConfig(({ mode }) => {
   // Load env for dev proxy only (build-time vars are still handled by Vite normally)
@@ -24,11 +28,7 @@ export default defineConfig(({ mode }) => {
     // DEV ONLY: proxy so your frontend can just call "/api/..." and still hit the API
     // Keeps cookies sane and avoids CORS headaches.
     server: {
-      proxy: {
-        '/api': { target: devProxyTarget, changeOrigin: true },
-        '/assets': { target: devProxyTarget, changeOrigin: true },
-        '/healthz': { target: devProxyTarget, changeOrigin: true },
-      },
+      proxy: createDevelopmentProxy(devProxyTarget),
     },
 
     plugins: [
@@ -57,11 +57,7 @@ export default defineConfig(({ mode }) => {
         workbox: {
           cleanupOutdatedCaches: true,
           navigateFallback: '/index.html',
-          navigateFallbackDenylist: [
-            /^\/api\//,
-            /^\/assets\//,
-            /^\/healthz$/,
-          ],
+          navigateFallbackDenylist: createNavigationFallbackDenylist(),
         },
       }),
       tailwindcss(),

@@ -247,11 +247,9 @@ func New(cfg Config, store Store) http.Handler {
 		writeJSON(w, http.StatusOK, out)
 	}))
 
-	// Actually apply middleware stack (you already wrote these helpers)
-	var h http.Handler = mux
-	h = withSecurityHeaders(h)
-	h = withRecover(h)
-	h = withLog(h)
+	// Security headers remain local to application responses. The root server
+	// owns the single shared request-observability boundary.
+	h := withSecurityHeaders(mux)
 
 	return h
 
@@ -330,25 +328,6 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
-}
-
-func withRecover(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer func() {
-			if rec := recover(); rec != nil {
-				slog.Error("panic", "path", r.URL.Path, "err", rec)
-				writeErr(w, http.StatusInternalServerError, "panic", "internal error")
-			}
-		}()
-		next.ServeHTTP(w, r)
-	})
-}
-
-func withLog(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		slog.Debug("http", "method", r.Method, "path", r.URL.Path)
-		next.ServeHTTP(w, r)
-	})
 }
 
 func withSecurityHeaders(next http.Handler) http.Handler {

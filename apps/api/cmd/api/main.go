@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"pandapages/api/internal/db"
 	"pandapages/api/internal/httpadmin"
 	"pandapages/api/internal/httpapi"
+	"pandapages/api/internal/httpmiddleware"
 	"pandapages/api/internal/session"
 )
 
@@ -33,7 +35,7 @@ type runtimeConfig struct {
 	passcode      string
 	adminKey      string
 	cookieSecure  bool
-	logRequests   bool
+	logLevel      slog.Level
 	sessionSigner *session.Manager
 }
 
@@ -41,6 +43,11 @@ func loadRuntimeConfig(getenv func(string) string) (runtimeConfig, error) {
 	passcode := getenv("PP_PASSCODE")
 	if !validPasscode(passcode) {
 		return runtimeConfig{}, fmt.Errorf("PP_PASSCODE must be exactly six ASCII decimal digits")
+	}
+
+	logLevel, err := parseLogLevel(getenv("PP_LOG_LEVEL"))
+	if err != nil {
+		return runtimeConfig{}, err
 	}
 
 	cookieSecure := getenv("PP_COOKIE_SECURE") == "true"
@@ -54,9 +61,28 @@ func loadRuntimeConfig(getenv func(string) string) (runtimeConfig, error) {
 		passcode:      passcode,
 		adminKey:      strings.TrimSpace(getenv("PP_ADMIN_KEY")),
 		cookieSecure:  cookieSecure,
-		logRequests:   getenv("PP_LOG_LEVEL") == "debug",
+		logLevel:      logLevel,
 		sessionSigner: sessionSigner,
 	}, nil
+}
+
+func parseLogLevel(raw string) (slog.Level, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "info":
+		return slog.LevelInfo, nil
+	case "debug":
+		return slog.LevelDebug, nil
+	case "warn":
+		return slog.LevelWarn, nil
+	case "error":
+		return slog.LevelError, nil
+	default:
+		return 0, fmt.Errorf("PP_LOG_LEVEL must be one of debug, info, warn, error")
+	}
+}
+
+func newLogger(output io.Writer, level slog.Level) *slog.Logger {
+	return slog.New(slog.NewTextHandler(output, &slog.HandlerOptions{Level: level}))
 }
 
 func validPasscode(passcode string) bool {
@@ -83,32 +109,38 @@ func newServer(handler http.Handler) *http.Server {
 	}
 }
 
+func newRootHandler(public, admin http.Handler) http.Handler {
+	root := http.NewServeMux()
+	root.Handle("/api/v1/admin/", admin)
+	root.Handle("/", public)
+
+	// One outer boundary also observes ServeMux redirects and path cleaning.
+	return httpmiddleware.Observe(root)
+}
+
 func run() error {
 	cfg, err := loadRuntimeConfig(os.Getenv)
 	if err != nil {
 		return err
 	}
 
+	slog.SetDefault(newLogger(os.Stderr, cfg.logLevel))
+	slog.Debug("logging configured", "level", cfg.logLevel.String())
+
 	store := db.MustOpen(cfg.databaseURL)
 	defer store.Close()
 
 	public := httpapi.New(httpapi.Config{
-		Passcode:    cfg.passcode,
-		LogRequests: cfg.logRequests,
-		Sessions:    cfg.sessionSigner,
+		Passcode: cfg.passcode,
+		Sessions: cfg.sessionSigner,
 	}, store)
 
 	admin := httpadmin.New(httpadmin.Config{
-		AdminKey:    cfg.adminKey,
-		LogRequests: cfg.logRequests,
-		Sessions:    cfg.sessionSigner,
+		AdminKey: cfg.adminKey,
+		Sessions: cfg.sessionSigner,
 	}, store)
 
-	root := http.NewServeMux()
-	root.Handle("/api/v1/admin/", admin)
-	root.Handle("/", public)
-
-	server := newServer(root)
+	server := newServer(newRootHandler(public, admin))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 

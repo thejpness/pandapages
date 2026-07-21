@@ -1,5 +1,13 @@
 # PostgreSQL least-privilege roles
 
+> **Application-contract update — 21 July 2026:** The current repository uses
+> the signed `pp_session` contract described in the
+> [current authentication contract](../architecture/current-authentication-contract.md).
+> Statements below that call signed sessions future work or describe legacy
+> unsigned cookies as current production are retained only as a dated rollout
+> record. The authentication-readiness work did not re-verify production
+> deployment state.
+
 Status: production least-privilege cutover and backup/restore rollout completed;
 observation active since 14 July 2026 at 17:10:41 UTC. Repository verifier
 support for signed sessions is not deployed because the signed-session
@@ -77,6 +85,8 @@ The application role receives:
 - `CONNECT` only to `pandapages` and `USAGE` on `public`;
 - `SELECT`, `INSERT`, `UPDATE`, and `DELETE` on the current runtime table
   allowlist;
+- read-only `SELECT` on `public.goose_db_version` solely for `/readyz` schema
+  verification, with no write privilege on Goose metadata;
 - `USAGE` and `SELECT` on application identifier sequences, excluding Goose's
   bookkeeping sequence;
 - `EXECUTE` only on `public.gen_random_uuid()` among public routines.
@@ -122,6 +132,43 @@ allowlist in `deploy/postgresql-roles/apply.sql` and `verify.sql` in the same
 change. When runtime code needs a new function, add one named `EXECUTE` grant
 and a negative/positive permission test. Never compensate with `GRANT ALL`,
 `pg_read_all_data`, owner membership, or API ownership.
+
+The Goose metadata grant is a narrow readiness exception, not authority to run
+or repair migrations. Role verification must prove the application can read
+the latest successfully applied version while it still cannot insert, update,
+or delete Goose metadata. Only the migration container may apply schema
+changes.
+
+## Forward `/readyz` role-grant rollout
+
+This is the current forward procedure for the database-role requirement used
+by `/readyz`. It requires a separately authorised operational change; merging
+the repository support does not apply the grant or authorise a production
+change. Perform the rollout in this order:
+
+1. Apply the updated PostgreSQL least-privilege role policy. It grants the
+   application role `SELECT`-only access to `public.goose_db_version`.
+2. Run the established role verification checks. Confirm that `SELECT` is
+   allowed; `INSERT`, `UPDATE`, `DELETE`, and every other table write are
+   denied; access to `goose_db_version_id_seq` is denied; and no ownership,
+   migration-role membership, schema mutation, or broader migration privilege
+   was granted to the application role.
+3. With the candidate API available in the approved validation context, confirm
+   `GET /readyz` returns HTTP 200 with `{"status":"ready"}`.
+4. Deploy or expose the application version containing the readiness route.
+5. Only after both the grant and endpoint have been verified, configure an
+   orchestrator, monitor, or deployment gate to consume `/readyz`.
+
+Deploying or exposing the API route before applying the grant is safe. Until
+the application role can read the Goose metadata, `/readyz` returns HTTP 503
+with the stable reason `schema_not_ready`; `/healthz` remains HTTP 200 while
+the Go process and listener are alive. Existing production container health
+continues to use `/healthz`, and a readiness 503 does not by itself disable
+application routes or change authentication behavior. Do not enable any
+readiness consumer until the role grant has been applied and verified.
+
+The completed rollout sequence retained later in this document is historical
+evidence. It must not be reused as the current forward `/readyz` procedure.
 
 Migration `00008_seed_test_data.sql` is immutable applied history. Current
 repository Goose runs continue through `00014_reader_2_contract.sql`.

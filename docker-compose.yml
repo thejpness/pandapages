@@ -84,7 +84,7 @@ services:
       - traefik.http.middlewares.pandapages-admin-key.headers.customrequestheaders.X-PP-Admin-Key=${PP_ADMIN_KEY}
 
       # Public API
-      - traefik.http.routers.pandapages-api.rule=(Host(`panda-pages.com`) || Host(`www.panda-pages.com`)) && (PathPrefix(`/api`) || PathPrefix(`/healthz`))
+      - traefik.http.routers.pandapages-api.rule=(Host(`panda-pages.com`) || Host(`www.panda-pages.com`)) && (PathPrefix(`/api`) || Path(`/healthz`) || Path(`/readyz`))
       - traefik.http.routers.pandapages-api.entrypoints=websecure
       - traefik.http.routers.pandapages-api.tls=true
       - traefik.http.routers.pandapages-api.tls.certresolver=myresolver
@@ -104,7 +104,7 @@ services:
       - traefik.enable=true
       - traefik.docker.network=traefik
       - traefik.http.services.pandapages-web.loadbalancer.server.port=8080
-      - traefik.http.routers.pandapages-web.rule=(Host(`panda-pages.com`) || Host(`www.panda-pages.com`)) && !PathPrefix(`/api`) && !PathPrefix(`/healthz`)
+      - traefik.http.routers.pandapages-web.rule=(Host(`panda-pages.com`) || Host(`www.panda-pages.com`)) && !PathPrefix(`/api`) && !Path(`/healthz`) && !Path(`/readyz`)
       - traefik.http.routers.pandapages-web.entrypoints=websecure
       - traefik.http.routers.pandapages-web.tls=true
       - traefik.http.routers.pandapages-web.tls.certresolver=myresolver

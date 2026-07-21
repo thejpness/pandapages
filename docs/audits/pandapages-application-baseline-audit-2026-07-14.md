@@ -1,5 +1,15 @@
 # Panda Pages application baseline audit — 2026-07-14
 
+> **Superseded implementation note — 21 July 2026:** The authentication and
+> availability findings below remain accurate for the audited 14 July commit,
+> but no longer describe current repository behavior. Panda Pages now uses the
+> signed shared-passcode contract, explicit logout, and distinct signed-out and
+> unavailable frontend states documented in the
+> [current authentication contract](../architecture/current-authentication-contract.md).
+> The future identity decision is
+> [ADR 0001](../architecture/decisions/0001-supabase-auth-boundary-and-browser-session-model.md).
+> The original findings remain unchanged as dated evidence.
+
 > Follow-up, 17 July 2026: finding `APP-012` is addressed by forward
 > migration `00013_remove_historical_test_fixtures.sql` and the explicit,
 > fail-closed local/test seed workflow documented in

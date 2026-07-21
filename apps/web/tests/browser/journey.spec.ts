@@ -66,8 +66,12 @@ class JourneyApiMock {
   readonly savedPayloads: SettingsFixture[] = []
   readonly unhandledRequests: CapturedRequest[] = []
 
-  settings = structuredClone(DEFAULT_SETTINGS)
+  settings: unknown = structuredClone(DEFAULT_SETTINGS)
+  private nextLoadFailure: { status: number; body: unknown } | null = null
+  private abortNextLoadRequest = false
+  private malformedNextLoadResponse = false
   private nextSaveFailure: { status: number; body: unknown } | null = null
+  private abortNextSaveRequest = false
   private readonly page: Page
 
   constructor(page: Page) {
@@ -80,6 +84,31 @@ class JourneyApiMock {
     })
   }
 
+  setSettings(settings: unknown): void {
+    this.settings = structuredClone(settings)
+  }
+
+  failNextLoad(status = 503): void {
+    this.nextLoadFailure = {
+      status,
+      body: {
+        error: {
+          code: status === 401 ? 'unlock_required' : 'settings_unavailable',
+          message:
+            status === 401 ? 'unlock required' : 'Reading profile unavailable.',
+        },
+      },
+    }
+  }
+
+  abortNextLoad(): void {
+    this.abortNextLoadRequest = true
+  }
+
+  malformNextLoad(): void {
+    this.malformedNextLoadResponse = true
+  }
+
   failNextSave(status = 503): void {
     this.nextSaveFailure = {
       status,
@@ -90,6 +119,17 @@ class JourneyApiMock {
         },
       },
     }
+  }
+
+  abortNextSave(): void {
+    this.abortNextSaveRequest = true
+  }
+
+  count(method: string, pathname: string): number {
+    return this.requests.filter(
+      (request) =>
+        request.method === method && request.pathname === pathname,
+    ).length
   }
 
   private async handle(route: Route): Promise<void> {
@@ -107,6 +147,26 @@ class JourneyApiMock {
     }
 
     if (pathname === '/api/v1/settings' && request.method() === 'GET') {
+      if (this.abortNextLoadRequest) {
+        this.abortNextLoadRequest = false
+        await route.abort('failed')
+        return
+      }
+      if (this.malformedNextLoadResponse) {
+        this.malformedNextLoadResponse = false
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json; charset=utf-8',
+          body: '{',
+        })
+        return
+      }
+      if (this.nextLoadFailure !== null) {
+        const failure = this.nextLoadFailure
+        this.nextLoadFailure = null
+        await fulfillJson(route, failure.body, failure.status)
+        return
+      }
       await fulfillJson(route, this.settings)
       return
     }
@@ -114,6 +174,12 @@ class JourneyApiMock {
     if (pathname === '/api/v1/settings' && request.method() === 'PUT') {
       const payload = request.postDataJSON() as SettingsFixture
       this.savedPayloads.push(structuredClone(payload))
+
+      if (this.abortNextSaveRequest) {
+        this.abortNextSaveRequest = false
+        await route.abort('failed')
+        return
+      }
 
       if (this.nextSaveFailure !== null) {
         const failure = this.nextSaveFailure
@@ -181,6 +247,35 @@ async function gotoJourney(page: Page): Promise<void> {
     page.getByRole('heading', { level: 1, name: 'Reading profile' }),
   ).toBeVisible()
   await expect(page.getByLabel('Nickname')).toHaveValue('Mina')
+}
+
+async function expectJourneyUnavailable(page: Page): Promise<void> {
+  await expect(
+    page.getByRole('heading', {
+      level: 1,
+      name: 'Reading profile unavailable',
+    }),
+  ).toBeVisible()
+  await expect(
+    page.getByText(
+      /connection, server or database may be temporarily unavailable/i,
+    ),
+  ).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Try again' })).toBeVisible()
+  await expect(page.getByLabel('Nickname')).toHaveCount(0)
+}
+
+async function expectRoute(
+  page: Page,
+  pathname: string,
+  next: string | null = null,
+): Promise<void> {
+  await expect
+    .poll(() => {
+      const url = new URL(page.url())
+      return { pathname: url.pathname, next: url.searchParams.get('next') }
+    })
+    .toEqual({ pathname, next })
 }
 
 async function expectNoHorizontalOverflow(page: Page): Promise<void> {
@@ -324,22 +419,164 @@ test.describe('Reading profile Journey', () => {
     await expect(page.getByText('Step 2 of 3', { exact: true })).toBeVisible()
   })
 
-  test('keeps save failures visible and retryable on the preferences step', async ({
+  test('uses form defaults only for the genuine empty settings contract', async ({
+    page,
+    api,
+  }) => {
+    api.setSettings({
+      child: {
+        name: '',
+        ageMonths: 0,
+        interests: null,
+        sensitivities: null,
+      },
+      prompt: {
+        name: '',
+        schemaVersion: 0,
+        rules: null,
+      },
+    })
+
+    await page.goto('/journey')
+    await expect(page.getByLabel('Nickname')).toBeVisible()
+    await expect(page.getByLabel('Nickname')).toHaveValue('')
+    await expect(page.getByLabel('Age (months)')).toHaveValue('36')
+    await expect(page.getByRole('button', { name: 'Next' })).toBeDisabled()
+  })
+
+  test('a settings 401 confirms session loss and opens unlock with a safe Journey return', async ({
+    page,
+    api,
+  }) => {
+    api.failNextLoad(401)
+    await page.goto('/journey')
+
+    await expectRoute(page, '/unlock', '/journey')
+    await expect(
+      page.getByRole('heading', { level: 1, name: 'Unlock Panda Pages' }),
+    ).toBeVisible()
+    await expect(page.getByLabel('Nickname')).toHaveCount(0)
+  })
+
+  test('a network load failure shows no fake form and Retry performs a fresh successful request', async ({
+    page,
+    api,
+  }) => {
+    api.abortNextLoad()
+    await page.goto('/journey')
+    await expectJourneyUnavailable(page)
+    expect(api.count('GET', '/api/v1/settings')).toBe(1)
+
+    await page.getByRole('button', { name: 'Try again' }).click()
+    await expect(page.getByLabel('Nickname')).toHaveValue('Mina')
+    expect(api.count('GET', '/api/v1/settings')).toBe(2)
+  })
+
+  test('a 503 settings load remains unavailable rather than looking signed out or empty', async ({
+    page,
+    api,
+  }) => {
+    api.failNextLoad(503)
+    await page.goto('/journey')
+
+    await expectJourneyUnavailable(page)
+    await expectRoute(page, '/journey')
+  })
+
+  test('a malformed successful settings response remains unavailable rather than inventing defaults', async ({
+    page,
+    api,
+  }) => {
+    api.malformNextLoad()
+    await page.goto('/journey')
+
+    await expectJourneyUnavailable(page)
+    await expectRoute(page, '/journey')
+  })
+
+  test('keeps 5xx save failures visible, preserves values, and retries successfully', async ({
     page,
     api,
   }) => {
     api.failNextSave()
     await gotoJourney(page)
     await page.getByRole('button', { name: 'Next' }).click()
+    await page.getByLabel('Tone').selectOption('adventurous')
     await page.getByRole('button', { name: 'Save' }).click()
 
     await expect(
       page
         .getByRole('alert')
-        .getByText('Reading profile could not be saved.', { exact: true }),
+        .getByText(
+          'Panda Pages could not save the reading profile. Your changes are still here. Try again.',
+          { exact: true },
+        ),
     ).toBeVisible()
     await expect(page.getByText('Step 2 of 3', { exact: true })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Save' })).toBeEnabled()
+    await expect(page.getByLabel('Tone')).toHaveValue('adventurous')
+    await expect(
+      page.getByRole('button', { name: 'Try saving again' }),
+    ).toBeEnabled()
+    await expect(page.getByRole('status')).toHaveCount(0)
+
+    await page.getByRole('button', { name: 'Try saving again' }).click()
+    await expect(
+      page.getByRole('status').getByText('Saved.', { exact: true }),
+    ).toBeVisible()
+  })
+
+  test('keeps validation failures distinct and preserves editable values', async ({
+    page,
+    api,
+  }) => {
+    api.failNextSave(400)
+    await gotoJourney(page)
+    await page.getByLabel('Nickname').fill('Mina Updated')
+    await page.getByRole('button', { name: 'Next' }).click()
+    await page.getByLabel('Genre').selectOption('space')
+    await page.getByRole('button', { name: 'Save' }).click()
+
+    await expect(
+      page.getByRole('alert').getByText(
+        'Some reading profile details could not be saved. Check them and try again.',
+        { exact: true },
+      ),
+    ).toBeVisible()
+    await expect(page.getByLabel('Genre')).toHaveValue('space')
+    await page.getByRole('button', { name: 'Back' }).click()
+    await expect(page.getByLabel('Nickname')).toHaveValue('Mina Updated')
+    await expect(page.getByLabel('Nickname')).not.toHaveAttribute(
+      'aria-invalid',
+      'true',
+    )
+  })
+
+  test('a save 401 confirms session loss and opens unlock', async ({ page, api }) => {
+    api.failNextSave(401)
+    await gotoJourney(page)
+    await page.getByRole('button', { name: 'Next' }).click()
+    await page.getByRole('button', { name: 'Save' }).click()
+
+    await expectRoute(page, '/unlock', '/journey')
+    await expect(
+      page.getByRole('heading', { level: 1, name: 'Unlock Panda Pages' }),
+    ).toBeVisible()
+  })
+
+  test('a connectivity save failure preserves the current form without claiming success', async ({
+    page,
+    api,
+  }) => {
+    api.abortNextSave()
+    await gotoJourney(page)
+    await page.getByRole('button', { name: 'Next' }).click()
+    await page.getByLabel('Complexity').selectOption('chaptery')
+    await page.getByRole('button', { name: 'Save' }).click()
+
+    await expect(
+      page.getByRole('alert').getByText(/Your changes are still here/),
+    ).toBeVisible()
+    await expect(page.getByLabel('Complexity')).toHaveValue('chaptery')
     await expect(page.getByRole('status')).toHaveCount(0)
   })
 

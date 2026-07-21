@@ -324,6 +324,15 @@ WHERE namespace.nspname = 'public'
   AND class.relkind IN ('r', 'p')
 \gexec
 
+-- Readiness inspects Goose's successful applied-version state but must never
+-- mutate migration metadata. Keep this separate from application CRUD grants.
+SELECT format(
+  'GRANT SELECT ON TABLE public.goose_db_version TO %I',
+  :'application_role'
+)
+WHERE to_regclass('public.goose_db_version') IS NOT NULL
+\gexec
+
 SELECT format('GRANT SELECT ON ALL TABLES IN SCHEMA public TO %I', :'backup_role')
 \gexec
 SELECT format('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO %I', :'application_role')

@@ -550,12 +550,14 @@ export class ReaderApiMock {
     if (request.method() === 'GET' && url.pathname === '/api/v1/settings') {
       await this.respond(route, captured, undefined, {
         child: {
+          id: 'child-test-id',
           name: 'TEST ONLY — Reader child',
           ageMonths: 84,
           interests: [],
           sensitivities: [],
         },
         prompt: {
+          id: 'prompt-test-id',
           name: 'TEST ONLY — Reader prompt',
           schemaVersion: 1,
           rules: {},
