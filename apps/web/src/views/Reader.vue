@@ -32,6 +32,7 @@ import {
 } from '../lib/reader-chapters'
 import type { CrossVersionMapping } from '../lib/reader-cross-version-progress'
 import type { ReaderLocatorV2 } from '../lib/reader-locator-v2'
+import { applyReaderTheme } from '../lib/reader-theme-bootstrap'
 import { planReaderModeTransition } from '../lib/reader-mode-transition'
 import {
   READER_PREFERENCES_V2_DEFAULTS,
@@ -291,9 +292,6 @@ const activeSegment = computed(
 )
 const chapter = computed(() =>
   currentReaderChapter(chapters.value, activeSegment.value),
-)
-const themeClass = computed(
-  () => 'reader-theme--' + preferences.value.theme,
 )
 const decisionCanOpen = computed(
   () =>
@@ -787,7 +785,7 @@ watch(
 watch(
   () => preferences.value.theme,
   (theme) => {
-    document.documentElement.dataset.readerTheme = theme
+    applyReaderTheme(theme)
   },
   { immediate: true },
 )
@@ -814,7 +812,6 @@ onBeforeUnmount(() => {
   progress.dispose()
   clearProgressCaptureSuppressions()
   story.dispose()
-  delete document.documentElement.dataset.readerTheme
   document.title = 'Panda Pages'
 })
 </script>
@@ -822,7 +819,7 @@ onBeforeUnmount(() => {
 <template>
   <div
     class="reader-shell"
-    :class="themeClass"
+    :data-reader-theme="preferences.theme"
     :data-reader-preference-pending="readerPlacementQueue.preferencePending.value ? 'true' : 'false'"
   >
     <ReaderStoryState

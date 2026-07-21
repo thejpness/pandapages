@@ -15,7 +15,7 @@ function validPreferences(overrides = {}) {
   return {
     schema: 2,
     mode: 'scroll',
-    theme: 'night',
+    theme: 'paper',
     fontFamily: 'book',
     fontSize: 20,
     lineHeight: 1.65,
@@ -67,31 +67,117 @@ test('preference v2 parsing accepts the exact schema and clamps numeric values',
   )
 })
 
-test('malformed, incomplete, unknown and non-finite preferences use defaults', async () => {
+test('parser falls back per field while preserving unrelated valid settings', async () => {
   const preferences = await preferencesModule()
   const expected = { ...preferences.READER_PREFERENCES_V2_DEFAULTS }
 
-  for (const invalid of [
+  assert.deepEqual(preferences.parseReaderPreferencesV2(null), expected)
+  assert.deepEqual(preferences.parseReaderPreferencesV2([]), expected)
+  assert.deepEqual(preferences.parseReaderPreferencesV2({}), expected)
+
+  const versionless = {
+    mode: 'paged',
+    theme: 'mist',
+    fontFamily: 'system',
+    fontSize: 25,
+    lineHeight: 1.8,
+    contentWidth: 840,
+  }
+  assert.deepEqual(preferences.parseReaderPreferencesV2(versionless), {
+    schema: 2,
+    ...versionless,
+  })
+
+  assert.deepEqual(
+    preferences.parseReaderPreferencesV2({
+      schema: 1,
+      mode: 'paged',
+      theme: 'removed-theme',
+      fontFamily: 'clear',
+      fontSize: 24,
+      lineHeight: 1.9,
+      contentWidth: 800,
+      staleField: true,
+    }),
+    {
+      schema: 2,
+      mode: 'paged',
+      theme: 'paper',
+      fontFamily: 'clear',
+      fontSize: 24,
+      lineHeight: 1.9,
+      contentWidth: 800,
+    },
+  )
+
+  assert.deepEqual(
+    preferences.parseReaderPreferencesV2({
+      mode: 'continuous',
+      theme: null,
+      fontFamily: 'serif',
+      fontSize: '20',
+      lineHeight: Number.NaN,
+      contentWidth: Number.POSITIVE_INFINITY,
+    }),
+    expected,
+  )
+})
+
+test('all five canonical themes parse, validate, and restore', async () => {
+  const preferences = await preferencesModule()
+
+  for (const theme of ['clear', 'paper', 'warm', 'mist', 'night']) {
+    const value = validPreferences({ theme })
+    assert.deepEqual(preferences.parseReaderPreferencesV2(value), value)
+    assert.deepEqual(preferences.validateReaderPreferencesV2(value), value)
+    assert.deepEqual(
+      preferences.loadReaderPreferencesV2(
+        memoryStorage({ pp_reader_prefs_v2: JSON.stringify(value) }),
+      ),
+      value,
+    )
+  }
+})
+
+test('strict validation accepts only complete canonical serializable values', async () => {
+  const preferences = await preferencesModule()
+  const invalid = [
     null,
     [],
     {},
     { ...validPreferences(), schema: 1 },
     { ...validPreferences(), mode: 'continuous' },
-    { ...validPreferences(), theme: 'bright' },
+    { ...validPreferences(), theme: 'sepia' },
     { ...validPreferences(), fontFamily: 'serif' },
     { ...validPreferences(), fontSize: '20' },
     { ...validPreferences(), lineHeight: Number.NaN },
     { ...validPreferences(), contentWidth: Number.POSITIVE_INFINITY },
     { ...validPreferences(), extra: true },
-  ]) {
-    assert.deepEqual(preferences.parseReaderPreferencesV2(invalid), expected)
-    assert.equal(preferences.validateReaderPreferencesV2(invalid), null)
+  ]
+
+  for (const value of invalid) {
+    assert.equal(preferences.validateReaderPreferencesV2(value), null)
   }
+
+  const input = validPreferences({
+    theme: 'clear',
+    fontSize: 99,
+    lineHeight: 0,
+    contentWidth: 1000,
+  })
+  assert.deepEqual(preferences.validateReaderPreferencesV2(input), {
+    ...input,
+    fontSize: 32,
+    lineHeight: 1.4,
+    contentWidth: 900,
+  })
 })
 
-test('loading is strict, ignores v1 data and treats malformed JSON as defaults', async () => {
+test('no data, malformed JSON, and stale theme values restore with Paper safely', async () => {
   const preferences = await preferencesModule()
   const expected = { ...preferences.READER_PREFERENCES_V2_DEFAULTS }
+  assert.deepEqual(preferences.loadReaderPreferencesV2(memoryStorage()), expected)
+
   const onlyV1 = memoryStorage({
     pp_reader_prefs_v1: JSON.stringify({ fontPx: 31, mode: 'paged' }),
   })
@@ -100,9 +186,57 @@ test('loading is strict, ignores v1 data and treats malformed JSON as defaults',
   const malformed = memoryStorage({ pp_reader_prefs_v2: '{not json' })
   assert.deepEqual(preferences.loadReaderPreferencesV2(malformed), expected)
 
-  const valid = validPreferences({ fontFamily: 'system', contentWidth: 880 })
-  const current = memoryStorage({ pp_reader_prefs_v2: JSON.stringify(valid) })
-  assert.deepEqual(preferences.loadReaderPreferencesV2(current), valid)
+  const stale = memoryStorage({
+    pp_reader_prefs_v2: JSON.stringify(
+      validPreferences({
+        mode: 'paged',
+        theme: 'sepia',
+        fontFamily: 'system',
+        fontSize: 27,
+        lineHeight: 1.75,
+        contentWidth: 880,
+      }),
+    ),
+  })
+  assert.deepEqual(preferences.loadReaderPreferencesV2(stale), {
+    schema: 2,
+    mode: 'paged',
+    theme: 'paper',
+    fontFamily: 'system',
+    fontSize: 27,
+    lineHeight: 1.75,
+    contentWidth: 880,
+  })
+})
+
+test('normalization leaves partially valid input objects unchanged', async () => {
+  const preferences = await preferencesModule()
+  const input = Object.freeze({
+    mode: 'paged',
+    theme: 'night',
+    fontFamily: 'system',
+    fontSize: 200,
+    lineHeight: 1.8,
+    contentWidth: 840,
+  })
+
+  assert.deepEqual(preferences.parseReaderPreferencesV2(input), {
+    schema: 2,
+    mode: 'paged',
+    theme: 'night',
+    fontFamily: 'system',
+    fontSize: 32,
+    lineHeight: 1.8,
+    contentWidth: 840,
+  })
+  assert.deepEqual(input, {
+    mode: 'paged',
+    theme: 'night',
+    fontFamily: 'system',
+    fontSize: 200,
+    lineHeight: 1.8,
+    contentWidth: 840,
+  })
 })
 
 test('defaults are immutable and callers never share a mutable defaults object', async () => {
@@ -173,6 +307,14 @@ test('saving persists only validated and clamped v2 preferences', async () => {
   assert.equal(
     preferences.saveReaderPreferencesV2(
       { ...validPreferences(), mode: 'unknown' },
+      storage,
+    ),
+    false,
+  )
+  assert.equal(storage.values.get('pp_reader_prefs_v2'), beforeInvalidSave)
+  assert.equal(
+    preferences.saveReaderPreferencesV2(
+      { ...validPreferences(), extra: 'not serializable' },
       storage,
     ),
     false,

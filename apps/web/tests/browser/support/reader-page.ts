@@ -3,7 +3,7 @@ import { expect, type CapturedRequest, type ReaderApiMock } from './reader-api'
 
 export type ReaderPreferenceOverrides = Partial<{
   mode: 'scroll' | 'paged'
-  theme: 'night' | 'warm'
+  theme: 'clear' | 'paper' | 'warm' | 'mist' | 'night'
   fontFamily: 'book' | 'clear' | 'system'
   fontSize: number
   lineHeight: number

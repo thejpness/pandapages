@@ -562,7 +562,11 @@ export function useReaderProgress(options: UseReaderProgressOptions) {
       if (saveState.value.status === 'error') {
         await coordinator?.retry()
       } else {
-        if (!decision.value && !awaitingIntent) {
+        if (
+          !captureSuppressed.value &&
+          !decision.value &&
+          !awaitingIntent
+        ) {
           const current = snapshot(options.capture())
           if (current) coordinator?.update(current, { debounce: false })
         }
@@ -606,8 +610,14 @@ export function useReaderProgress(options: UseReaderProgressOptions) {
         awaitingIntent,
       })
     ) return
-    const current = snapshot(options.capture())
-    if (current) coordinator?.update(current, { debounce: false })
+    // A placement owner may be restoring a semantic anchor while the page is
+    // hidden or unmounted. In that state the rendered position is transient:
+    // only drain progress the coordinator already owns, never capture that
+    // intermediate position as a new desired snapshot.
+    if (!captureSuppressed.value) {
+      const current = snapshot(options.capture())
+      if (current) coordinator?.update(current, { debounce: false })
+    }
     void coordinator?.bestEffortKeepaliveFlush().catch(() => {
       // The browser may terminate before a keepalive response is observed.
     })

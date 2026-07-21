@@ -1,13 +1,17 @@
-export type ReaderMode = 'scroll' | 'paged'
+import {
+  DEFAULT_READER_THEME_ID,
+  isReaderThemeId,
+  type ReaderThemeId,
+} from './reader-themes'
 
-export type ReaderTheme = 'night' | 'warm'
+export type ReaderMode = 'scroll' | 'paged'
 
 export type ReaderFontFamily = 'book' | 'clear' | 'system'
 
 export type ReaderPreferencesV2 = {
   schema: 2
   mode: ReaderMode
-  theme: ReaderTheme
+  theme: ReaderThemeId
   fontFamily: ReaderFontFamily
   fontSize: number
   lineHeight: number
@@ -31,7 +35,7 @@ export const READER_PREFERENCES_V2_DEFAULTS: Readonly<ReaderPreferencesV2> =
   Object.freeze({
     schema: 2,
     mode: 'scroll',
-    theme: 'night',
+    theme: DEFAULT_READER_THEME_ID,
     fontFamily: 'book',
     fontSize: 20,
     lineHeight: 1.65,
@@ -80,7 +84,7 @@ export function validateReaderPreferencesV2(
     !hasExactPreferenceKeys(value) ||
     value.schema !== 2 ||
     (value.mode !== 'scroll' && value.mode !== 'paged') ||
-    (value.theme !== 'night' && value.theme !== 'warm') ||
+    !isReaderThemeId(value.theme) ||
     (value.fontFamily !== 'book' &&
       value.fontFamily !== 'clear' &&
       value.fontFamily !== 'system') ||
@@ -115,7 +119,44 @@ export function validateReaderPreferencesV2(
 }
 
 export function parseReaderPreferencesV2(value: unknown): ReaderPreferencesV2 {
-  return validateReaderPreferencesV2(value) ?? defaults()
+  if (!isRecord(value)) return defaults()
+
+  const fallback = READER_PREFERENCES_V2_DEFAULTS
+  return {
+    schema: 2,
+    mode:
+      value.mode === 'scroll' || value.mode === 'paged'
+        ? value.mode
+        : fallback.mode,
+    theme: isReaderThemeId(value.theme) ? value.theme : fallback.theme,
+    fontFamily:
+      value.fontFamily === 'book' ||
+      value.fontFamily === 'clear' ||
+      value.fontFamily === 'system'
+        ? value.fontFamily
+        : fallback.fontFamily,
+    fontSize: isFiniteNumber(value.fontSize)
+      ? clamp(
+          value.fontSize,
+          READER_PREFERENCE_LIMITS.fontSize.min,
+          READER_PREFERENCE_LIMITS.fontSize.max,
+        )
+      : fallback.fontSize,
+    lineHeight: isFiniteNumber(value.lineHeight)
+      ? clamp(
+          value.lineHeight,
+          READER_PREFERENCE_LIMITS.lineHeight.min,
+          READER_PREFERENCE_LIMITS.lineHeight.max,
+        )
+      : fallback.lineHeight,
+    contentWidth: isFiniteNumber(value.contentWidth)
+      ? clamp(
+          value.contentWidth,
+          READER_PREFERENCE_LIMITS.contentWidth.min,
+          READER_PREFERENCE_LIMITS.contentWidth.max,
+        )
+      : fallback.contentWidth,
+  }
 }
 
 function browserStorage(): ReaderPreferencesStorage | null {

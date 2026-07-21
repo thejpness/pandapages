@@ -34,18 +34,20 @@ Preferences are stored under pp_reader_prefs_v2 with this exact shape:
 
     schema: 2
     mode: scroll | paged
-    theme: night | warm
+    theme: clear | paper | warm | mist | night
     fontFamily: book | clear | system
     fontSize: 17..32
     lineHeight: 1.4..2.0
     contentWidth: 560..900
 
-Every field and key is validated. Finite numeric values are clamped; malformed
-JSON, missing fields, unknown fields, invalid enums, and storage failures fall
-back safely. Defaults are immutable, saved values are validated, and Reset to
-Defaults produces a fresh value.
+Every field is validated. Finite numeric values are clamped; malformed JSON
+and storage failures fall back safely. Loading projects known fields,
+preserves independently valid typography and layout preferences, and defaults
+an unknown or stale theme directly to Paper. Saved values remain strict,
+defaults are immutable, and Reset to Defaults produces a fresh value.
 
-There is deliberately no migration from beta-only pp_reader_prefs_v1.
+There are no legacy theme aliases or palette adapters, and there is
+deliberately no migration from beta-only pp_reader_prefs_v1.
 
 Book uses the local Literata variable font, Clear uses the local Atkinson
 Hyperlegible Next variable font, and System uses the native system stack. Only
@@ -108,7 +110,8 @@ readiness.
 
 The Reader provides semantic main/article structure, one visible content H1,
 a labelled progressbar, visible focus, 44px-class controls, explicit story
-states, restrained live regions, and local low-glare Night/Warm themes.
+states, restrained live regions, and five local colour presets from the
+canonical Reader theme registry, with Paper as the default.
 
 Settings, chapters, resume, and changed-story decisions use Reka UI Dialog for
 modal semantics, focus trapping, Escape, background isolation, body-scroll

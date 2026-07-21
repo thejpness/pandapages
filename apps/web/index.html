@@ -4,6 +4,11 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/logo.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <script>
+      if (/^\/read\/[^/]+\/?$/.test(window.location.pathname)) {
+        document.documentElement.dataset.readerThemeBooting = 'true'
+      }
+    </script>
     <title>Panda Pages</title>
   </head>
   <body>
