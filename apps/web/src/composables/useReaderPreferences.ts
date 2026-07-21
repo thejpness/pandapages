@@ -6,8 +6,8 @@ import {
   type ReaderFontFamily,
   type ReaderMode,
   type ReaderPreferencesV2,
-  type ReaderTheme,
 } from '../lib/reader-preferences-v2'
+import type { ReaderThemeId } from '../lib/reader-themes'
 
 const fontStacks: Record<ReaderFontFamily, string> = {
   book: '"Literata Variable", Georgia, serif',
@@ -32,7 +32,7 @@ export function useReaderPreferences() {
     preferences.value.mode = mode
   }
 
-  function setTheme(theme: ReaderTheme) {
+  function setTheme(theme: ReaderThemeId) {
     preferences.value.theme = theme
   }
 

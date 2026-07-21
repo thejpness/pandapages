@@ -512,7 +512,7 @@ function navigateFromLibrary(path: string) {
   --library-accent-soft: #d9e5d2;
   --library-serif: var(--panda-serif);
   --library-sans: var(--panda-sans);
-  --reader-focus: var(--panda-focus);
+  --library-focus: var(--panda-focus);
   min-height: 100dvh;
   overflow-x: clip;
   background:
@@ -554,7 +554,7 @@ function navigateFromLibrary(path: string) {
 }
 
 .library-main:focus-visible {
-  outline: 3px solid var(--reader-focus);
+  outline: 3px solid var(--library-focus);
   outline-offset: -3px;
 }
 

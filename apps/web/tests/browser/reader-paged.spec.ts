@@ -722,7 +722,10 @@ test.describe('Reader paged reading', () => {
     const writes = api.progressPuts().length
     await page.getByRole('button', { name: 'Reading settings' }).click()
     const settings = page.getByRole('dialog', { name: 'Reading settings' })
-    await settings.getByRole('radio', { name: 'Clear' }).check()
+    await settings
+      .getByRole('group', { name: 'Font' })
+      .getByRole('radio', { name: 'Clear' })
+      .check()
     await settings.getByRole('slider', { name: 'Text size' }).fill('30')
     await settings.getByRole('slider', { name: 'Line height' }).fill('2')
     await settings.getByRole('slider', { name: 'Content width' }).fill('900')

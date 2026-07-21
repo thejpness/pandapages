@@ -32,7 +32,10 @@ test.describe('Reader settings and chapters', () => {
     await gotoReader(page, api, READER_SLUG)
     await page.getByRole('button', { name: 'Reading settings' }).click()
     const dialog = page.getByRole('dialog', { name: 'Reading settings' })
-    await dialog.getByRole('radio', { name: 'Clear' }).check()
+    await dialog
+      .getByRole('group', { name: 'Font' })
+      .getByRole('radio', { name: 'Clear' })
+      .check()
     await dialog.getByRole('slider', { name: 'Text size' }).fill('28')
     await dialog.getByRole('slider', { name: 'Line height' }).fill('1.9')
     await dialog.getByRole('slider', { name: 'Content width' }).fill('840')
@@ -53,7 +56,7 @@ test.describe('Reader settings and chapters', () => {
     expect(JSON.parse(stored ?? '{}')).toEqual({
       schema: 2,
       mode: 'scroll',
-      theme: 'night',
+      theme: 'paper',
       fontFamily: 'clear',
       fontSize: 28,
       lineHeight: 1.9,
@@ -68,15 +71,30 @@ test.describe('Reader settings and chapters', () => {
     await gotoReader(page, api, READER_SLUG)
     await page.getByRole('button', { name: 'Reading settings' }).click()
     const dialog = page.getByRole('dialog', { name: 'Reading settings' })
-    await dialog.getByRole('radio', { name: 'Clear' }).check()
-    await dialog.getByRole('radio', { name: 'Warm' }).check()
+    await dialog
+      .getByRole('group', { name: 'Font' })
+      .getByRole('radio', { name: 'Clear' })
+      .check()
+    await dialog
+      .getByRole('button', {
+        name: 'Page style Paper selected Change page colours',
+      })
+      .click()
+    await dialog
+      .getByRole('group', { name: 'Page style' })
+      .getByRole('radio', { name: 'Warm' })
+      .check()
     await dialog.getByRole('slider', { name: 'Text size' }).fill('30')
     await dialog.getByRole('slider', { name: 'Line height' }).fill('2')
     await dialog.getByRole('slider', { name: 'Content width' }).fill('900')
     await dialog.getByRole('button', { name: 'Reset to Defaults' }).click()
 
     await expect(dialog.getByRole('radio', { name: 'Book' })).toBeChecked()
-    await expect(dialog.getByRole('radio', { name: 'Night' })).toBeChecked()
+    await expect(
+      dialog
+        .getByRole('group', { name: 'Page style' })
+        .getByRole('radio', { name: 'Paper' }),
+    ).toBeChecked()
     await expect(dialog.getByRole('radio', { name: 'Scroll' })).toBeChecked()
     await expect(dialog.getByRole('slider', { name: 'Text size' })).toHaveValue('20')
     await expect(dialog.getByRole('slider', { name: 'Line height' })).toHaveValue('1.65')
@@ -87,7 +105,10 @@ test.describe('Reader settings and chapters', () => {
     await expect
       .poll(() => article.evaluate((element) => getComputedStyle(element).fontFamily))
       .toContain('Literata Variable')
-    await expect(page.locator('.reader-shell')).toHaveClass(/reader-theme--night/)
+    await expect(page.locator('.reader-shell')).toHaveAttribute(
+      'data-reader-theme',
+      'paper',
+    )
   })
 
   test('scenarios 20 and 22: Chapters lists H2s, traps focus, handles Escape, and restores focus', async ({

@@ -2,7 +2,8 @@ import { readFile } from 'node:fs/promises'
 import { transformWithOxc } from 'vite'
 
 async function compiledModuleURL(sourceURL) {
-  const source = await readFile(sourceURL, 'utf8')
+  const originalSource = await readFile(sourceURL, 'utf8')
+  const source = await resolveKnownImports(originalSource, sourceURL)
   const transformed = await transformWithOxc(source, sourceURL.pathname)
   return (
     'data:text/javascript;base64,' +
@@ -14,10 +15,18 @@ async function compiledModuleURL(sourceURL) {
 }
 
 async function resolveKnownImports(source, sourceURL) {
-  if (!source.includes('./reader-locator-v2')) return source
-  const dependencyURL = new URL('./reader-locator-v2.ts', sourceURL)
-  const moduleURL = await compiledModuleURL(dependencyURL)
-  return source.replaceAll('./reader-locator-v2', moduleURL)
+  let resolved = source
+  for (const dependency of [
+    './reader-locator-v2',
+    './reader-themes',
+    './reader-preferences-v2',
+  ]) {
+    if (!resolved.includes(dependency)) continue
+    const dependencyURL = new URL(`${dependency}.ts`, sourceURL)
+    const moduleURL = await compiledModuleURL(dependencyURL)
+    resolved = resolved.replaceAll(dependency, moduleURL)
+  }
+  return resolved
 }
 
 export async function loadTypeScript(

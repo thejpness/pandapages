@@ -67,7 +67,10 @@ test.describe('Reader responsive smoke contracts', () => {
     await gotoReader(page, api, READER_SLUG)
 
     await expect(page.locator('.reader-story')).toHaveCSS('font-size', '32px')
-    await expect(page.locator('.reader-shell')).toHaveClass(/reader-theme--warm/)
+    await expect(page.locator('.reader-shell')).toHaveAttribute(
+      'data-reader-theme',
+      'warm',
+    )
     await expectNoHorizontalOverflow(page)
   })
 
