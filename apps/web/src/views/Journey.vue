@@ -1,9 +1,23 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { getSettings, isJsonObject, saveSettings, type SettingsPayload } from '../lib/api'
+import {
+  classifySettingsRequestFailure,
+  getSettings,
+  isJsonObject,
+  saveSettings,
+  type SettingsPayload,
+} from '../lib/api'
+import { authState } from '../lib/session'
+import { navigationDidFail } from '../lib/session-transitions'
 
 const router = useRouter()
+
+const defaultLoadUnavailableMessage =
+  'Panda Pages could not load this reading profile. The connection, server or database may be temporarily unavailable.'
+const unlockNavigationMessage =
+  'Your session ended, but Panda Pages could not open the unlock page. Try again.'
+const nameValidationMessage = 'Add a nickname/name first.'
 
 function storedRuleValue(value: unknown): unknown {
   return isJsonObject(value) && value.value != null ? value.value : value
@@ -12,6 +26,10 @@ function storedRuleValue(value: unknown): unknown {
 const saving = ref(false)
 const savedMsg = ref<string | null>(null)
 const errMsg = ref<string | null>(null)
+const saveFailed = ref(false)
+const loading = ref(false)
+const loadState = ref<'loading' | 'ready' | 'unavailable'>('loading')
+const loadUnavailableMessage = ref(defaultLoadUnavailableMessage)
 
 const step = ref<1 | 2 | 3>(1)
 
@@ -21,6 +39,9 @@ const promptId = ref<string | undefined>(undefined)
 
 const childName = ref('')
 const ageMonths = ref(36)
+const nicknameInvalid = computed(
+  () => errMsg.value === nameValidationMessage && !childName.value.trim(),
+)
 
 const interests = ref<string[]>([])
 const sensitivities = ref<string[]>([])
@@ -71,57 +92,95 @@ const promptRules = computed(() => {
   }
 })
 
-async function load() {
-  errMsg.value = null
+function applySettings(settings: SettingsPayload) {
+  childId.value = settings.child.id
+  promptId.value = settings.prompt.id
+  childName.value = settings.child.name
+  ageMonths.value = settings.child.id === undefined ? 36 : settings.child.ageMonths
+  interests.value = [...settings.child.interests]
+  sensitivities.value = [...settings.child.sensitivities]
+
+  // The prompt half can be absent independently of the child half.
+  tone.value = 'calm'
+  genre.value = 'bedtime'
+  minutes.value = 6
+  complexity.value = 'growing'
+
+  const rules = settings.prompt.rules
+  // Tolerate older shapes such as { value: "calm" }.
+  const t = storedRuleValue(rules.tone)
+  const g = storedRuleValue(rules.genre)
+  const c = storedRuleValue(rules.complexity)
+
+  if (t === 'calm' || t === 'funny' || t === 'adventurous' || t === 'cosy') {
+    tone.value = t
+  }
+  if (
+    g === 'bedtime' ||
+    g === 'animals' ||
+    g === 'space' ||
+    g === 'fantasy' ||
+    g === 'everyday'
+  ) {
+    genre.value = g
+  }
+  if (c === 'simple' || c === 'growing' || c === 'chaptery') {
+    complexity.value = c
+  }
+  const readingTime = rules.readingTimeMinutes
+  if (typeof readingTime === 'number' || typeof readingTime === 'string') {
+    const parsed = Number(readingTime)
+    if (Number.isFinite(parsed)) minutes.value = parsed
+  }
+}
+
+async function moveToUnlock(): Promise<boolean> {
+  authState.confirmLocked()
   try {
-    const s = await getSettings()
-
-    // Preserve IDs
-    childId.value = s.child?.id
-    promptId.value = s.prompt?.id
-
-    if (s.child?.name) childName.value = s.child.name
-    if (Number.isFinite(s.child?.ageMonths)) ageMonths.value = s.child.ageMonths || ageMonths.value
-    interests.value = Array.isArray(s.child?.interests) ? [...s.child.interests] : []
-    sensitivities.value = Array.isArray(s.child?.sensitivities) ? [...s.child.sensitivities] : []
-
-    const rules = s.prompt.rules
-    // Tolerate older shapes such as { value: "calm" }.
-    const t = storedRuleValue(rules.tone)
-    const g = storedRuleValue(rules.genre)
-    const c = storedRuleValue(rules.complexity)
-
-    if (t === 'calm' || t === 'funny' || t === 'adventurous' || t === 'cosy') {
-      tone.value = t
-    }
-    if (
-      g === 'bedtime' ||
-      g === 'animals' ||
-      g === 'space' ||
-      g === 'fantasy' ||
-      g === 'everyday'
-    ) {
-      genre.value = g
-    }
-    if (c === 'simple' || c === 'growing' || c === 'chaptery') {
-      complexity.value = c
-    }
-    const readingTime = rules.readingTimeMinutes
-    if (typeof readingTime === 'number' || typeof readingTime === 'string') {
-      const parsed = Number(readingTime)
-      if (Number.isFinite(parsed)) minutes.value = parsed
-    }
+    const result = await router.replace({
+      path: '/unlock',
+      query: { next: '/journey' },
+    })
+    return !navigationDidFail(result)
   } catch {
-    // ok in v1 if no rows yet
+    return false
+  }
+}
+
+async function load() {
+  if (loading.value) return
+
+  loading.value = true
+  errMsg.value = null
+  savedMsg.value = null
+  loadUnavailableMessage.value = defaultLoadUnavailableMessage
+  try {
+    const settings = await getSettings()
+    applySettings(settings)
+    loadState.value = 'ready'
+  } catch (error) {
+    if (classifySettingsRequestFailure(error, 'load') === 'unauthorized') {
+      if (!(await moveToUnlock())) {
+        loadUnavailableMessage.value = unlockNavigationMessage
+        loadState.value = 'unavailable'
+      }
+      return
+    }
+    loadState.value = 'unavailable'
+  } finally {
+    loading.value = false
   }
 }
 
 async function persist() {
+  if (saving.value || loadState.value !== 'ready') return
+
   savedMsg.value = null
   errMsg.value = null
+  saveFailed.value = false
 
   if (!childName.value.trim()) {
-    errMsg.value = 'Add a nickname/name first.'
+    errMsg.value = nameValidationMessage
     step.value = 1
     return
   }
@@ -147,13 +206,25 @@ async function persist() {
     const saved = await saveSettings(payload)
 
     // Update IDs in case we inserted new rows
-    childId.value = saved.child?.id
-    promptId.value = saved.prompt?.id
+    childId.value = saved.child.id
+    promptId.value = saved.prompt.id
 
     savedMsg.value = 'Saved.'
     step.value = 3
   } catch (error) {
-    errMsg.value = error instanceof Error && error.message ? error.message : 'Save failed.'
+    const failure = classifySettingsRequestFailure(error, 'save')
+    if (failure === 'unauthorized') {
+      if (!(await moveToUnlock())) {
+        loadUnavailableMessage.value = unlockNavigationMessage
+        loadState.value = 'unavailable'
+      }
+      return
+    }
+    saveFailed.value = true
+    errMsg.value =
+      failure === 'validation'
+        ? 'Some reading profile details could not be saved. Check them and try again.'
+        : 'Panda Pages could not save the reading profile. Your changes are still here. Try again.'
   } finally {
     saving.value = false
   }
@@ -163,7 +234,9 @@ function goLibrary() {
   void router.push('/library')
 }
 
-onMounted(load)
+onMounted(() => {
+  void load()
+})
 </script>
 
 <template>
@@ -197,7 +270,36 @@ onMounted(load)
     </header>
 
     <main id="journey-main" class="journey-main" tabindex="-1">
-      <section class="journey-intro" aria-labelledby="journey-title">
+      <section
+        v-if="loadState === 'loading'"
+        class="journey-card journey-state"
+        aria-labelledby="journey-loading-title"
+      >
+        <p class="journey-card__kicker">Parent settings</p>
+        <h1 id="journey-loading-title">Reading profile</h1>
+        <p role="status">Loading the reading profile…</p>
+      </section>
+
+      <section
+        v-else-if="loadState === 'unavailable'"
+        class="journey-card journey-state"
+        aria-labelledby="journey-unavailable-title"
+      >
+        <p class="journey-card__kicker">Parent settings</p>
+        <h1 id="journey-unavailable-title">Reading profile unavailable</h1>
+        <p role="alert">{{ loadUnavailableMessage }}</p>
+        <button
+          class="journey-button journey-button--primary"
+          type="button"
+          :disabled="loading"
+          @click="load"
+        >
+          {{ loading ? 'Retrying…' : 'Try again' }}
+        </button>
+      </section>
+
+      <template v-else>
+        <section class="journey-intro" aria-labelledby="journey-title">
         <p class="journey-eyebrow">Reading profile</p>
         <div class="journey-title-row">
           <div>
@@ -278,8 +380,8 @@ onMounted(load)
             v-model="childName"
             placeholder="e.g. Ted"
             autocomplete="off"
-            :aria-describedby="errMsg ? 'journey-error' : undefined"
-            :aria-invalid="errMsg ? 'true' : undefined"
+            :aria-describedby="nicknameInvalid ? 'journey-error' : undefined"
+            :aria-invalid="nicknameInvalid ? 'true' : undefined"
           />
         </div>
 
@@ -461,7 +563,7 @@ onMounted(load)
             :disabled="saving"
             @click="persist"
           >
-            {{ saving ? 'Saving…' : 'Save' }}
+            {{ saving ? 'Saving…' : saveFailed ? 'Try saving again' : 'Save' }}
           </button>
         </div>
       </div>
@@ -493,7 +595,8 @@ onMounted(load)
             Edit
           </button>
         </div>
-      </section>
+        </section>
+      </template>
     </main>
   </div>
 </template>
@@ -592,6 +695,26 @@ onMounted(load)
 
 .journey-main:focus {
   outline: none;
+}
+
+.journey-state {
+  display: grid;
+  justify-items: start;
+  gap: 1rem;
+}
+
+.journey-state h1 {
+  margin: 0;
+  font-family: var(--panda-serif);
+  font-size: clamp(1.8rem, 7vw, 2.8rem);
+  line-height: 1;
+}
+
+.journey-state p:not(.journey-card__kicker) {
+  max-width: 38rem;
+  margin: 0;
+  color: var(--panda-soft-ink);
+  line-height: 1.55;
 }
 
 .journey-intro {

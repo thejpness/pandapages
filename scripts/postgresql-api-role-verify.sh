@@ -29,8 +29,9 @@ and has a recent PostgreSQL connection on its unique shared Docker network
 using only the expected application role, database, and application name.
 
 Session contract selection is explicit when supplied. Auto-detection is not
-performed. The legacy compatibility default preserves the currently deployed
-pp_unlocked and pp_aid cookie contract; signed mode requires pp_session.
+performed. The legacy compatibility default supports older deployments using
+pp_unlocked and pp_aid cookies; the current repository contract uses signed
+pp_session cookies and must select signed mode explicitly.
 
 The verifier accepts no database URL, password, cookie, client address, or
 other secret. It discovers the API address from Docker metadata and never

@@ -158,6 +158,9 @@ jobs:
       - name: Validate development Compose configuration
         run: docker compose --env-file /dev/null -f docker-compose.dev.yml config --quiet
 
+      - name: Validate current environment template
+        run: bash scripts/tests/env-example-contract.sh
+
       - name: Confirm production admin allowlist fails closed
         shell: bash
         run: |
@@ -189,6 +192,7 @@ jobs:
             scripts/postgresql-api-role-verify.sh \
             scripts/postgresql-restore-rehearsal.sh \
             scripts/tests/account-store-integration.sh \
+            scripts/tests/env-example-contract.sh \
             scripts/tests/postgresql-api-role-smoke.sh \
             scripts/tests/postgresql-api-role-session-contract.sh \
             scripts/tests/postgresql-backup-integration.sh \

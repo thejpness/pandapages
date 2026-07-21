@@ -75,10 +75,11 @@ async function installSessionRoutes(
         child: {
           name: '',
           ageMonths: 0,
-          interests: [],
-          sensitivities: [],
+          interests: null,
+          sensitivities: null,
         },
         prompt: {
+          id: 'prompt-test-id',
           name: 'Default',
           schemaVersion: 1,
           rules: {},

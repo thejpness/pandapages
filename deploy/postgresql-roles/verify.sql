@@ -201,6 +201,28 @@ FROM checked
   \quit 3
 \endif
 
+SELECT count(*) = 1 AND bool_and(
+  has_table_privilege(:'application_role', class.oid, 'SELECT')
+  AND NOT has_table_privilege(:'application_role', class.oid, 'INSERT')
+  AND NOT has_table_privilege(:'application_role', class.oid, 'UPDATE')
+  AND NOT has_table_privilege(:'application_role', class.oid, 'DELETE')
+  AND NOT has_table_privilege(:'application_role', class.oid, 'TRUNCATE')
+  AND NOT has_table_privilege(:'application_role', class.oid, 'REFERENCES')
+  AND NOT has_table_privilege(:'application_role', class.oid, 'TRIGGER')
+  AND NOT has_table_privilege(:'application_role', class.oid, 'MAINTAIN')
+) AS assertion
+FROM pg_class class
+JOIN pg_namespace namespace ON namespace.oid = class.relnamespace
+WHERE namespace.nspname = 'public'
+  AND class.relname = 'goose_db_version'
+  AND class.relkind IN ('r', 'p')
+\gset
+\if :assertion
+\else
+  \warn 'verification failed: application Goose metadata privilege is not SELECT-only'
+  \quit 3
+\endif
+
 WITH runtime_table(name) AS (
   VALUES
     ('accounts'),
@@ -213,6 +235,7 @@ WITH runtime_table(name) AS (
     ('stories'),
     ('story_contributors'),
     ('story_sections'),
+    ('goose_db_version'),
     ('story_segments'),
     ('story_versions')
 )

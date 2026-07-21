@@ -1,32 +1,34 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"pandapages/api/internal/httpauth"
 	"pandapages/api/internal/model"
 	"pandapages/api/internal/readercontract"
+	"pandapages/api/internal/readiness"
 	"pandapages/api/internal/session"
 )
 
 type Config struct {
-	Passcode    string
-	LogRequests bool
-	Sessions    *session.Manager
+	Passcode string
+	Sessions *session.Manager
 }
 
 type Store interface {
 	// Phase A: derive an account id from today's unlock mechanism.
 	EnsureDefaultAccount() (string, error)
 	AccountExists(accountID string) (bool, error)
+	CheckReadiness(context.Context) error
 
 	Library(accountID string) (model.LibraryReadModel, error)
 	ReaderStory(accountID, slug string) (model.ReaderStory, error)
@@ -44,6 +46,7 @@ const (
 	maxJSONBodyBytes   = 1 << 20 // 1MB
 	defaultContinueLim = 3
 	maxContinueLim     = 10
+	readinessTimeout   = 2 * time.Second
 )
 
 func New(cfg Config, store Store) http.Handler {
@@ -55,10 +58,39 @@ func New(cfg Config, store Store) http.Handler {
 
 	mux := http.NewServeMux()
 
-	// Health
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+	// Liveness is deliberately dependency-free: reaching this handler proves
+	// only that the Go process and HTTP listener can answer.
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		noStore(w)
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w, []string{http.MethodGet})
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
+	})
+
+	// Readiness uses one strict deadline for both connectivity and Goose schema
+	// state. It never applies migrations and never exposes the underlying error.
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		noStore(w)
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w, []string{http.MethodGet})
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(r.Context(), readinessTimeout)
+		defer cancel()
+
+		err := store.CheckReadiness(ctx)
+		switch {
+		case err == nil:
+			writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+		case errors.Is(err, readiness.ErrSchemaNotReady):
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready", "reason": "schema_not_ready"})
+		default:
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready", "reason": "database_unavailable"})
+		}
 	})
 
 	// Unlock -> cookies
@@ -350,12 +382,7 @@ func New(cfg Config, store Store) http.Handler {
 	}))
 
 	// middleware wrapping
-	var h http.Handler = mux
-	h = withSecurityHeaders(h)
-	h = withRecover(h)
-	if cfg.LogRequests {
-		h = withLog(h)
-	}
+	h := withSecurityHeaders(mux)
 
 	return h
 }
@@ -424,25 +451,6 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
-}
-
-func withRecover(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer func() {
-			if rec := recover(); rec != nil {
-				slog.Error("panic", "path", r.URL.Path, "err", rec)
-				writeErr(w, http.StatusInternalServerError, "panic", "internal error")
-			}
-		}()
-		next.ServeHTTP(w, r)
-	})
-}
-
-func withLog(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		slog.Debug("http", "method", r.Method, "path", r.URL.Path)
-		next.ServeHTTP(w, r)
-	})
 }
 
 func withSecurityHeaders(next http.Handler) http.Handler {

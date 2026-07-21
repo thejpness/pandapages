@@ -7,6 +7,25 @@ services:
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
       - --entrypoints.web.address=:80
+      - --log.level=INFO
+      - --accesslog=true
+      - --accesslog.format=json
+      - --accesslog.filters.statuscodes=400-599
+      - --accesslog.fields.defaultmode=drop
+      - --accesslog.fields.names.StartUTC=keep
+      - --accesslog.fields.names.Duration=keep
+      - --accesslog.fields.names.RouterName=keep
+      - --accesslog.fields.names.ServiceName=keep
+      - --accesslog.fields.names.ServiceURL=keep
+      - --accesslog.fields.names.RequestMethod=keep
+      - --accesslog.fields.names.RequestPath=keep
+      - --accesslog.fields.names.OriginDuration=keep
+      - --accesslog.fields.names.OriginStatus=keep
+      - --accesslog.fields.names.DownstreamStatus=keep
+      - --accesslog.fields.names.RetryAttempts=keep
+      - --accesslog.fields.headers.defaultmode=drop
+      - --accesslog.fields.queryparameters.defaultmode=drop
+      - --accesslog.fields.names.ClientUsername=drop
     ports:
       - "80:80"
       - "127.0.0.1:8080:8080" # Traefik dashboard (dev only)
@@ -63,7 +82,7 @@ services:
       PP_PASSCODE: ${PP_PASSCODE}
       PP_SESSION_SECRET: ${PP_SESSION_SECRET}
       PP_ADMIN_KEY: ${PP_ADMIN_KEY}
-      PP_LOG_LEVEL: debug
+      PP_LOG_LEVEL: ${PP_LOG_LEVEL:-debug}
     volumes:
       - ./apps/api:/app
       - assets:/data/assets
@@ -72,6 +91,16 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+    # The Alpine dev image includes BusyBox wget. Air's initial compile took
+    # roughly seven to nine seconds in observed local starts, so the grace period
+    # leaves ample headroom without declaring the container healthy before Go
+    # serves /healthz.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-T", "2", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 2s
+      timeout: 2s
+      start_period: 20s
+      retries: 5
     networks: [web, internal]
     labels:
       - traefik.enable=true
@@ -82,7 +111,7 @@ services:
       - traefik.http.routers.api-admin.service=api
       - traefik.http.routers.api-admin.middlewares=pandapages-dev-admin-key@docker
       - traefik.http.middlewares.pandapages-dev-admin-key.headers.customrequestheaders.X-PP-Admin-Key=${PP_ADMIN_KEY}
-      - traefik.http.routers.api.rule=Host(`pandapages.localhost`) && (PathPrefix(`/api`) || PathPrefix(`/assets`) || PathPrefix(`/healthz`))
+      - traefik.http.routers.api.rule=Host(`pandapages.localhost`) && (PathPrefix(`/api`) || PathPrefix(`/assets`) || Path(`/healthz`) || Path(`/readyz`))
       - traefik.http.routers.api.priority=100
       - traefik.http.services.api.loadbalancer.server.port=8080
     ports:
@@ -101,7 +130,7 @@ services:
     networks: [web]
     labels:
       - traefik.enable=true
-      - traefik.http.routers.web.rule=Host(`pandapages.localhost`) && !PathPrefix(`/api`) && !PathPrefix(`/assets`) && !PathPrefix(`/healthz`)
+      - traefik.http.routers.web.rule=Host(`pandapages.localhost`) && !PathPrefix(`/api`) && !PathPrefix(`/assets`) && !Path(`/healthz`) && !Path(`/readyz`)
       - traefik.http.services.web.loadbalancer.server.port=5173
 
 networks:

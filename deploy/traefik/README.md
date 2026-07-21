@@ -28,8 +28,10 @@ replacement has been implemented and validated.
 
 - For one administrator, put the admin interface behind Tailscale or WireGuard
   and restrict ingress to that private network.
-- For future multi-user access, complete the Kratos integration or use an
-  identity-aware proxy.
+- For future external identity, follow
+  [ADR 0001](../../docs/architecture/decisions/0001-supabase-auth-boundary-and-browser-session-model.md):
+  use Supabase Auth only while Panda Pages retains application authorisation.
+- Kratos will not be revived.
 
 Do not weaken or remove the existing boundary during that migration.
 

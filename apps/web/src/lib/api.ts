@@ -1267,42 +1267,134 @@ export type SettingsUpsert = {
   prompt: PromptProfile
 }
 
+export class InvalidSettingsResponseError extends Error {
+  constructor() {
+    super('Invalid settings response')
+    this.name = 'InvalidSettingsResponseError'
+  }
+}
+
+export function isInvalidSettingsResponseError(
+  error: unknown,
+): error is InvalidSettingsResponseError {
+  return (
+    error instanceof InvalidSettingsResponseError ||
+    (error instanceof Error && error.name === 'InvalidSettingsResponseError')
+  )
+}
+
+export type SettingsRequestFailure =
+  | 'unauthorized'
+  | 'validation'
+  | 'unavailable'
+
+export function classifySettingsRequestFailure(
+  error: unknown,
+  operation: 'load' | 'save',
+): SettingsRequestFailure {
+  const status = getAPIErrorStatus(error)
+  if (status === 401) return 'unauthorized'
+  if (operation === 'save' && (status === 400 || status === 413)) {
+    return 'validation'
+  }
+  return 'unavailable'
+}
+
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string')
 }
 
-function finiteNumber(value: unknown, fallback: number): number {
-  const number = Number(value ?? fallback)
-  return Number.isFinite(number) ? number : fallback
+function invalidSettingsResponse(): never {
+  throw new InvalidSettingsResponseError()
 }
 
-function normaliseSettings(data: unknown): SettingsPayload {
-  const root = isRecord(data) ? data : {}
-  const child = isRecord(root.child) ? root.child : {}
-  const prompt = isRecord(root.prompt) ? root.prompt : {}
+function settingsID(value: unknown): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value === 'string' && value.length > 0) return value
+  return invalidSettingsResponse()
+}
+
+export function parseSettingsResponse(data: unknown): SettingsPayload {
+  if (!isRecord(data) || !isRecord(data.child) || !isRecord(data.prompt)) {
+    return invalidSettingsResponse()
+  }
+
+  const child = data.child
+  const prompt = data.prompt
+  if (
+    typeof child.name !== 'string' ||
+    typeof child.ageMonths !== 'number' ||
+    !Number.isSafeInteger(child.ageMonths) ||
+    child.ageMonths < 0 ||
+    typeof prompt.name !== 'string' ||
+    typeof prompt.schemaVersion !== 'number' ||
+    !Number.isSafeInteger(prompt.schemaVersion) ||
+    prompt.schemaVersion < 0
+  ) {
+    return invalidSettingsResponse()
+  }
+
+  const childID = settingsID(child.id)
+  const promptID = settingsID(prompt.id)
+  let interests: string[]
+  let sensitivities: string[]
+  let rules: JsonObject
+
+  if (childID === undefined) {
+    if (
+      child.name !== '' ||
+      child.ageMonths !== 0 ||
+      child.interests !== null ||
+      child.sensitivities !== null
+    ) {
+      return invalidSettingsResponse()
+    }
+    interests = []
+    sensitivities = []
+  } else {
+    if (!isStringArray(child.interests) || !isStringArray(child.sensitivities)) {
+      return invalidSettingsResponse()
+    }
+    interests = [...child.interests]
+    sensitivities = [...child.sensitivities]
+  }
+
+  if (promptID === undefined) {
+    if (
+      prompt.name !== '' ||
+      prompt.schemaVersion !== 0 ||
+      prompt.rules !== null
+    ) {
+      return invalidSettingsResponse()
+    }
+    rules = {}
+  } else {
+    if (prompt.schemaVersion < 1 || !isJsonObject(prompt.rules)) {
+      return invalidSettingsResponse()
+    }
+    rules = prompt.rules
+  }
 
   return {
     child: {
-      id: typeof child.id === 'string' ? child.id : undefined,
-      name: typeof child.name === 'string' ? child.name : '',
-      ageMonths: finiteNumber(child.ageMonths, 0),
-      interests: isStringArray(child.interests) ? child.interests : [],
-      sensitivities: isStringArray(child.sensitivities)
-        ? child.sensitivities
-        : [],
+      id: childID,
+      name: child.name,
+      ageMonths: child.ageMonths,
+      interests,
+      sensitivities,
     },
     prompt: {
-      id: typeof prompt.id === 'string' ? prompt.id : undefined,
-      name: typeof prompt.name === 'string' ? prompt.name : '',
-      schemaVersion: finiteNumber(prompt.schemaVersion, 1),
-      rules: isJsonObject(prompt.rules) ? prompt.rules : {},
+      id: promptID,
+      name: prompt.name,
+      schemaVersion: prompt.schemaVersion,
+      rules,
     },
   }
 }
 
 export async function getSettings(): Promise<SettingsPayload> {
   const data = await request<unknown>('/api/v1/settings')
-  return normaliseSettings(data)
+  return parseSettingsResponse(data)
 }
 
 export async function saveSettings(payload: SettingsUpsert): Promise<SettingsPayload> {
@@ -1313,5 +1405,5 @@ export async function saveSettings(payload: SettingsUpsert): Promise<SettingsPay
       prompt: { ...payload.prompt, rules: payload.prompt.rules ?? {} },
     }),
   })
-  return normaliseSettings(data)
+  return parseSettingsResponse(data)
 }

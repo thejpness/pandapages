@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -28,6 +29,9 @@ type authTestStore struct {
 	accountExists    bool
 	accountExistsErr error
 	existsCalls      int
+	readinessErr     error
+	readinessCheck   func(context.Context) error
+	readinessCalls   int
 	libraryCalls     int
 	libraryAccount   string
 	libraryResponse  model.LibraryReadModel
@@ -66,6 +70,14 @@ func (s *authTestStore) AccountExists(accountID string) (bool, error) {
 		return false, s.accountExistsErr
 	}
 	return s.accountExists && accountID == testAccountID, nil
+}
+
+func (s *authTestStore) CheckReadiness(ctx context.Context) error {
+	s.readinessCalls++
+	if s.readinessCheck != nil {
+		return s.readinessCheck(ctx)
+	}
+	return s.readinessErr
 }
 
 func (s *authTestStore) Library(accountID string) (model.LibraryReadModel, error) {

@@ -323,12 +323,14 @@ class LibraryApiMock {
       await fulfillJson(route, {
         body: {
           child: {
+            id: 'child-test-id',
             name: 'Ted',
             ageMonths: 84,
             interests: [],
             sensitivities: [],
           },
           prompt: {
+            id: 'prompt-test-id',
             name: 'Default',
             schemaVersion: 1,
             rules: {},
