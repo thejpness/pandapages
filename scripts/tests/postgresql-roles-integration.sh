@@ -174,6 +174,45 @@ expect_denied() {
   fi
 }
 
+expect_integrity_denied() {
+  local description=$1
+  local expected_constraint=$2
+  local statement=$3
+  local stdout_file="$test_root/integrity-denied.out"
+  local stderr_file="$test_root/integrity-denied.err"
+
+  if psql_as "$application_role" --command="$statement" >"$stdout_file" 2>"$stderr_file"; then
+    printf 'Ownership-integrity denial unexpectedly succeeded: %s\n' "$description" >&2
+    exit 1
+  fi
+  if ! grep -Fq "$expected_constraint" "$stderr_file"; then
+    printf 'Ownership-integrity denial did not name %s: %s\n' "$expected_constraint" "$description" >&2
+    sed -n '1,20p' "$stderr_file" >&2
+    exit 1
+  fi
+}
+
+run_goose() {
+  local output_name=$1
+  shift
+
+  if ! docker run --rm \
+    --network "$source_network" \
+    --read-only \
+    --security-opt no-new-privileges \
+    --tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m \
+    --env GOOSE_DRIVER=postgres \
+    --env "GOOSE_DBSTRING=postgres://$migration_role:$migration_password@$source_container:5432/$database?sslmode=disable" \
+    --env GOOSE_MIGRATION_DIR=/migrations \
+    --mount "type=bind,src=$repo_root/apps/api/migrations,dst=/migrations,readonly" \
+    "$migration_image" "$@" \
+    >"$test_root/$output_name.out" 2>"$test_root/$output_name.err"; then
+    sed 's/generated-migrator-password-not-for-production/[redacted]/g' \
+      "$test_root/$output_name.err" >&2
+    exit 1
+  fi
+}
+
 printf '1..12\n'
 
 "$role_script" audit \
@@ -193,21 +232,20 @@ ALTER ROLE $application_role PASSWORD '$application_password';
 CREATE ROLE $legacy_role LOGIN SUPERUSER PASSWORD '$legacy_password';
 SQL
 
-if ! docker run --rm \
-  --network "$source_network" \
-  --read-only \
-  --security-opt no-new-privileges \
-  --tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m \
-  --env GOOSE_DRIVER=postgres \
-  --env "GOOSE_DBSTRING=postgres://$migration_role:$migration_password@$source_container:5432/$database?sslmode=disable" \
-  --env GOOSE_MIGRATION_DIR=/migrations \
-  --mount "type=bind,src=$repo_root/apps/api/migrations,dst=/migrations,readonly" \
-  "$migration_image" up >"$test_root/goose.out" 2>"$test_root/goose.err"; then
-  sed 's/generated-migrator-password-not-for-production/[redacted]/g' "$test_root/goose.err" >&2
-  exit 1
-fi
-grep -q 'OK.*00014_reader_2_contract.sql' "$test_root/goose.out" "$test_root/goose.err"
-printf 'ok 2 - Goose applies every migration as a non-superuser owner session\n'
+run_goose goose-up up
+grep -q 'OK.*00015_account_ownership_integrity.sql' \
+  "$test_root/goose-up.out" "$test_root/goose-up.err"
+
+run_goose goose-down down-to 14
+rollback_shape=$(psql_as "$migration_role" --tuples-only --no-align \
+  --command="SELECT count(*) FILTER (WHERE table_name='profiles' AND column_name='is_default') || '|' || count(*) FILTER (WHERE table_name='reading_progress' AND column_name='account_id') || '|' || count(*) FILTER (WHERE table_name='profile_settings' AND column_name='account_id') FROM information_schema.columns WHERE table_schema='public';")
+[[ "$rollback_shape" == '0|0|0' ]]
+
+run_goose goose-reup up-to 15
+reapplied_shape=$(psql_as "$migration_role" --tuples-only --no-align \
+  --command="SELECT count(*) FILTER (WHERE table_name='profiles' AND column_name='is_default') || '|' || count(*) FILTER (WHERE table_name='reading_progress' AND column_name='account_id') || '|' || count(*) FILTER (WHERE table_name='profile_settings' AND column_name='account_id') FROM information_schema.columns WHERE table_schema='public';")
+[[ "$reapplied_shape" == '1|1|1' ]]
+printf 'ok 2 - Goose applies migration 15 and rolls it down and up as a non-superuser owner session\n'
 
 docker exec -i "$source_container" \
   psql -X --username="$admin_user" --dbname="$database" --set=ON_ERROR_STOP=1 <<SQL >/dev/null
@@ -262,7 +300,56 @@ SQL
 psql_as "$application_role" --command="BEGIN; INSERT INTO accounts (name) VALUES ('Generated role test'); UPDATE accounts SET name='Generated role test updated' WHERE name='Generated role test'; DELETE FROM accounts WHERE name='Generated role test updated'; COMMIT;" >/dev/null
 psql_as "$application_role" --command="SELECT count(*) FROM stories;" >/dev/null
 psql_as "$application_role" --command="INSERT INTO stories (account_id, slug, title) SELECT id, 'generated-role-test', 'Pöndá reads 世界 🐼' FROM accounts ORDER BY created_at LIMIT 1; UPDATE stories SET title='Pöndá reads UTF-8 世界 🐼' WHERE slug='generated-role-test'; DELETE FROM stories WHERE slug='generated-role-test';" >/dev/null
-printf 'ok 5 - application role unlocks, serves the admin catalogue, and performs current runtime CRUD\n'
+psql_as "$application_role" --command="
+INSERT INTO accounts (id, name) VALUES
+  ('a1500000-0000-4000-8000-000000000001', 'Integrity household A'),
+  ('b1500000-0000-4000-8000-000000000001', 'Integrity household B');
+INSERT INTO profiles (id, name, account_id, is_default) VALUES
+  ('a1500000-0000-4000-8000-000000000011', 'Reader A', 'a1500000-0000-4000-8000-000000000001', true),
+  ('a1500000-0000-4000-8000-000000000012', 'Reader A2', 'a1500000-0000-4000-8000-000000000001', false),
+  ('b1500000-0000-4000-8000-000000000011', 'Reader B', 'b1500000-0000-4000-8000-000000000001', true);
+INSERT INTO child_profiles (id, name, age_months, account_id) VALUES
+  ('a1500000-0000-4000-8000-000000000021', 'Child A', 84, 'a1500000-0000-4000-8000-000000000001'),
+  ('b1500000-0000-4000-8000-000000000021', 'Child B', 96, 'b1500000-0000-4000-8000-000000000001');
+INSERT INTO prompt_profiles (id, name, account_id) VALUES
+  ('a1500000-0000-4000-8000-000000000031', 'Prompt A', 'a1500000-0000-4000-8000-000000000001'),
+  ('b1500000-0000-4000-8000-000000000031', 'Prompt B', 'b1500000-0000-4000-8000-000000000001');
+INSERT INTO stories (id, account_id, slug, title) VALUES
+  ('a1500000-0000-4000-8000-000000000041', 'a1500000-0000-4000-8000-000000000001', 'integrity-a', 'Integrity A'),
+  ('b1500000-0000-4000-8000-000000000041', 'b1500000-0000-4000-8000-000000000001', 'integrity-b', 'Integrity B');
+INSERT INTO story_versions (id, story_id, version, markdown, rendered_html, content_hash) VALUES
+  ('a1500000-0000-4000-8000-000000000051', 'a1500000-0000-4000-8000-000000000041', 1, '# A', '<h1>A</h1>', 'integrity-a-v1'),
+  ('b1500000-0000-4000-8000-000000000051', 'b1500000-0000-4000-8000-000000000041', 1, '# B', '<h1>B</h1>', 'integrity-b-v1');
+INSERT INTO reading_progress (
+  profile_id, story_id, story_version_id, locator, percent, account_id
+) VALUES (
+  'a1500000-0000-4000-8000-000000000011',
+  'a1500000-0000-4000-8000-000000000041',
+  'a1500000-0000-4000-8000-000000000051',
+  '{\"schema\":2,\"segment\":{\"key\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"occurrence\":1,\"ordinal\":1,\"offset\":0}}'::jsonb,
+  0.25,
+  'a1500000-0000-4000-8000-000000000001'
+);
+INSERT INTO profile_settings (
+  profile_id, active_child_profile_id, active_prompt_profile_id, account_id
+) VALUES (
+  'a1500000-0000-4000-8000-000000000011',
+  'a1500000-0000-4000-8000-000000000021',
+  'a1500000-0000-4000-8000-000000000031',
+  'a1500000-0000-4000-8000-000000000001'
+);
+" >/dev/null
+
+expect_integrity_denied 'cross-account progress insert'   'reading_progress_story_account_fkey'   "INSERT INTO reading_progress (profile_id, story_id, story_version_id, locator, percent, account_id) VALUES ('a1500000-0000-4000-8000-000000000011', 'b1500000-0000-4000-8000-000000000041', 'b1500000-0000-4000-8000-000000000051', '{\"schema\":2,\"segment\":{\"key\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"occurrence\":1,\"ordinal\":1,\"offset\":0}}'::jsonb, 0.5, 'a1500000-0000-4000-8000-000000000001');"
+expect_integrity_denied 'cross-account progress update'   'reading_progress_story_account_fkey'   "UPDATE reading_progress SET story_id='b1500000-0000-4000-8000-000000000041', story_version_id='b1500000-0000-4000-8000-000000000051' WHERE profile_id='a1500000-0000-4000-8000-000000000011' AND story_id='a1500000-0000-4000-8000-000000000041';"
+expect_integrity_denied 'cross-account settings insert'   'profile_settings_child_account_fkey'   "INSERT INTO profile_settings (profile_id, active_child_profile_id, active_prompt_profile_id, account_id) VALUES ('a1500000-0000-4000-8000-000000000012', 'b1500000-0000-4000-8000-000000000021', 'a1500000-0000-4000-8000-000000000031', 'a1500000-0000-4000-8000-000000000001');"
+expect_integrity_denied 'cross-account child settings update'   'profile_settings_child_account_fkey'   "UPDATE profile_settings SET active_child_profile_id='b1500000-0000-4000-8000-000000000021' WHERE profile_id='a1500000-0000-4000-8000-000000000011';"
+expect_integrity_denied 'cross-account prompt settings update'   'profile_settings_prompt_account_fkey'   "UPDATE profile_settings SET active_prompt_profile_id='b1500000-0000-4000-8000-000000000031' WHERE profile_id='a1500000-0000-4000-8000-000000000011';"
+expect_integrity_denied 'owned account deletion'   'account_id_fkey'   "DELETE FROM accounts WHERE id='a1500000-0000-4000-8000-000000000001';"
+
+integrity_state=$(psql_as "$application_role" --tuples-only --no-align   --command="SELECT (SELECT count(*) FROM reading_progress WHERE profile_id='a1500000-0000-4000-8000-000000000011') || '|' || (SELECT count(*) FROM profile_settings WHERE profile_id='a1500000-0000-4000-8000-000000000011') || '|' || (SELECT count(*) FROM accounts WHERE id='a1500000-0000-4000-8000-000000000001');")
+[[ "$integrity_state" == '1|1|1' ]]
+printf 'ok 5 - application role performs runtime CRUD but cannot bypass ownership integrity\n'
 
 expect_denied 'create database' "$application_role" "$database" 'CREATE DATABASE forbidden_database;'
 expect_denied 'create role' "$application_role" "$database" 'CREATE ROLE forbidden_role;'

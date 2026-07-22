@@ -290,6 +290,8 @@ assert_query '0|1|0' "
     (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'story_segments' AND column_name = 'locator');
 " 'Reader 2 Down and Up rerun'
 
+run_goose up-to 15 >/dev/null
+
 published_address=$(docker port "$container_name" 5432/tcp)
 published_port=${published_address##*:}
 [[ "$published_port" =~ ^[0-9]+$ ]] || {

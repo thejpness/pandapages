@@ -139,10 +139,84 @@ the latest successfully applied version while it still cannot insert, update,
 or delete Goose metadata. Only the migration container may apply schema
 changes.
 
+## Migration 00015 coordinated forward rollout
+
+This is the current forward procedure for account-ownership migration 00015
+and its matching API. It requires a separately authorised production change;
+merging repository support applies no migration, role policy, deployment, or
+readiness consumer.
+
+Perform the rollout in this order:
+
+1. Confirm an approved recent backup and disposable restore, sufficient disk
+   and WAL headroom, reviewed migration/API images, and an authorised rollback
+   operator. Run the count-only version-14 preflight from the
+   [account ownership model](../architecture/account-ownership-model.md#read-only-migration-preflight).
+   All corruption categories must be zero; `accounts_without_profiles` is
+   informational. Stop rather than repair unexpected data.
+2. Quiesce all application writes and prevent a second API or migration process
+   from entering the change. Capture non-secret lock and connection evidence.
+   Reads may continue only if the change plan accepts the migration's brief
+   stronger table-lock windows.
+3. Run Goose up through `00015_account_ownership_integrity.sql` using only the
+   migration role. Migration 00015 repeats its preflight while holding
+   write-blocking locks and rolls back atomically on any invalid ownership row.
+4. Reconcile the reviewed least-privilege policy if required, then run the
+   established role verification. Confirm owner/migrator boundaries, the
+   existing application table-level CRUD allowlist, foreign-key rejection of
+   owned-account deletion, read-only Goose metadata, sequence/routine limits,
+   and the absence of identity-table grants.
+5. Deploy the API built for schema version 15. Do not restore normal traffic
+   while an older API is connected to the migrated database.
+6. Verify `GET /healthz` is HTTP 200, `GET /readyz` is HTTP 200 with
+   `{"status":"ready"}`, then exercise unlock, auth status, logout, Library,
+   Reader, progress, Journey settings, and approved admin smoke paths. Confirm
+   account isolation and retain non-secret request IDs for failures.
+7. Restore normal application traffic only after migration, roles, API, and
+   smoke checks pass. Only then may an explicitly approved orchestrator,
+   monitor, or deployment gate begin consuming `/readyz`.
+
+Keep existing production container health on dependency-free `/healthz`
+throughout the change. A readiness consumer must not be enabled merely because
+the route exists.
+
+### Version compatibility and rollback
+
+Neither an old API on schema 15 nor the version-15 API on schema 14 is a
+supported steady state:
+
+- An old API does not supply the new non-null progress/settings ownership tuples
+  and does not resolve the explicit default marker. Its writes are incompatible
+  with schema 15.
+- The version-15 API expects `account_id` ownership tuples and `is_default`.
+  Against schema 14, `/readyz` returns HTTP 503 with `schema_not_ready`, but that
+  readiness response is not a compatibility layer: application SQL is also
+  incompatible with the older schema.
+
+Treat the migration and API replacement as one coordinated change window. If
+rollback is required:
+
+1. keep normal writes and every readiness consumer disabled;
+2. stop the version-15 API before changing the schema;
+3. run the reviewed Goose Down migration to version 14 with the migrator;
+4. verify the version-14 schema and applicable role contract;
+5. only then deploy the old API and verify `/healthz`, unlock, Library, Reader,
+   progress, settings, and admin paths before restoring traffic.
+
+Never start the old API against schema 15 and never run the Down migration while
+the version-15 API can write. The Down migration preserves application rows but
+removes redundant ownership columns and the explicit default marker; the old
+API resumes its legacy profile-selection semantics.
+
 ## Forward `/readyz` role-grant rollout
 
-This is the current forward procedure for the database-role requirement used
-by `/readyz`. It requires a separately authorised operational change; merging
+> Historical record: this was the forward procedure for introducing the
+> SELECT-only Goose metadata grant and `/readyz` route before migration 00015.
+> It remains evidence for that completed foundation and must not be reused as
+> the current schema-15 rollout procedure above.
+
+This procedure covered the database-role requirement used by `/readyz`. It
+required a separately authorised operational change; merging
 the repository support does not apply the grant or authorise a production
 change. Perform the rollout in this order:
 
@@ -169,6 +243,11 @@ readiness consumer until the role grant has been applied and verified.
 
 The completed rollout sequence retained later in this document is historical
 evidence. It must not be reused as the current forward `/readyz` procedure.
+
+### Historical Reader 2 migration-chain note
+
+The following text records the migration state when the readiness foundation
+was written. The current repository migration chain continues through 00015.
 
 Migration `00008_seed_test_data.sql` is immutable applied history. Current
 repository Goose runs continue through `00014_reader_2_contract.sql`.

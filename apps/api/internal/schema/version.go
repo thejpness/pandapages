@@ -6,4 +6,4 @@ package schema
 // ExpectedMigrationVersion is the highest Goose migration version this API
 // understands. version_test.go prevents this value drifting from the tracked
 // migration files.
-const ExpectedMigrationVersion int64 = 14
+const ExpectedMigrationVersion int64 = 15

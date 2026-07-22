@@ -192,6 +192,7 @@ jobs:
             scripts/postgresql-api-role-verify.sh \
             scripts/postgresql-restore-rehearsal.sh \
             scripts/tests/account-store-integration.sh \
+            scripts/tests/account-integrity-migration-integration.sh \
             scripts/tests/env-example-contract.sh \
             scripts/tests/postgresql-api-role-smoke.sh \
             scripts/tests/postgresql-api-role-session-contract.sh \
@@ -226,6 +227,10 @@ jobs:
       - name: Test production-clean migrations and explicit fixtures
         shell: bash
         run: scripts/tests/postgresql-fixtures-integration.sh
+
+      - name: Test account ownership migration integrity
+        shell: bash
+        run: scripts/tests/account-integrity-migration-integration.sh
 
       - name: Test PostgreSQL roles and backup automation with generated data
         shell: bash
