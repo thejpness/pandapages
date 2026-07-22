@@ -21,9 +21,10 @@ END
 $$;
 
 INSERT INTO reading_progress (
-  profile_id, story_id, story_version_id, locator, percent
+  account_id, profile_id, story_id, story_version_id, locator, percent
 )
 SELECT
+  profile.account_id,
   profile.id,
   story.id,
   version.id,
@@ -34,15 +35,15 @@ JOIN story_versions AS version
   ON version.id = 'f17e0000-0000-4000-8000-000000000011'
  AND version.story_id = story.id
 JOIN LATERAL (
-  SELECT id
+  SELECT id, account_id
   FROM profiles
   WHERE account_id = story.account_id
-    AND name = 'Default'
-  ORDER BY created_at ASC, id ASC
+    AND is_default
   LIMIT 1
 ) AS profile ON true
 WHERE story.id = 'f17e0000-0000-4000-8000-000000000010'
 ON CONFLICT (profile_id, story_id) DO UPDATE SET
+  account_id = EXCLUDED.account_id,
   story_version_id = EXCLUDED.story_version_id,
   locator = EXCLUDED.locator,
   percent = EXCLUDED.percent,

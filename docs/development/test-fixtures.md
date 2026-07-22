@@ -84,7 +84,8 @@ and its paragraph are six independent rows with deterministic Reader 2
 content keys, occurrences, kinds, heading levels, and H2 chapter propagation.
 It does not include progress by default.
 
-Add the Default-profile progress row only for a test that needs it:
+Add the explicitly marked default-profile progress row only for a test that
+needs it:
 
 ```bash
 PP_ALLOW_TEST_SEED=1 \
@@ -113,7 +114,7 @@ The seed command accepts no database URL or password. It:
 - targets either the single running development PostgreSQL container labelled
   `com.pandapages.test-seed-target=local-development`, or an explicitly named
   disposable integration container with the dedicated test label;
-- requires the target to be running with migration `00014` applied;
+- requires the target to be running with migration `00015` applied;
 - uses container-local `psql`, prints no database credential, performs no
   network request, and creates no temporary credential file.
 
@@ -148,6 +149,15 @@ PostgreSQL resources and proves:
 
 The suite runs in the protected `Configuration` CI job. It uses only generated
 non-production data and local Docker resources.
+
+`scripts/tests/account-integrity-migration-integration.sh` separately creates
+disposable PostgreSQL databases and exercises a representative version-14
+upgrade, a fresh full migration chain, version-15 rollback/reapplication,
+fail-closed orphan and cross-account preflight cases, progress/settings
+composite constraints, deterministic default-profile backfill, account deletion
+restriction, data preservation, and version-aware `/readyz`. Its containers,
+network, volume, credentials, and temporary evidence are generated for the run
+and removed afterward.
 
 `scripts/tests/reader-store-integration.sh`, in the protected `Backend` job,
 separately proves SQL/Go key parity, migration 13→14 and Down/Up behaviour,
