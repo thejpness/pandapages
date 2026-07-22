@@ -1974,7 +1974,7 @@ func newReaderIntegrationStore(t *testing.T, databaseURL string) *Store {
 		t.Fatalf("ping Reader Store database: %v", err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
-	return &Store{db: database, queryTimeout: 10 * time.Second, defaultProfileByAccount: map[string]string{}}
+	return &Store{db: database, queryTimeout: 10 * time.Second}
 }
 
 func newReaderIntegrationStoreWithApplicationName(t *testing.T, databaseURL, applicationName string) *Store {

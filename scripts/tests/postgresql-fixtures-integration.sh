@@ -921,8 +921,12 @@ expect_seed_failure() {
 printf '1..18\n'
 
 run_goose up >"$test_root/fresh-goose.out" 2>"$test_root/fresh-goose.err"
-grep -q 'OK.*00014_reader_2_contract.sql' \
+grep -q 'OK.*00015_account_ownership_integrity.sql' \
   "$test_root/fresh-goose.out" "$test_root/fresh-goose.err"
+assert_query '15|true' "
+  SELECT version_id || '|' || is_applied
+  FROM goose_db_version ORDER BY id DESC LIMIT 1;
+" 'fresh latest migration marker'
 assert_query 't' "
   SELECT bool_and(relation IS NOT NULL)
   FROM (VALUES
@@ -1366,6 +1370,9 @@ assert_query '0|0' "
          AND column_name = 'locator');
 " 'Reader 2 fixture boundary'
 printf 'ok 10 - Reader 2 upgrade resets beta progress and removes the obsolete segment locator\n'
+
+run_goose up-to 15 \
+  >"$test_root/account-integrity-upgrade.out" 2>"$test_root/account-integrity-upgrade.err"
 
 expect_seed_failure missing-ack \
   env -u PP_ALLOW_TEST_SEED \

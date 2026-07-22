@@ -112,9 +112,13 @@ listener can answer. `/readyz` additionally proves PostgreSQL connectivity and
 the expected successful Goose schema state. A readiness 503 is an availability
 signal and is not evidence that a browser session is signed out.
 
-Any future readiness consumer must follow the separately authorised
-[forward readiness role-grant rollout](../operations/postgresql-least-privilege-roles.md#forward-readyz-role-grant-rollout)
-before it uses `/readyz` as a gate.
+Any future readiness consumer for the version-15 API must follow the separately
+authorised
+[coordinated account-integrity rollout](../operations/postgresql-least-privilege-roles.md#migration-00015-coordinated-forward-rollout)
+before `/readyz` can be used as a gate.
+The earlier
+[PR #30 readiness role-grant procedure](../operations/postgresql-least-privilege-roles.md#forward-readyz-role-grant-rollout)
+is historical evidence only and must not be reused as the current procedure.
 
 ## Admin boundary
 
@@ -134,8 +138,11 @@ future authentication migration.
 The current shared passcode is not an individual identity and has no signup,
 email verification, password recovery/change, social login, session refresh,
 server-side revocation, account management, account selection, profile
-selection, or profile PIN. Normal unlock reaches one implicit default account
-and application behavior uses an implicit default profile.
+selection, or profile PIN. Normal unlock still reaches one implicit legacy
+account. Within that account, application behavior uses the explicit
+`profiles.is_default` marker; transactional resolution creates or repairs one
+deterministically without treating a profile display name as identity. See the
+[current account ownership model](account-ownership-model.md).
 
 ## Transition rule
 

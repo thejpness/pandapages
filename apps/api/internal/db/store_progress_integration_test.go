@@ -160,6 +160,13 @@ func TestProgressStoreIntegration(t *testing.T) {
 		if rows != 1 {
 			t.Fatalf("progress rows = %d, want 1", rows)
 		}
+		var storedAccountID string
+		if err := adminDB.QueryRow(`SELECT account_id FROM reading_progress`).Scan(&storedAccountID); err != nil {
+			t.Fatalf("read progress ownership: %v", err)
+		}
+		if storedAccountID != accountA {
+			t.Fatalf("progress account = %q, want %q", storedAccountID, accountA)
+		}
 	})
 
 	t.Run("identity mismatches are rejected without changing confirmed progress", func(t *testing.T) {
@@ -273,6 +280,48 @@ func TestProgressStoreIntegration(t *testing.T) {
 		}
 		assertProgressState(t, gotA, 1, locatorA, 0.91)
 		assertProgressState(t, gotB, 1, locatorB, 0.4)
+
+		var profileA string
+		if err := adminDB.QueryRow(`SELECT id FROM profiles WHERE account_id = $1 AND is_default`, accountA).Scan(&profileA); err != nil {
+			t.Fatalf("read account A default profile: %v", err)
+		}
+		if _, err := adminDB.Exec(`
+			INSERT INTO reading_progress (
+				account_id, profile_id, story_id, story_version_id, locator, percent
+			)
+			SELECT $1, $2, $3, $4, locator, percent
+			FROM reading_progress
+			WHERE account_id = $1 AND story_id = $5
+		`, accountA, profileA, storyB, versionB, storyA); err == nil {
+			t.Fatal("direct cross-account progress insert succeeded")
+		}
+		if _, err := adminDB.Exec(`
+			UPDATE reading_progress
+			SET story_id = $2, story_version_id = $3
+			WHERE account_id = $1 AND story_id = $4
+		`, accountA, storyB, versionB, storyA); err == nil {
+			t.Fatal("direct cross-account progress update succeeded")
+		}
+		if _, err := adminDB.Exec(`
+			UPDATE reading_progress
+			SET story_version_id = $2
+			WHERE account_id = $1 AND story_id = $3
+		`, accountA, versionB, storyA); err == nil {
+			t.Fatal("direct cross-story version update succeeded")
+		}
+		if _, err := adminDB.Exec(`
+			UPDATE reading_progress
+			SET account_id = $2
+			WHERE account_id = $1 AND story_id = $3
+		`, accountA, accountB, storyA); err == nil {
+			t.Fatal("direct progress ownership update succeeded")
+		}
+
+		gotA, err = store.ProgressGet(accountA, slug)
+		if err != nil {
+			t.Fatalf("ProgressGet account A after rejected ownership writes: %v", err)
+		}
+		assertProgressState(t, gotA, 1, locatorA, 0.91)
 	})
 }
 
@@ -291,9 +340,8 @@ func newProgressIntegrationStore(t *testing.T, databaseURL string) *Store {
 	t.Cleanup(func() { _ = database.Close() })
 
 	return &Store{
-		db:                      database,
-		queryTimeout:            10 * time.Second,
-		defaultProfileByAccount: map[string]string{},
+		db:           database,
+		queryTimeout: 10 * time.Second,
 	}
 }
 
@@ -309,26 +357,33 @@ func setupProgressIntegrationSchema(t *testing.T, database *sql.DB) {
 		)`,
 		`CREATE TABLE profiles (
 			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-			account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+			account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
 			name text NOT NULL,
+			is_default boolean NOT NULL DEFAULT false,
 			created_at timestamptz NOT NULL DEFAULT now(),
-			UNIQUE (account_id, name)
+			updated_at timestamptz NOT NULL DEFAULT now(),
+			UNIQUE (account_id, name),
+			UNIQUE (id, account_id)
 		)`,
+		`CREATE UNIQUE INDEX profiles_one_default_per_account_idx
+			ON profiles (account_id) WHERE is_default`,
 		`CREATE TABLE stories (
 			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-			account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+			account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
 			slug text NOT NULL,
 			title text NOT NULL,
 			is_published boolean NOT NULL DEFAULT false,
 			published_version_id uuid,
-			UNIQUE (account_id, slug)
+			UNIQUE (account_id, slug),
+			UNIQUE (id, account_id)
 		)`,
 		`CREATE TABLE story_versions (
 			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 			story_id uuid NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
 			version integer NOT NULL,
 			rendered_html text NOT NULL,
-			UNIQUE (story_id, version)
+			UNIQUE (story_id, version),
+			UNIQUE (id, story_id)
 		)`,
 		`ALTER TABLE stories
 			ADD CONSTRAINT stories_published_version_progress_test_fkey
@@ -350,13 +405,20 @@ func setupProgressIntegrationSchema(t *testing.T, database *sql.DB) {
 			UNIQUE (story_version_id, content_key, content_occurrence)
 		)`,
 		`CREATE TABLE reading_progress (
-			profile_id uuid NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-			story_id uuid NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
-			story_version_id uuid NOT NULL REFERENCES story_versions(id),
+			account_id uuid NOT NULL,
+			profile_id uuid NOT NULL,
+			story_id uuid NOT NULL,
+			story_version_id uuid NOT NULL,
 			locator jsonb NOT NULL,
 			percent real NOT NULL DEFAULT 0,
 			updated_at timestamptz NOT NULL DEFAULT now(),
-			PRIMARY KEY (profile_id, story_id)
+			PRIMARY KEY (profile_id, story_id),
+			FOREIGN KEY (profile_id, account_id)
+				REFERENCES profiles(id, account_id) ON DELETE CASCADE,
+			FOREIGN KEY (story_id, account_id)
+				REFERENCES stories(id, account_id) ON DELETE CASCADE,
+			FOREIGN KEY (story_version_id, story_id)
+				REFERENCES story_versions(id, story_id)
 		)`,
 	}
 	for _, statement := range statements {
