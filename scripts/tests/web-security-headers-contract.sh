@@ -38,13 +38,13 @@ for forbidden in "unsafe-eval" "script-src 'self' 'unsafe-inline'" "*" "http://"
 done
 
 for header in X-Content-Type-Options Referrer-Policy Permissions-Policy; do
-  if ! rg -q "^[[:space:]]*add_header $header " "$nginx_config"; then
+  if ! grep -Eq "^[[:space:]]*add_header $header " "$nginx_config"; then
     echo "production Nginx configuration is missing $header" >&2
     exit 1
   fi
 done
 
-if rg -n --pcre2 '<script(?![^>]*\bsrc=)' "$index_html"; then
+if grep -nP '<script(?![^>]*\bsrc=)' "$index_html"; then
   echo "index.html contains an inline script that production CSP would block" >&2
   exit 1
 fi
