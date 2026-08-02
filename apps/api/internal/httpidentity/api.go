@@ -8,17 +8,10 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strings"
 
 	"pandapages/api/internal/appidentity"
-	"pandapages/api/internal/supabaseauth"
+	"pandapages/api/internal/httpbearer"
 )
-
-const maxBearerBytes = 16 * 1024
-
-type TokenVerifier interface {
-	Verify(context.Context, string) (appidentity.ExternalIdentity, error)
-}
 
 type IdentityStore interface {
 	EnsureIdentity(context.Context, appidentity.ExternalIdentity) (appidentity.Snapshot, bool, error)
@@ -26,12 +19,15 @@ type IdentityStore interface {
 }
 
 type API struct {
-	verifier TokenVerifier
-	store    IdentityStore
+	auth  *httpbearer.Authenticator
+	store IdentityStore
 }
 
-func New(verifier TokenVerifier, store IdentityStore) http.Handler {
-	api := &API{verifier: verifier, store: store}
+func New(verifier httpbearer.TokenVerifier, store IdentityStore) http.Handler {
+	api := &API{
+		auth:  httpbearer.New(verifier, store),
+		store: store,
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/auth/onboard", api.onboard)
 	mux.HandleFunc("GET /api/auth/me", api.me)
@@ -67,7 +63,7 @@ func (api *API) onboard(response http.ResponseWriter, request *http.Request) {
 		writeError(response, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	identity, ok := api.authenticate(response, request)
+	identity, ok := api.auth.Authenticate(response, request)
 	if !ok {
 		return
 	}
@@ -80,7 +76,7 @@ func (api *API) onboard(response http.ResponseWriter, request *http.Request) {
 }
 
 func (api *API) me(response http.ResponseWriter, request *http.Request) {
-	identity, ok := api.authenticate(response, request)
+	identity, ok := api.auth.Authenticate(response, request)
 	if !ok {
 		return
 	}
@@ -90,60 +86,6 @@ func (api *API) me(response http.ResponseWriter, request *http.Request) {
 		return
 	}
 	writeIdentity(response, snapshot, nil)
-}
-
-func (api *API) authenticate(response http.ResponseWriter, request *http.Request) (appidentity.ExternalIdentity, bool) {
-	token, state := bearerToken(request.Header.Values("Authorization"))
-	switch state {
-	case bearerMissing:
-		writeBearerError(response, "bearer_required")
-		return appidentity.ExternalIdentity{}, false
-	case bearerMalformed:
-		writeBearerError(response, "invalid_bearer")
-		return appidentity.ExternalIdentity{}, false
-	}
-
-	identity, err := api.verifier.Verify(request.Context(), token)
-	if errors.Is(err, supabaseauth.ErrKeysUnavailable) {
-		writeError(response, http.StatusServiceUnavailable, "authentication_unavailable")
-		return appidentity.ExternalIdentity{}, false
-	}
-	if err != nil {
-		writeBearerError(response, "invalid_bearer")
-		return appidentity.ExternalIdentity{}, false
-	}
-	return identity, true
-}
-
-type bearerState uint8
-
-const (
-	bearerValid bearerState = iota
-	bearerMissing
-	bearerMalformed
-)
-
-func bearerToken(headers []string) (string, bearerState) {
-	if len(headers) == 0 {
-		return "", bearerMissing
-	}
-	if len(headers) != 1 {
-		return "", bearerMalformed
-	}
-	header := headers[0]
-	if len(header) <= len("Bearer ") || len(header) > maxBearerBytes+len("Bearer ") || !strings.HasPrefix(header, "Bearer ") {
-		return "", bearerMalformed
-	}
-	token := strings.TrimPrefix(header, "Bearer ")
-	if token == "" || strings.ContainsAny(token, " \t\r\n,") {
-		return "", bearerMalformed
-	}
-	return token, bearerValid
-}
-
-func writeBearerError(response http.ResponseWriter, code string) {
-	response.Header().Set("WWW-Authenticate", `Bearer realm="panda-pages"`)
-	writeError(response, http.StatusUnauthorized, code)
 }
 
 func writeStoreError(response http.ResponseWriter, err error) {
