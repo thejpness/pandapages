@@ -124,6 +124,9 @@ write_api_environment() {
     printf 'PP_PASSCODE=%s\n' "$passcode"
     printf 'PP_ADMIN_KEY=generated-admin-key-not-for-production\n'
     printf 'PP_SESSION_SECRET=generated-session-secret-not-for-production\n'
+  printf 'PP_SUPABASE_ISSUER=https://auth.invalid/auth/v1\n'
+  printf 'PP_SUPABASE_AUDIENCE=authenticated\n'
+  printf 'PP_SUPABASE_JWKS_URL=https://auth.invalid/auth/v1/.well-known/jwks.json\n'
   } >"$output"
   chmod 0600 "$output"
 }
@@ -353,6 +356,9 @@ missing_runtime_environment="$test_root/missing-runtime.env"
     "$migration_role" "$migration_password" "$source_container" "$database"
   printf 'PP_PASSCODE=123456\n'
   printf 'PP_SESSION_SECRET=generated-session-secret-not-for-production\n'
+  printf 'PP_SUPABASE_ISSUER=https://auth.invalid/auth/v1\n'
+  printf 'PP_SUPABASE_AUDIENCE=authenticated\n'
+  printf 'PP_SUPABASE_JWKS_URL=https://auth.invalid/auth/v1/.well-known/jwks.json\n'
 } >"$missing_runtime_environment"
 chmod 0600 "$missing_runtime_environment"
 

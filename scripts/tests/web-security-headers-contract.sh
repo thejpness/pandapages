@@ -17,7 +17,7 @@ for required in \
   "style-src 'self'" \
   "img-src 'self'" \
   "font-src 'self'" \
-  "connect-src 'self'" \
+  "connect-src 'self' __SUPABASE_AUTH_ORIGIN__" \
   "worker-src 'self'" \
   "manifest-src 'self'" \
   "object-src 'none'" \
@@ -36,6 +36,11 @@ for forbidden in "unsafe-eval" "script-src 'self' 'unsafe-inline'" "*" "http://"
     exit 1
   fi
 done
+
+if [[ $(grep -o '__SUPABASE_AUTH_ORIGIN__' "$nginx_config" | wc -l) -ne 2 ]]; then
+  echo "production CSP must contain one Auth-origin placeholder in each inherited header policy" >&2
+  exit 1
+fi
 
 for header in X-Content-Type-Options Referrer-Policy Permissions-Policy; do
   if ! grep -Eq "^[[:space:]]*add_header $header " "$nginx_config"; then

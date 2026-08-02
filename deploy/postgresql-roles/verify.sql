@@ -154,8 +154,11 @@ WHERE namespace.nspname = 'public'
 WITH runtime_table(name) AS (
   VALUES
     ('accounts'),
+    ('account_memberships'),
     ('child_profiles'),
     ('contributors'),
+    ('external_identities'),
+    ('principals'),
     ('profile_settings'),
     ('profiles'),
     ('prompt_profiles'),
@@ -182,7 +185,7 @@ WITH runtime_table(name) AS (
     AND class.relnamespace = 'public'::regnamespace
     AND class.relkind IN ('r', 'p')
 )
-SELECT count(*) = 12 AND bool_and(
+SELECT count(*) = 15 AND bool_and(
   oid IS NOT NULL
   AND can_select
   AND can_insert
@@ -226,8 +229,11 @@ WHERE namespace.nspname = 'public'
 WITH runtime_table(name) AS (
   VALUES
     ('accounts'),
+    ('account_memberships'),
     ('child_profiles'),
     ('contributors'),
+    ('external_identities'),
+    ('principals'),
     ('profile_settings'),
     ('profiles'),
     ('prompt_profiles'),

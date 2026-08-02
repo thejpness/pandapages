@@ -20,6 +20,19 @@ export const router = createRouter({
       },
     },
 
+    {
+      path: '/account/login',
+      component: () => import('./views/SupabaseLogin.vue'),
+    },
+    {
+      path: '/auth/callback',
+      component: () => import('./views/SupabaseCallback.vue'),
+    },
+    {
+      path: '/account',
+      component: () => import('./views/SupabaseIdentity.vue'),
+    },
+
     { path: '/unlock', component: Unlock },
     {
       path: '/session-unavailable',

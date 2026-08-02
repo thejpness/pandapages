@@ -485,3 +485,20 @@ func TestUnlockRejectsOversizedBody(t *testing.T) {
 		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusRequestEntityTooLarge, rec.Body.String())
 	}
 }
+
+func TestLegacyApplicationRoutesRejectBearerOnlyAuthentication(t *testing.T) {
+	manager := testSessionManager(t, false, func() time.Time { return testSessionTime })
+	store := &authTestStore{accountExists: true}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/library", nil)
+	request.Header.Set("Authorization", "Bearer valid-for-new-route-family-only")
+	response := httptest.NewRecorder()
+
+	testHandler(t, store, manager).ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401; body = %s", response.Code, response.Body.String())
+	}
+	if store.existsCalls != 0 || store.libraryCalls != 0 {
+		t.Fatalf("bearer-only request reached legacy store: exists=%d library=%d", store.existsCalls, store.libraryCalls)
+	}
+}

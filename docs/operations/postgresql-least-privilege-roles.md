@@ -85,6 +85,8 @@ The application role receives:
 - `CONNECT` only to `pandapages` and `USAGE` on `public`;
 - `SELECT`, `INSERT`, `UPDATE`, and `DELETE` on the current runtime table
   allowlist;
+  this now includes `principals`, `external_identities`, and
+  `account_memberships` for the isolated bearer identity route family;
 - read-only `SELECT` on `public.goose_db_version` solely for `/readyz` schema
   verification, with no write privilege on Goose metadata;
 - `USAGE` and `SELECT` on application identifier sequences, excluding Goose's
@@ -139,9 +141,9 @@ the latest successfully applied version while it still cannot insert, update,
 or delete Goose metadata. Only the migration container may apply schema
 changes.
 
-## Migration 00015 coordinated forward rollout
+## Historical migration 00015 coordinated forward rollout
 
-This is the current forward procedure for account-ownership migration 00015
+This records the completed forward procedure for account-ownership migration 00015
 and its matching API. It requires a separately authorised production change;
 merging repository support applies no migration, role policy, deployment, or
 readiness consumer.
@@ -250,10 +252,11 @@ evidence. It must not be reused as the current forward `/readyz` procedure.
 ### Historical Reader 2 migration-chain note
 
 The following text records the migration state when the readiness foundation
-was written. The current repository migration chain continues through 00015.
+was written. The current repository migration chain continues through 00016.
 
-Migration `00008_seed_test_data.sql` is immutable applied history. Current
-repository Goose runs continue through `00014_reader_2_contract.sql`.
+Migration `00008_seed_test_data.sql` is immutable applied history. At that
+historical point, repository Goose runs continued through
+`00014_reader_2_contract.sql`.
 Migration `00013` leaves no positively identified historical test stories,
 child/prompt profiles, progress, or generation jobs; migration `00014` then
 performs the approved complete beta progress reset and installs the Reader 2

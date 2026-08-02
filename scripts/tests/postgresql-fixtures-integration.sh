@@ -912,7 +912,9 @@ printf '1..18\n'
 run_goose up >"$test_root/fresh-goose.out" 2>"$test_root/fresh-goose.err"
 grep -q 'OK.*00015_account_ownership_integrity.sql' \
   "$test_root/fresh-goose.out" "$test_root/fresh-goose.err"
-assert_query '15|true' "
+grep -q 'OK.*00016_identity_foundation.sql' \
+  "$test_root/fresh-goose.out" "$test_root/fresh-goose.err"
+assert_query '16|true' "
   SELECT version_id || '|' || is_applied
   FROM goose_db_version ORDER BY id DESC LIMIT 1;
 " 'fresh latest migration marker'
@@ -920,10 +922,13 @@ assert_query 't' "
   SELECT bool_and(relation IS NOT NULL)
   FROM (VALUES
     (to_regclass('public.accounts')),
+    (to_regclass('public.account_memberships')),
     (to_regclass('public.child_profiles')),
+    (to_regclass('public.external_identities')),
     (to_regclass('public.generation_jobs')),
     (to_regclass('public.profile_settings')),
     (to_regclass('public.profiles')),
+    (to_regclass('public.principals')),
     (to_regclass('public.reading_progress')),
     (to_regclass('public.stories')),
     (to_regclass('public.story_sections')),
@@ -931,7 +936,7 @@ assert_query 't' "
     (to_regclass('public.story_versions'))
   ) AS required(relation);
 " 'fresh schema tables'
-assert_query '0|0|0|0|0|0|0|0|0|0|0|0|0' "
+assert_query '0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0' "
   SELECT
     (SELECT count(*) FROM stories),
     (SELECT count(*) FROM story_versions),
@@ -945,7 +950,10 @@ assert_query '0|0|0|0|0|0|0|0|0|0|0|0|0' "
     (SELECT count(*) FROM works),
     (SELECT count(*) FROM contributors),
     (SELECT count(*) FROM story_contributors),
-    (SELECT count(*) FROM assets);
+    (SELECT count(*) FROM assets),
+    (SELECT count(*) FROM principals),
+    (SELECT count(*) FROM external_identities),
+    (SELECT count(*) FROM account_memberships);
 " 'fresh migration fixture inventory'
 printf 'ok 1 - fresh migrations leave the complete application schema without fixture content\n'
 
@@ -1444,6 +1452,7 @@ assert_query '6|3|3|2|2|2|6|3|3|t|## Chapter Two — 世界|t|星の光 shimmere
 " 'explicit fixture ingestion segment shape'
 printf 'ok 13 - canonical keys, kinds, chapter propagation, and six independent fixture segments match ingestion\n'
 
+run_goose up-to 16 >"$test_root/identity-foundation-upgrade.out" 2>"$test_root/identity-foundation-upgrade.err"
 api_environment="$test_root/api.env"
 {
   printf 'DATABASE_URL=postgres://%s:%s@%s:5432/%s?sslmode=disable\n' \
@@ -1452,6 +1461,9 @@ api_environment="$test_root/api.env"
   printf 'PP_PASSCODE=123456\n'
   printf 'PP_ADMIN_KEY=generated-admin-key-not-for-production\n'
   printf 'PP_SESSION_SECRET=generated-session-secret-not-for-production-00000000\n'
+  printf 'PP_SUPABASE_ISSUER=https://auth.invalid/auth/v1\n'
+  printf 'PP_SUPABASE_AUDIENCE=authenticated\n'
+  printf 'PP_SUPABASE_JWKS_URL=https://auth.invalid/auth/v1/.well-known/jwks.json\n'
 } >"$api_environment"
 chmod 0600 "$api_environment"
 

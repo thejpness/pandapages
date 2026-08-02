@@ -34,10 +34,15 @@ func TestNewRootHandlerObservesServeMuxRedirectsExactlyOnce(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(previousLogger) })
 
 	publicCalls := 0
+	identityCalls := 0
 	adminCalls := 0
 	handler := newRootHandler(
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			publicCalls++
+			w.WriteHeader(http.StatusNoContent)
+		}),
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			identityCalls++
 			w.WriteHeader(http.StatusNoContent)
 		}),
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -80,8 +85,8 @@ func TestNewRootHandlerObservesServeMuxRedirectsExactlyOnce(t *testing.T) {
 		})
 	}
 
-	if publicCalls != 0 || adminCalls != 0 {
-		t.Fatalf("ServeMux redirects reached application handlers: public=%d admin=%d", publicCalls, adminCalls)
+	if publicCalls != 0 || identityCalls != 0 || adminCalls != 0 {
+		t.Fatalf("ServeMux redirects reached application handlers: public=%d identity=%d admin=%d", publicCalls, identityCalls, adminCalls)
 	}
 }
 
@@ -89,12 +94,15 @@ func TestLoadRuntimeConfigAcceptsValidAuthenticationSettings(t *testing.T) {
 	t.Parallel()
 
 	values := map[string]string{
-		"DATABASE_URL":      "test-database-url",
-		"PP_PASSCODE":       "012345",
-		"PP_SESSION_SECRET": strings.Repeat("s", 32),
-		"PP_ADMIN_KEY":      "  admin-key  ",
-		"PP_COOKIE_SECURE":  "true",
-		"PP_LOG_LEVEL":      "debug",
+		"DATABASE_URL":         "test-database-url",
+		"PP_PASSCODE":          "012345",
+		"PP_SESSION_SECRET":    strings.Repeat("s", 32),
+		"PP_ADMIN_KEY":         "  admin-key  ",
+		"PP_COOKIE_SECURE":     "true",
+		"PP_LOG_LEVEL":         "debug",
+		"PP_SUPABASE_ISSUER":   "https://project-ref.supabase.co/auth/v1",
+		"PP_SUPABASE_AUDIENCE": "authenticated",
+		"PP_SUPABASE_JWKS_URL": "https://project-ref.supabase.co/auth/v1/.well-known/jwks.json",
 	}
 	cfg, err := loadRuntimeConfig(func(key string) string { return values[key] })
 	if err != nil {
@@ -269,6 +277,43 @@ func TestNewLoggerHonoursConfiguredLevel(t *testing.T) {
 				if got := strings.Contains(logs, marker); got != want {
 					t.Errorf("log contains %q = %v, want %v; output = %s", marker, got, want, logs)
 				}
+			}
+		})
+	}
+}
+
+func TestLoadRuntimeConfigRejectsInvalidSupabaseBearerSettings(t *testing.T) {
+	t.Parallel()
+
+	valid := map[string]string{
+		"PP_PASSCODE":          "123456",
+		"PP_SESSION_SECRET":    strings.Repeat("s", 32),
+		"PP_SUPABASE_ISSUER":   "https://project-ref.supabase.co/auth/v1",
+		"PP_SUPABASE_AUDIENCE": "authenticated",
+		"PP_SUPABASE_JWKS_URL": "https://project-ref.supabase.co/auth/v1/.well-known/jwks.json",
+	}
+	tests := []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{name: "missing issuer", key: "PP_SUPABASE_ISSUER", value: ""},
+		{name: "HTTP issuer", key: "PP_SUPABASE_ISSUER", value: "http://project-ref.supabase.co/auth/v1"},
+		{name: "wrong issuer path", key: "PP_SUPABASE_ISSUER", value: "https://project-ref.supabase.co/identity"},
+		{name: "missing audience", key: "PP_SUPABASE_AUDIENCE", value: ""},
+		{name: "cross-origin JWKS", key: "PP_SUPABASE_JWKS_URL", value: "https://attacker.example/jwks"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			values := make(map[string]string, len(valid))
+			for key, value := range valid {
+				values[key] = value
+			}
+			values[test.key] = test.value
+			_, err := loadRuntimeConfig(func(key string) string { return values[key] })
+			if err == nil || !strings.Contains(err.Error(), "Supabase bearer configuration") {
+				t.Fatalf("loadRuntimeConfig() error = %v", err)
 			}
 		})
 	}
