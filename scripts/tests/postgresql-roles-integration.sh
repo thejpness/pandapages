@@ -4,6 +4,7 @@ set -euo pipefail
 umask 077
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+source "$repo_root/scripts/tests/postgresql-stable-readiness.sh"
 role_script="$repo_root/scripts/postgresql-roles.sh"
 api_smoke_script="$repo_root/scripts/tests/postgresql-api-role-smoke.sh"
 migration_image=${PP_ROLE_TEST_MIGRATION_IMAGE:-pandapages-migrate:role-test}
@@ -106,36 +107,8 @@ docker run --detach \
   "$postgres_image" >/dev/null
 source_created=true
 
-health=starting
-for ((attempt = 0; attempt < 60; attempt++)); do
-  health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$source_container")
-  [[ "$health" == healthy ]] && break
-  [[ "$health" != unhealthy ]] || {
-    printf 'Generated PostgreSQL source became unhealthy\n' >&2
-    exit 1
-  }
-  sleep 1
-done
-[[ "$health" == healthy ]] || {
-  printf 'Timed out waiting for generated PostgreSQL source\n' >&2
-  exit 1
-}
-
-database_ready=false
-for ((attempt = 0; attempt < 30; attempt++)); do
-  if docker exec "$source_container" \
-    psql -X --username="$admin_user" --dbname="$database" \
-    --set=ON_ERROR_STOP=1 --tuples-only --command='SELECT 1;' \
-    >/dev/null 2>&1; then
-    database_ready=true
-    break
-  fi
-  sleep 1
-done
-[[ "$database_ready" == true ]] || {
-  printf 'Generated PostgreSQL database did not become connectable\n' >&2
-  exit 1
-}
+wait_for_stable_postgres "$source_container" "$admin_user" "$database" \
+  'Generated PostgreSQL source'
 
 apply_policy() {
   "$role_script" apply \
