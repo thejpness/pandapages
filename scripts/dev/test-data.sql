@@ -190,9 +190,9 @@ VALUES (
   'f17e0000-0000-4000-8000-000000000011',
   'f17e0000-0000-4000-8000-000000000010',
   1,
-  '{"tags":["test-only","reader","utf-8"],"test_fixture":true}'::jsonb,
+  '{"author":"Panda Pages Test Fixture","language":"en-GB","rights":{"license":"test-only","test_fixture":true},"tags":["test-only","reader","utf-8"],"test_fixture":true,"title":"TEST ONLY — Moonlit Café"}'::jsonb,
   E'# TEST ONLY — Moonlit Café\n\nPöndá carried a lantern past the café window.\n\n## Chapter One — Lanterns\n\n“Ready?” asked Pöndá. The moon replied, “Oui — allons-y!”\n\n## Chapter Two — 世界\n\n星の光 shimmered over the quiet water. 🐼\n',
-  '<h1>TEST ONLY — Moonlit Café</h1><p>Pöndá carried a lantern past the café window.</p><h2>Chapter One — Lanterns</h2><p>“Ready?” asked Pöndá. The moon replied, “Oui — allons-y!”</p><h2>Chapter Two — 世界</h2><p>星の光 shimmered over the quiet water. 🐼</p>',
+  E'<h1 id="test-only--moonlit-caf">TEST ONLY — Moonlit Café</h1>\n<p>Pöndá carried a lantern past the café window.</p>\n<h2 id="chapter-one--lanterns">Chapter One — Lanterns</h2>\n<p>“Ready?” asked Pöndá. The moon replied, “Oui — allons-y!”</p>\n<h2 id="chapter-two--">Chapter Two — 世界</h2>\n<p>星の光 shimmered over the quiet water. 🐼</p>\n',
   encode(digest(
     E'# TEST ONLY — Moonlit Café\n\nPöndá carried a lantern past the café window.\n\n## Chapter One — Lanterns\n\n“Ready?” asked Pöndá. The moon replied, “Oui — allons-y!”\n\n## Chapter Two — 世界\n\n星の光 shimmered over the quiet water. 🐼\n',
     'sha256'
@@ -245,7 +245,7 @@ VALUES
     'd31878cf2371f991a595a486444819b429166c113ee33c598822396243a5c3bc', 1,
     NULL, NULL,
     '# TEST ONLY — Moonlit Café',
-    '<h1>TEST ONLY — Moonlit Café</h1>',
+    E'<h1 id="test-only--moonlit-caf">TEST ONLY — Moonlit Café</h1>\n',
     5
   ),
   (
@@ -257,7 +257,7 @@ VALUES
     '29b24293f72cc951a07c8b554caa723bb4bb1aced83257bb1c6325d0fc087798', 1,
     NULL, NULL,
     'Pöndá carried a lantern past the café window.',
-    '<p>Pöndá carried a lantern past the café window.</p>',
+    E'<p>Pöndá carried a lantern past the café window.</p>\n',
     8
   ),
   (
@@ -269,7 +269,7 @@ VALUES
     '6f744b440fbf4fa52da46bebf4fd3e5f2de7a1c2fb11f7e9ac2794ccd1956c4e', 1,
     '6f744b440fbf4fa52da46bebf4fd3e5f2de7a1c2fb11f7e9ac2794ccd1956c4e', 1,
     '## Chapter One — Lanterns',
-    '<h2>Chapter One — Lanterns</h2>',
+    E'<h2 id="chapter-one--lanterns">Chapter One — Lanterns</h2>\n',
     4
   ),
   (
@@ -281,7 +281,7 @@ VALUES
     'aae1f4bebb97b03ea9d0cfd5431675a250ab6a14be567445b1bb250874574e19', 1,
     '6f744b440fbf4fa52da46bebf4fd3e5f2de7a1c2fb11f7e9ac2794ccd1956c4e', 1,
     '“Ready?” asked Pöndá. The moon replied, “Oui — allons-y!”',
-    '<p>“Ready?” asked Pöndá. The moon replied, “Oui — allons-y!”</p>',
+    E'<p>“Ready?” asked Pöndá. The moon replied, “Oui — allons-y!”</p>\n',
     9
   ),
   (
@@ -293,7 +293,7 @@ VALUES
     '3749b6630ab08c6998fd65117d5265c7e7514e35f02022a4005505d0aba52a73', 1,
     '3749b6630ab08c6998fd65117d5265c7e7514e35f02022a4005505d0aba52a73', 1,
     '## Chapter Two — 世界',
-    '<h2>Chapter Two — 世界</h2>',
+    E'<h2 id="chapter-two--">Chapter Two — 世界</h2>\n',
     4
   ),
   (
@@ -305,7 +305,7 @@ VALUES
     'fcbc17ea710ed18987f528decf4c035647b6721c8123e983c88a437aa5ac81db', 1,
     '3749b6630ab08c6998fd65117d5265c7e7514e35f02022a4005505d0aba52a73', 1,
     '星の光 shimmered over the quiet water. 🐼',
-    '<p>星の光 shimmered over the quiet water. 🐼</p>',
+    E'<p>星の光 shimmered over the quiet water. 🐼</p>\n',
     7
   );
 
