@@ -1,3 +1,4 @@
+import { parseSafeRenderedStoryHTML, type SafeRenderedStoryHTML } from './reader-locator-v2'
 import {
   isReaderContentKey,
   parseReaderLocatorV2,
@@ -521,7 +522,7 @@ function parseReaderSegment(value: unknown): ReaderStorySegment {
     contentOccurrence: value.contentOccurrence,
     chapterKey: hasChapter ? String(value.chapterKey) : null,
     chapterOccurrence: hasChapter ? Number(value.chapterOccurrence) : null,
-    renderedHtml: value.renderedHtml,
+    renderedHtml: parseSafeRenderedStoryHTML(value.renderedHtml),
     wordCount: Number(value.wordCount),
   }
 }
@@ -605,7 +606,7 @@ export type AdminPreviewResponse = {
   language: string
   rights: JsonObject
   sourceUrl: string | null
-  renderedHtml: string
+  renderedHtml: SafeRenderedStoryHTML
   segmentCount: number
   wordCount: number
   chapterCount: number
@@ -985,7 +986,7 @@ export function parseAdminVersionSource(value: unknown): AdminVersionSource {
     version: record.version,
     ...parseAdminMetadata(record),
     markdown: record.markdown,
-    renderedHtml: record.renderedHtml,
+    renderedHtml: parseSafeRenderedStoryHTML(record.renderedHtml),
     segmentCount: record.segmentCount,
     wordCount: record.wordCount,
     chapterCount: record.chapterCount,
@@ -1035,7 +1036,7 @@ export function parseAdminPreviewResponse(
   return {
     slug: parseAdminSlug(record.slug),
     ...parseAdminMetadata(record),
-    renderedHtml: record.renderedHtml,
+    renderedHtml: parseSafeRenderedStoryHTML(record.renderedHtml),
     segmentCount: record.segmentCount,
     wordCount: record.wordCount,
     chapterCount: record.chapterCount,
@@ -1065,7 +1066,7 @@ export function parseAdminDraftUpsertResponse(
     segmentCount: record.segmentCount,
     wordCount: record.wordCount,
     chapterCount: record.chapterCount,
-    renderedHtml: record.renderedHtml,
+    renderedHtml: parseSafeRenderedStoryHTML(record.renderedHtml),
     outcome: record.outcome as AdminDraftOutcome,
   }
 }

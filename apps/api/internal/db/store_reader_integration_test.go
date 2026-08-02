@@ -1530,6 +1530,40 @@ func TestReaderStoreIntegration(t *testing.T) {
 		assertPublishedPointer(second.StoryVersionID)
 	})
 
+	t.Run("unsafe historical published HTML is unavailable and repairable", func(t *testing.T) {
+		var originalRenderedHTML string
+		if err := adminDB.QueryRow(`
+			SELECT rendered_html
+			FROM story_segments
+			WHERE story_version_id = $1 AND ordinal = 2
+		`, firstDraft.StoryVersionID).Scan(&originalRenderedHTML); err != nil {
+			t.Fatalf("read canonical published segment: %v", err)
+		}
+		if _, err := adminDB.Exec(`
+			UPDATE story_segments
+			SET rendered_html = $2
+			WHERE story_version_id = $1 AND ordinal = 2
+		`, firstDraft.StoryVersionID, "<iframe srcdoc=\"<script>globalThis.__ppUnsafe=true</script>\"></iframe>"); err != nil {
+			t.Fatalf("tamper published rendered HTML: %v", err)
+		}
+		if _, err := store.ReaderStory(readerAccountA, readerSlug); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("ReaderStory unsafe published HTML error = %v, want not-found", err)
+		}
+		if _, err := store.AdminGetVersionSource(readerAccountA, readerSlug, firstDraft.StoryVersionID); !errors.Is(err, model.ErrAdminVersionRepairRequired) {
+			t.Fatalf("Story Studio unsafe version source error = %v, want repair-required", err)
+		}
+		if _, err := adminDB.Exec(`
+			UPDATE story_segments
+			SET rendered_html = $2
+			WHERE story_version_id = $1 AND ordinal = 2
+		`, firstDraft.StoryVersionID, originalRenderedHTML); err != nil {
+			t.Fatalf("restore canonical published segment: %v", err)
+		}
+		if _, err := store.ReaderStory(readerAccountA, readerSlug); err != nil {
+			t.Fatalf("ReaderStory after historical repair: %v", err)
+		}
+	})
+
 	t.Run("ingestion assigns six ordered identities and H2 chapters", func(t *testing.T) {
 		story, err := store.ReaderStory(readerAccountA, readerSlug)
 		if err != nil {

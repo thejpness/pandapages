@@ -81,6 +81,7 @@ class StudioAPI {
   draftFailure: QueuedFailure | null = null
   draftOutcome: 'created_story' | 'created_version' | 'reused' = 'created_story'
   abortNextList = false
+  previewRenderedHTML: string | null = null
   previewGate: {
     started: ReturnType<typeof deferred<void>>
     release: ReturnType<typeof deferred<void>>
@@ -256,7 +257,9 @@ class StudioAPI {
         language: input.language,
         rights: input.rights,
         sourceUrl: input.sourceUrl,
-        renderedHtml: `<h1>${title.trim()}</h1><p>Canonical preview content.</p>`,
+        renderedHtml:
+          this.previewRenderedHTML ??
+          `<h1>${title.trim()}</h1><p>Canonical preview content.</p>`,
         segmentCount: 3,
         wordCount: 18,
         chapterCount: 1,
@@ -544,6 +547,51 @@ test('new story preview shows structured validation, canonical output and outdat
   await expect(page.getByText('Preview out of date')).toBeVisible()
   expect(api.count('POST', '/api/v1/admin/preview')).toBe(2)
   expect(await seriousOrCriticalViolations(page)).toEqual([])
+})
+
+test('rejects hostile preview HTML before it reaches the Story Studio v-html sink', async ({
+  page,
+}) => {
+  const api = new StudioAPI()
+  api.previewRenderedHTML = [
+    '<script src="https://story-xss.invalid/script.js"></script>',
+    '<iframe srcdoc="<script>window.__storyXSS = true</script>"></iframe>',
+    '<form><input name="secret"><button>Submit</button></form>',
+    '<object data="https://story-xss.invalid/object"></object>',
+    '<embed src="https://story-xss.invalid/embed">',
+    '<p onclick="window.__storyXSS = true">Hostile preview</p>',
+    '<a href="javascript:window.__storyXSS = true">Hostile link</a>',
+  ].join('')
+  const dialogs: string[] = []
+  const unexpectedRequests: string[] = []
+  page.on('dialog', async (dialog) => {
+    dialogs.push(dialog.message())
+    await dialog.dismiss()
+  })
+  page.on('request', (request) => {
+    if (new URL(request.url()).hostname === 'story-xss.invalid') {
+      unexpectedRequests.push(request.url())
+    }
+  })
+  await api.install(page)
+  await page.goto('/admin/stories/new')
+  await page.getByLabel('Title').fill('Hostile Preview')
+  await page.getByLabel('Markdown').fill('# Hostile Preview\n\nA story.\n')
+  await page.getByRole('button', { name: 'Preview', exact: true }).first().click()
+
+  await expect(page.getByText('Canonical preview content.')).toBeHidden()
+  await expect(
+    page.locator(
+      '.preview-pane__story script, .preview-pane__story iframe, .preview-pane__story form, .preview-pane__story input, .preview-pane__story button, .preview-pane__story object, .preview-pane__story embed, .preview-pane__story [onload], .preview-pane__story [onerror], .preview-pane__story [onclick], .preview-pane__story a[href^="javascript:" i], .preview-pane__story a[href^="data:" i]',
+    ),
+  ).toHaveCount(0)
+  expect(dialogs).toEqual([])
+  expect(unexpectedRequests).toEqual([])
+  expect(
+    await page.evaluate(
+      () => (window as Window & { __storyXSS?: boolean }).__storyXSS,
+    ),
+  ).toBeUndefined()
 })
 
 test('editing during a deferred preview prevents the stale response from replacing current input', async ({

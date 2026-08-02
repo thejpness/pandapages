@@ -115,6 +115,53 @@ func TestIngestOmitsUnsafeMarkdown(t *testing.T) {
 	}
 }
 
+func TestSafeStoryHTMLAllowlist(t *testing.T) {
+	input := `<p onclick="alert(1)">Safe <em>story</em>.</p>` +
+		`<script>alert(1)</script><iframe srcdoc="<script>alert(1)</script>"></iframe>` +
+		`<svg onload="alert(1)"></svg><math><mi>x</mi></math>` +
+		`<a href="JaVaScRiPt:alert(1)">bad</a>` +
+		`<a href="&#106;avascript:alert(1)">encoded</a>` +
+		`<a href="/library">relative</a><a href="https://example.invalid/story">external</a><a href="//example.invalid/protocol-relative">bad-relative</a>` +
+		`<pre><code class="language-go">package safe</code></pre><!-- hidden -->`
+
+	got := safeStoryHTML.Sanitize(input)
+	lower := strings.ToLower(got)
+	for _, forbidden := range []string{
+		"<script", "onclick", "<iframe", "srcdoc", "<svg", "<math", "javascript:", "protocol-relative", "class=", "<!--",
+	} {
+		if strings.Contains(lower, forbidden) {
+			t.Errorf("sanitized HTML contains %q: %s", forbidden, got)
+		}
+	}
+	for _, allowed := range []string{
+		"<p>Safe <em>story</em>.</p>", `<a href="/library">relative</a>`,
+		`href="https://example.invalid/story"`, `rel="nofollow noreferrer"`,
+		"<pre><code>package safe</code></pre>",
+	} {
+		if !strings.Contains(got, allowed) {
+			t.Errorf("sanitized HTML does not contain %q: %s", allowed, got)
+		}
+	}
+	if got != safeStoryHTML.Sanitize(got) {
+		t.Fatalf("sanitisation is not deterministic: %q", got)
+	}
+}
+func TestIngestPreservesSupportedMarkdownSemantics(t *testing.T) {
+	markdown := "# Heading\n\nParagraph with **strong** and *emphasis*.\n\n> Quoted story.\n\n- Panda\n- Lantern\n\n1. First\n2. Second\n\n---\n\n```\nsafe code\n```\n\nline  \nbreak\n"
+	out, err := Ingest(Input{Slug: "supported-markdown", Title: "Supported Markdown", Markdown: markdown})
+	if err != nil {
+		t.Fatalf("Ingest returned error: %v", err)
+	}
+	for _, want := range []string{
+		"<h1", "<p>", "<strong>strong</strong>", "<em>emphasis</em>",
+		"<blockquote>", "<ul>", "<ol>", "<li>", "<hr", "<pre><code>", "<br",
+	} {
+		if !strings.Contains(out.RenderedHTML, want) {
+			t.Errorf("rendered HTML does not preserve %q: %s", want, out.RenderedHTML)
+		}
+	}
+}
+
 func TestCanonicalizeStoredBodyDoesNotReparseFrontmatter(t *testing.T) {
 	storedBody := "---\nnot: frontmatter\n---\n\nReadable paragraph.\n"
 	presetFrontmatter := map[string]any{

@@ -12,6 +12,7 @@ import (
 
 	"pandapages/api/internal/readercontract"
 
+	"github.com/microcosm-cc/bluemonday"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/parser"
@@ -20,6 +21,10 @@ import (
 )
 
 var slugRe = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+
+var safeStoryHTML = newSafeStoryHTMLPolicy()
+
+var safeStoryHrefPattern = regexp.MustCompile(`(?i)^(?:https?://[^[:space:]]+|/(?:[^/[:space:]][^[:space:]]*)?|\./[^[:space:]]*|\.\./[^[:space:]]*|\?[^[:space:]]*|#[^[:space:]]*)\z`)
 
 type Input struct {
 	Slug     string
@@ -113,7 +118,31 @@ func render(md string) (string, error) {
 	if err := mdr.Convert([]byte(md), &buf); err != nil {
 		return "", err
 	}
-	return buf.String(), nil
+	return safeStoryHTML.Sanitize(buf.String()), nil
+}
+
+// newSafeStoryHTMLPolicy is the persisted story-rendering allowlist. Markdown
+// is the only authoring format: Goldmark's safe default omits raw HTML, and
+// this policy is a second server-side boundary before rendered HTML is stored
+// or returned to the browser.
+func newSafeStoryHTMLPolicy() *bluemonday.Policy {
+	policy := bluemonday.NewPolicy()
+	policy.AllowElements(
+		"p", "h1", "h2", "h3", "h4", "h5", "h6",
+		"em", "strong", "blockquote", "ul", "ol", "li", "hr", "br", "pre", "code", "a",
+	)
+	// Goldmark generates heading IDs when AutoHeadingID is enabled. Raw HTML is
+	// disabled, so author Markdown cannot introduce arbitrary attributes.
+	policy.AllowAttrs("id").Matching(regexp.MustCompile("^[A-Za-z][A-Za-z0-9_-]*\\z")).OnElements(
+		"h1", "h2", "h3", "h4", "h5", "h6",
+	)
+	policy.AllowAttrs("href").Matching(safeStoryHrefPattern).OnElements("a")
+	policy.RequireParseableURLs(true)
+	policy.AllowRelativeURLs(true)
+	policy.AllowURLSchemes("http", "https")
+	policy.RequireNoFollowOnFullyQualifiedLinks(true)
+	policy.RequireNoReferrerOnFullyQualifiedLinks(true)
+	return policy
 }
 
 func wordCount(s string) int {

@@ -596,10 +596,36 @@ func (s *Store) ReaderStory(accountID, slug string) (model.ReaderStory, error) {
 	ctx, cancel := s.ctx()
 	defer cancel()
 
-	// One SQL statement gives all rows one PostgreSQL statement snapshot. A
-	// publication change cannot mix metadata from one version with segments
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return model.ReaderStory{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var storyID, versionID string
+	err = tx.QueryRowContext(ctx, `
+		SELECT id, published_version_id
+		FROM stories
+		WHERE account_id = $1
+		  AND slug = $2
+		  AND is_published = true
+		  AND published_version_id IS NOT NULL
+		FOR SHARE
+	`, accountID, slug).Scan(&storyID, &versionID)
+	if err != nil {
+		return model.ReaderStory{}, err
+	}
+	if _, err := validateStoredReaderVersion(ctx, tx, storyID, versionID, slug); err != nil {
+		if errors.Is(err, errStoredVersionInvalid) || errors.Is(err, sql.ErrNoRows) {
+			return model.ReaderStory{}, sql.ErrNoRows
+		}
+		return model.ReaderStory{}, err
+	}
+	// The story-row lock keeps the publication pointer stable while the selected
+	// immutable version is revalidated. This statement then returns one coherent
+	// PostgreSQL snapshot for that validated published version.
 	// from another.
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := tx.QueryContext(ctx, `
 		SELECT
 			st.slug,
 			st.title,
@@ -722,6 +748,9 @@ func (s *Store) ReaderStory(accountID, slug string) (model.ReaderStory, error) {
 	}
 	if _, err := readercontract.ValidateStoredSegmentIdentities(storedIdentities); err != nil {
 		return model.ReaderStory{}, fmt.Errorf("validate published Reader segment identities: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return model.ReaderStory{}, err
 	}
 	return story, nil
 }

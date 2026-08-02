@@ -173,6 +173,23 @@ test('preview and draft parsers expose structured counts and created/reused outc
   })
   assert.equal(preview.warnings[0].field, 'sourceUrl')
 
+  assert.throws(
+    () => api.parseAdminPreviewResponse({
+      slug: 'contract-story',
+      title: 'Contract Story',
+      author: null,
+      language: 'en-GB',
+      rights: {},
+      sourceUrl: null,
+      renderedHtml: '<iframe srcdoc="<script>alert(1)</script>"></iframe>',
+      segmentCount: 2,
+      wordCount: 5,
+      chapterCount: 0,
+      warnings: [],
+    }),
+    /canonical story HTML/,
+  )
+
   for (const outcome of ['created_story', 'created_version', 'reused']) {
     const draft = api.parseAdminDraftUpsertResponse({
       slug: 'contract-story',
