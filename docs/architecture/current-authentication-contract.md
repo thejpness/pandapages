@@ -1,11 +1,28 @@
 # Current authentication contract
 
-Status: current repository behavior as of 21 July 2026.
+Status: transitional repository behavior as of 2 August 2026.
 
-This document describes the authentication mechanism implemented today. The
-future identity direction is recorded separately in
-[ADR 0001](decisions/0001-supabase-auth-boundary-and-browser-session-model.md).
-No Supabase or Kratos component participates in this contract.
+Panda Pages now has an active Supabase-authenticated identity foundation, but
+the application route family has not yet been cut over. The two route families
+are deliberately disjoint:
+
+- `/api/auth/*` accepts only a verified Supabase bearer token and is described
+  in the [identity foundation](supabase-identity-foundation.md);
+- `/api/v1/*` remains on the temporary shared-passcode and signed-cookie flow
+  described below and ignores bearer tokens.
+
+No endpoint falls back between mechanisms. This separation is an implementation
+stage, not a permanent dual-auth product. The next authentication PR will move
+application routes to membership-backed bearer authority and delete the legacy
+flow. Kratos does not participate.
+
+## Bearer identity endpoints
+
+`POST /api/auth/onboard` and `GET /api/auth/me` require `Authorization: Bearer`
+and never accept `pp_session`. They return no-store finite identity and
+membership responses. Onboarding is the only state-creating operation and
+creates no profile. See the identity-foundation document for the complete JWT,
+JWKS, transaction, browser PKCE, and response contract.
 
 ## Endpoints
 
@@ -112,10 +129,8 @@ listener can answer. `/readyz` additionally proves PostgreSQL connectivity and
 the expected successful Goose schema state. A readiness 503 is an availability
 signal and is not evidence that a browser session is signed out.
 
-Any future readiness consumer for the version-15 API must follow the separately
-authorised
-[coordinated account-integrity rollout](../operations/postgresql-least-privilege-roles.md#migration-00015-coordinated-forward-rollout)
-before `/readyz` can be used as a gate.
+The current API requires the complete successful Goose chain through version
+16. A database at version 15 remains live but is not ready for this API build.
 The earlier
 [PR #30 readiness role-grant procedure](../operations/postgresql-least-privilege-roles.md#forward-readyz-role-grant-rollout)
 is historical evidence only and must not be reused as the current procedure.
@@ -129,9 +144,9 @@ The current admin API has three defense layers:
 3. an admin key injected by Traefik into `X-PP-Admin-Key` after the ingress
    boundary. The browser neither receives nor sends this key.
 
-Panda Pages does not yet have identity-linked application memberships or roles.
-The current admin boundary is transitional and must not be weakened during a
-future authentication migration.
+The identity schema now has `owner` and `adult` memberships, but the admin API
+does not use them yet. The current admin boundary is transitional and must not
+be weakened before identity-linked application authorisation replaces it.
 
 ## Limitations
 
@@ -146,8 +161,10 @@ is not active-profile selection and not a durable schema contract. See the
 
 ## Transition rule
 
-This mechanism is a temporary bridge. It may receive proportionate safety,
-reliability, and observability fixes, but it must not be expanded into a
-bespoke identity platform. Until a controlled future cutover, it remains the
-sole active authentication mechanism. A request must not be accepted through
-both this cookie and an external identity token.
+The cookie mechanism is temporary deletion-bound legacy code. It must not be
+extended, generalised, or wrapped in compatibility abstractions. The next PR
+will cut `/api/v1/*` over to membership-backed bearer authorisation and remove
+the passcode, signed cookies, legacy cookie clearing, oldest-account resolution,
+and implicit `Default` profile resolution. Existing development sessions and
+data receive no compatibility promise. At every intermediate point, each route
+has exactly one authentication mechanism.

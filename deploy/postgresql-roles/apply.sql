@@ -300,8 +300,11 @@ WHERE namespace.nspname = 'public'
 WITH runtime_table(name) AS (
   VALUES
     ('accounts'),
+    ('account_memberships'),
     ('child_profiles'),
     ('contributors'),
+    ('external_identities'),
+    ('principals'),
     ('profile_settings'),
     ('profiles'),
     ('prompt_profiles'),

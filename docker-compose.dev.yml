@@ -83,6 +83,9 @@ services:
       PP_SESSION_SECRET: ${PP_SESSION_SECRET}
       PP_ADMIN_KEY: ${PP_ADMIN_KEY}
       PP_LOG_LEVEL: ${PP_LOG_LEVEL:-debug}
+      PP_SUPABASE_ISSUER: ${SUPABASE_URL:?SUPABASE_URL must be the exact HTTPS Auth origin}/auth/v1
+      PP_SUPABASE_AUDIENCE: ${SUPABASE_JWT_AUDIENCE:?SUPABASE_JWT_AUDIENCE is required}
+      PP_SUPABASE_JWKS_URL: ${SUPABASE_URL:?SUPABASE_URL must be the exact HTTPS Auth origin}/auth/v1/.well-known/jwks.json
     volumes:
       - ./apps/api:/app
       - assets:/data/assets
@@ -123,6 +126,8 @@ services:
       target: dev
     environment:
       VITE_API_BASE: http://pandapages.localhost
+      VITE_SUPABASE_URL: ${SUPABASE_URL:?SUPABASE_URL must be the exact HTTPS Auth origin}
+      VITE_SUPABASE_PUBLISHABLE_KEY: ${SUPABASE_PUBLISHABLE_KEY:?SUPABASE_PUBLISHABLE_KEY is required}
     volumes:
       - ./apps/web:/app
       - web_node_modules:/app/node_modules

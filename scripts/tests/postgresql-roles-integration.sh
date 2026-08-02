@@ -208,17 +208,19 @@ SQL
 run_goose goose-up up
 grep -q 'OK.*00015_account_ownership_integrity.sql' \
   "$test_root/goose-up.out" "$test_root/goose-up.err"
+grep -q 'OK.*00016_identity_foundation.sql' \
+  "$test_root/goose-up.out" "$test_root/goose-up.err"
 
-run_goose goose-down down-to 14
+run_goose goose-down down-to 15
 rollback_shape=$(psql_as "$migration_role" --tuples-only --no-align \
-  --command="SELECT count(*) FILTER (WHERE table_name='reading_progress' AND column_name='account_id') || '|' || count(*) FILTER (WHERE table_name='profile_settings' AND column_name='account_id') FROM information_schema.columns WHERE table_schema='public';")
-[[ "$rollback_shape" == '0|0' ]]
+  --command="SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('principals','external_identities','account_memberships');")
+[[ "$rollback_shape" == '0' ]]
 
-run_goose goose-reup up-to 15
+run_goose goose-reup up-to 16
 reapplied_shape=$(psql_as "$migration_role" --tuples-only --no-align \
-  --command="SELECT count(*) FILTER (WHERE table_name='reading_progress' AND column_name='account_id') || '|' || count(*) FILTER (WHERE table_name='profile_settings' AND column_name='account_id') FROM information_schema.columns WHERE table_schema='public';")
-[[ "$reapplied_shape" == '1|1' ]]
-printf 'ok 2 - Goose applies migration 15 and rolls it down and up as a non-superuser owner session\n'
+  --command="SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('principals','external_identities','account_memberships');")
+[[ "$reapplied_shape" == '3' ]]
+printf 'ok 2 - Goose applies migration 16 and rolls it down and up as a non-superuser owner session\n'
 
 docker exec -i "$source_container" \
   psql -X --username="$admin_user" --dbname="$database" --set=ON_ERROR_STOP=1 <<SQL >/dev/null

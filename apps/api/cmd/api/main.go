@@ -13,11 +13,14 @@ import (
 	"syscall"
 	"time"
 
+	"pandapages/api/internal/appidentity"
 	"pandapages/api/internal/db"
 	"pandapages/api/internal/httpadmin"
 	"pandapages/api/internal/httpapi"
+	"pandapages/api/internal/httpidentity"
 	"pandapages/api/internal/httpmiddleware"
 	"pandapages/api/internal/session"
+	"pandapages/api/internal/supabaseauth"
 )
 
 const (
@@ -37,6 +40,7 @@ type runtimeConfig struct {
 	cookieSecure  bool
 	logLevel      slog.Level
 	sessionSigner *session.Manager
+	supabaseAuth  supabaseauth.Config
 }
 
 func loadRuntimeConfig(getenv func(string) string) (runtimeConfig, error) {
@@ -56,6 +60,16 @@ func loadRuntimeConfig(getenv func(string) string) (runtimeConfig, error) {
 		return runtimeConfig{}, fmt.Errorf("PP_SESSION_SECRET is invalid: %w", err)
 	}
 
+	supabaseConfig := supabaseauth.Config{
+		Provider: appidentity.ProviderSupabase,
+		Issuer:   getenv("PP_SUPABASE_ISSUER"),
+		Audience: getenv("PP_SUPABASE_AUDIENCE"),
+		JWKSURL:  getenv("PP_SUPABASE_JWKS_URL"),
+	}
+	if _, err := supabaseauth.New(supabaseConfig); err != nil {
+		return runtimeConfig{}, fmt.Errorf("Supabase bearer configuration is invalid: %w", err)
+	}
+
 	return runtimeConfig{
 		databaseURL:   getenv("DATABASE_URL"),
 		passcode:      passcode,
@@ -63,6 +77,7 @@ func loadRuntimeConfig(getenv func(string) string) (runtimeConfig, error) {
 		cookieSecure:  cookieSecure,
 		logLevel:      logLevel,
 		sessionSigner: sessionSigner,
+		supabaseAuth:  supabaseConfig,
 	}, nil
 }
 
@@ -109,9 +124,10 @@ func newServer(handler http.Handler) *http.Server {
 	}
 }
 
-func newRootHandler(public, admin http.Handler) http.Handler {
+func newRootHandler(public, identity, admin http.Handler) http.Handler {
 	root := http.NewServeMux()
 	root.Handle("/api/v1/admin/", admin)
+	root.Handle("/api/auth/", identity)
 	root.Handle("/", public)
 
 	// One outer boundary also observes ServeMux redirects and path cleaning.
@@ -135,12 +151,18 @@ func run() error {
 		Sessions: cfg.sessionSigner,
 	}, store)
 
+	verifier, err := supabaseauth.New(cfg.supabaseAuth)
+	if err != nil {
+		return fmt.Errorf("configure Supabase bearer verifier: %w", err)
+	}
+	identity := httpidentity.New(verifier, store)
+
 	admin := httpadmin.New(httpadmin.Config{
 		AdminKey: cfg.adminKey,
 		Sessions: cfg.sessionSigner,
 	}, store)
 
-	server := newServer(newRootHandler(public, admin))
+	server := newServer(newRootHandler(public, identity, admin))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 

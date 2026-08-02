@@ -42,13 +42,11 @@ documented() {
 # These are supported by direct process invocation or fixed by Compose rather
 # than imported from the root environment. They must remain documented without
 # pretending that root Compose consumes them.
-for direct_name in DATABASE_URL PP_COOKIE_SECURE VITE_API_BASE; do
+for direct_name in DATABASE_URL PP_COOKIE_SECURE VITE_API_BASE PP_SUPABASE_ISSUER PP_SUPABASE_AUDIENCE PP_SUPABASE_JWKS_URL VITE_SUPABASE_URL VITE_SUPABASE_PUBLISHABLE_KEY; do
   documented "$direct_name" || die "$direct_name is not documented"
 done
 
-# No future identity-provider configuration belongs in the current template.
-if grep -Eq '^[[:space:]#]*SUPABASE_[A-Z0-9_]*=' .env.example; then
-  die 'inactive Supabase configuration is present'
-fi
-
+for active_name in SUPABASE_URL SUPABASE_PUBLISHABLE_KEY SUPABASE_JWT_AUDIENCE; do
+  grep -Eq "^${active_name}=" .env.example || die "$active_name is not active"
+done
 printf 'env_example_contract=passed\n'

@@ -63,6 +63,12 @@ jobs:
       - name: Build migration image for Reader contract tests
         run: docker build --target migrate --tag pandapages-migrate:reader-test .
 
+      - name: Test identity migration and concurrent onboarding
+        working-directory: .
+        env:
+          PP_IDENTITY_STORE_TEST_MIGRATION_IMAGE: pandapages-migrate:reader-test
+        run: scripts/tests/identity-store-integration.sh
+
       - name: Test Reader 2 migrations, Store, and HTTP contract
         working-directory: .
         run: scripts/tests/reader-store-integration.sh
@@ -145,6 +151,9 @@ jobs:
       PP_ADMIN_KEY: ci-only-admin-key-not-for-production-00000000
       PP_PASSCODE: "123456"
       PP_SESSION_SECRET: ci-only-session-secret-not-for-production-00000000
+      SUPABASE_URL: https://auth-ci.invalid
+      SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci-only-not-for-production
+      SUPABASE_JWT_AUDIENCE: authenticated
     steps:
       - name: Check out repository with history
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -197,6 +206,7 @@ jobs:
             scripts/tests/account-store-integration.sh \
             scripts/tests/account-integrity-migration-integration.sh \
             scripts/tests/env-example-contract.sh \
+            scripts/tests/identity-store-integration.sh \
             scripts/tests/postgresql-api-role-smoke.sh \
             scripts/tests/postgresql-api-role-session-contract.sh \
             scripts/tests/postgresql-backup-integration.sh \
@@ -320,7 +330,11 @@ jobs:
           push: false
           load: true
           tags: pandapages-web:ci
-          build-args: VITE_API_BASE=
+          build-args: |
+            VITE_API_BASE=
+            VITE_SUPABASE_URL=https://auth-ci.invalid
+            VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_ci-only-not-for-production
+            SUPABASE_AUTH_ORIGIN=https://auth-ci.invalid
           cache-from: type=gha,scope=pandapages-web
           cache-to: type=gha,mode=max,scope=pandapages-web,ignore-error=true
 
@@ -347,7 +361,7 @@ jobs:
             sleep 1
           done
 
-          readonly expected_csp="Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self'; font-src 'self'; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
+          readonly expected_csp="Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self'; font-src 'self'; connect-src 'self' https://auth-ci.invalid; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
           readonly shell_headers="$(curl --fail --silent --show-error --head http://127.0.0.1:18080/)"
           readonly worker_headers="$(curl --fail --silent --show-error --head http://127.0.0.1:18080/sw.js)"
           grep --fixed-strings --quiet "$expected_csp" <<<"$shell_headers"

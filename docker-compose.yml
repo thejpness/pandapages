@@ -59,6 +59,9 @@ services:
       PP_SESSION_SECRET: ${PP_SESSION_SECRET}
       PP_ADMIN_KEY: ${PP_ADMIN_KEY}
       PP_COOKIE_SECURE: "true"
+      PP_SUPABASE_ISSUER: ${SUPABASE_URL:?SUPABASE_URL must be the exact HTTPS Auth origin}/auth/v1
+      PP_SUPABASE_AUDIENCE: ${SUPABASE_JWT_AUDIENCE:?SUPABASE_JWT_AUDIENCE is required}
+      PP_SUPABASE_JWKS_URL: ${SUPABASE_URL:?SUPABASE_URL must be the exact HTTPS Auth origin}/auth/v1/.well-known/jwks.json
     volumes:
       - assets:/data/assets
     networks: [traefik, internal]
@@ -97,6 +100,9 @@ services:
       target: prod
       args:
         VITE_API_BASE: ""
+        VITE_SUPABASE_URL: ${SUPABASE_URL:?SUPABASE_URL must be the exact HTTPS Auth origin}
+        VITE_SUPABASE_PUBLISHABLE_KEY: ${SUPABASE_PUBLISHABLE_KEY:?SUPABASE_PUBLISHABLE_KEY is required}
+        SUPABASE_AUTH_ORIGIN: ${SUPABASE_URL:?SUPABASE_URL must be the exact HTTPS Auth origin}
     restart: unless-stopped
     depends_on: [api]
     networks: [traefik]

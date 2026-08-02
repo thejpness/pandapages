@@ -45,11 +45,12 @@ rendering path.
 
 ## Production browser policy
 
-`apps/web/nginx.conf` owns production shell headers. The policy is same-origin
-for script, stylesheet, font, network, worker, and manifest resources; it
-blocks plugins, framing, arbitrary base URLs, and form submission. It contains
-neither `unsafe-inline` nor `unsafe-eval` in `script-src`, no wildcard source,
-and no remote origin.
+`apps/web/nginx.conf` owns production shell headers. Script, stylesheet,
+font, worker, manifest, and application API resources remain same-origin.
+`connect-src` adds exactly the configured HTTPS Supabase Auth origin for the
+official browser session lifecycle. The policy blocks plugins, framing,
+arbitrary base URLs, and form submission; contains neither `unsafe-inline` nor
+`unsafe-eval` in `script-src`; and has no wildcard or other remote source.
 
 The one limited exception is `style-src-attr 'unsafe-inline'`, separate from
 `style-src 'self'`. Existing Vue presentation uses inline CSS variables and
@@ -73,8 +74,10 @@ set by production Nginx. HSTS remains the HTTPS-terminating deployment
 owner's decision. COOP and CORP are deferred because future OAuth popup and
 redirect behaviour must be validated before constraining those boundaries.
 
-Future Supabase browser authentication is intentionally not active here. Its
-activation PR must amend `connect-src` with only the configured Supabase Auth
-origin(s), verify callback and refresh flows under this policy, and add no
-broader remote source. Browser-held Supabase credentials remain blocked on this
-CSP and safe-rendering prerequisite being present first.
+The identity-foundation PR activates the official Supabase browser client only
+for the isolated `/api/auth/*` flow. Production image construction replaces one
+validated `__SUPABASE_AUTH_ORIGIN__` placeholder in each inherited CSP header
+with the same exact project origin used by the client. Callback, refresh, and
+logout browser tests intercept that origin; no live provider is required in CI.
+No script, style, frame, object, base, wildcard, or broader connect exception
+was added.

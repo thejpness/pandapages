@@ -1,11 +1,15 @@
 # ADR 0001: Supabase Auth boundary and browser-session model
 
-- Status: Accepted for future implementation
+- Status: Accepted; staged implementation in progress
 - Date: 21 July 2026
 
-This decision introduces no Supabase runtime capability. The current
-shared-passcode and signed-cookie mechanism remains the sole active Panda Pages
-authentication mechanism until a separately reviewed, controlled cutover.
+The decision text below records the state and consequences accepted on its date.
+Implementation is now staged: strict CSP and safe rendering are active, and the
+provider-neutral principal/identity/membership model, RS256/ES256 bearer
+verifier, `/api/auth/*` foundation, and official browser PKCE flow are active.
+`/api/v1/*` remains temporarily cookie-only until the next PR performs the
+membership-backed bearer cutover and deletes the legacy mechanism. See the
+[current implementation contract](../supabase-identity-foundation.md).
 
 ## Context
 
@@ -28,31 +32,29 @@ persona within an account, not an external authentication identity.
 
 ## Decision
 
-- Supabase Auth is the selected future external identity provider.
+- Supabase Auth is the selected external identity provider.
 - Supabase will be used for authentication only.
 - Panda Pages retains its Vue/PWA frontend, Go API, and application PostgreSQL
   database.
 - Panda Pages continues to own accounts, roles and permissions, profiles,
   optional profile PINs, stories, reading progress, preferences, and admin
   authorisation.
-- The future frontend integration will use the standard browser Supabase
-  session with the Proof Key for Code Exchange (PKCE) flow.
-- The frontend will eventually send short-lived Supabase access tokens to the
-  Go API. The Go API will validate them and perform all application
-  authorisation.
+- The frontend uses the standard browser Supabase session with PKCE for the
+  isolated identity flow. It sends short-lived access tokens only to
+  `/api/auth/*`; the Go API verifies them before resolving Panda Pages state.
 - Supabase Database, PostgREST, Storage, and Row Level Security are outside the
   selected architecture.
 - Kratos will not be revived.
-- The current passcode and signed-cookie session remains the sole active
-  mechanism until controlled cutover. A request must never be authorised
-  ambiguously by both that cookie and a Supabase token.
+- During staged implementation, every route has exactly one authentication
+  mechanism. `/api/auth/*` is bearer-only; `/api/v1/*` remains temporarily
+  cookie-only until the next PR deletes the legacy mechanism.
 - Children's profiles will not become Supabase users.
-- Strict Content Security Policy and the associated XSS-risk reduction are
-  prerequisites for browser-token cutover, but are deferred from this
-  readiness change.
-- Provider-neutral identity mapping and an explicit existing-account claim
-  process must precede cutover. Neither an email match nor the current
-  oldest-account fallback is sufficient proof of ownership.
+- Strict CSP and safe story rendering are active prerequisites for the limited
+  browser session now implemented. The sole remote CSP source is the configured
+  Supabase Auth origin in `connect-src`.
+- Provider-neutral identity mapping is active. Neither email matching nor the
+  legacy oldest-account fallback grants membership; new onboarding creates its
+  own account and no profile.
 
 ## Alternatives considered
 
@@ -95,12 +97,12 @@ authorisation for every application operation.
 - XSS prevention becomes more important than it is with the current
   HTTP-only session cookie. CSP and a review of script and injection boundaries
   are cutover prerequisites.
-- The Go API will need exact issuer and audience validation, an algorithm
-  allowlist, temporal-claim checks, cached JWKS retrieval, unknown-key refresh,
-  and safe key-rotation behavior. This ADR does not implement them.
-- Panda Pages needs provider-neutral external-identity mapping, application
-  membership/role resolution, race-safe provisioning, and an explicit claim
-  procedure for existing accounts before accepting external tokens.
+- The Go API now implements exact issuer/audience/temporal validation, an
+  RS256/ES256 allowlist, cached JWKS retrieval, bounded unknown-key refresh,
+  and rotation handling for the isolated identity route family.
+- Panda Pages now has provider-neutral identity mapping, application
+  memberships/roles, and race-safe new-account provisioning. It does not infer
+  authority from email or attach new identities to legacy accounts.
 - Production email requires separately configured custom SMTP. Google and
   Facebook require separately governed provider applications, credentials,
   and allowlisted redirects.
@@ -115,7 +117,8 @@ authorisation for every application operation.
 
 ## Deferred work
 
-This decision does not add Supabase packages, configuration, projects, local
-containers, callbacks, JWT/JWKS validation, bearer authentication, identity
-tables, account claiming, membership roles, profile selection or PINs, CSP,
-social providers, email flows, or current-auth removal.
+Remaining work is the membership-backed `/api/v1/*` cutover and deletion of
+the shared passcode, signed cookies, oldest-account resolution, implicit
+`Default` profile resolution, and temporary identity-entry labelling. Account
+and profile selection, PINs, invitations, provider operations, email flows,
+production configuration, data migration, and deployment remain separate work.

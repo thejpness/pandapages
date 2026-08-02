@@ -26,6 +26,9 @@ common_environment=(
   'PP_ADMIN_KEY=ci-only-admin-key-not-for-production-00000000'
   'PP_PASSCODE=ci-only-passcode-not-for-production'
   'PP_SESSION_SECRET=ci-only-session-secret-not-for-production-00000000'
+  'SUPABASE_URL=https://auth-ci.invalid'
+  'SUPABASE_PUBLISHABLE_KEY=sb_publishable_ci-only-not-for-production'
+  'SUPABASE_JWT_AUDIENCE=authenticated'
 )
 
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/pandapages-role-contract.XXXXXX")
@@ -69,6 +72,9 @@ printf 'ok 1 - production and development Compose resolve with separate generate
 for compose_file in docker-compose.yml docker-compose.dev.yml; do
   expect_compose_failure "$compose_file" APP_DATABASE_URL
   expect_compose_failure "$compose_file" MIGRATION_DATABASE_URL
+  expect_compose_failure "$compose_file" SUPABASE_URL
+  expect_compose_failure "$compose_file" SUPABASE_PUBLISHABLE_KEY
+  expect_compose_failure "$compose_file" SUPABASE_JWT_AUDIENCE
 done
 printf 'ok 2 - runtime and migration credentials each fail closed when absent\n'
 
@@ -76,6 +82,9 @@ for config in "$production_json" "$development_json"; do
   jq -e --arg app "$app_url" --arg migration "$migration_url" '
     .services.api.environment.DATABASE_URL == $app
     and .services.api.environment.PGAPPNAME == "pandapages-api"
+    and .services.api.environment.PP_SUPABASE_ISSUER == "https://auth-ci.invalid/auth/v1"
+    and .services.api.environment.PP_SUPABASE_AUDIENCE == "authenticated"
+    and .services.api.environment.PP_SUPABASE_JWKS_URL == "https://auth-ci.invalid/auth/v1/.well-known/jwks.json"
     and .services.migrate.environment.GOOSE_DBSTRING == $migration
     and .services.migrate.environment.GOOSE_DRIVER == "postgres"
     and .services.migrate.environment.GOOSE_MIGRATION_DIR == "/migrations"
@@ -92,6 +101,8 @@ for config in "$production_json" "$development_json"; do
     and (.services.postgres.healthcheck.test | join(" ") | contains("pandapages_app"))
   ' "$config" >/dev/null
 done
+jq -e ' .services.web.build.args.VITE_SUPABASE_URL == "https://auth-ci.invalid" and .services.web.build.args.VITE_SUPABASE_PUBLISHABLE_KEY == "sb_publishable_ci-only-not-for-production" and .services.web.build.args.SUPABASE_AUTH_ORIGIN == "https://auth-ci.invalid" ' "$production_json" >/dev/null
+jq -e ' .services.web.environment.VITE_SUPABASE_URL == "https://auth-ci.invalid" and .services.web.environment.VITE_SUPABASE_PUBLISHABLE_KEY == "sb_publishable_ci-only-not-for-production" ' "$development_json" >/dev/null
 jq -e --arg admin "$admin_password" ' .services.postgres.environment.POSTGRES_PASSWORD == $admin ' "$production_json" >/dev/null
 jq -e ' .services.postgres.environment.POSTGRES_PASSWORD_FILE == "/run/secrets/pg_password" and (.services.postgres.environment | has("POSTGRES_PASSWORD") | not) ' "$development_json" >/dev/null
 printf 'ok 3 - API, migration, and administrative containers receive only their own credential\n'
@@ -99,6 +110,7 @@ printf 'ok 3 - API, migration, and administrative containers receive only their 
 if APP_DATABASE_URL='' MIGRATION_DATABASE_URL="$migration_url" \
   POSTGRES_PASSWORD="$admin_password" PP_ADMIN_IPS=192.0.2.1/32 \
   PP_ADMIN_KEY=test PP_PASSCODE=test PP_SESSION_SECRET=test \
+  SUPABASE_URL=https://auth-ci.invalid SUPABASE_PUBLISHABLE_KEY=sb_publishable_ci-only-not-for-production SUPABASE_JWT_AUDIENCE=authenticated \
   docker compose --env-file /dev/null -f docker-compose.yml config --quiet \
   >"$test_root/empty-runtime.out" 2>"$test_root/empty-runtime.err"; then
   printf 'Production Compose accepted an empty runtime database URL\n' >&2
@@ -107,6 +119,7 @@ fi
 if MIGRATION_DATABASE_URL='' APP_DATABASE_URL="$app_url" \
   POSTGRES_PASSWORD="$admin_password" PP_ADMIN_IPS=192.0.2.1/32 \
   PP_ADMIN_KEY=test PP_PASSCODE=test PP_SESSION_SECRET=test \
+  SUPABASE_URL=https://auth-ci.invalid SUPABASE_PUBLISHABLE_KEY=sb_publishable_ci-only-not-for-production SUPABASE_JWT_AUDIENCE=authenticated \
   docker compose --env-file /dev/null -f docker-compose.yml config --quiet \
   >"$test_root/empty-migration.out" 2>"$test_root/empty-migration.err"; then
   printf 'Production Compose accepted an empty migration database URL\n' >&2
