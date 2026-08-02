@@ -72,8 +72,9 @@ export default withVueTs(
       'src/components/admin/story-studio/StoryPreviewPane.vue',
     ],
     rules: {
-      // Story HTML is rendered by Goldmark's safe mode in the API. Regression
-      // tests reject raw HTML and dangerous URL protocols before persistence.
+      // Story HTML is an opaque server-produced API contract. Goldmark omits raw
+      // Markdown HTML, the Go allowlist sanitises rendered output, and stored
+      // versions are revalidated before Reader or preview delivery.
       'vue/no-v-html': 'off',
     },
   },

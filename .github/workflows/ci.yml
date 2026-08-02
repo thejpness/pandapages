@@ -161,6 +161,9 @@ jobs:
       - name: Validate current environment template
         run: bash scripts/tests/env-example-contract.sh
 
+      - name: Validate production web security headers
+        run: scripts/tests/web-security-headers-contract.sh
+
       - name: Confirm production admin allowlist fails closed
         shell: bash
         run: |
@@ -202,6 +205,7 @@ jobs:
             scripts/tests/progress-store-integration.sh \
             scripts/tests/reader-store-integration.sh \
             scripts/tests/postgresql-roles-contract.sh \
+            scripts/tests/web-security-headers-contract.sh \
             scripts/tests/postgresql-roles-integration.sh \
             scripts/dev/seed-test-data.sh
           scripts/postgresql-backup.sh --help >/dev/null
@@ -314,10 +318,44 @@ jobs:
           file: apps/web/Dockerfile
           target: prod
           push: false
+          load: true
           tags: pandapages-web:ci
           build-args: VITE_API_BASE=
           cache-from: type=gha,scope=pandapages-web
           cache-to: type=gha,mode=max,scope=pandapages-web,ignore-error=true
+
+      - name: Verify production web image security headers
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          readonly container_name=pandapages-web-security-header-ci
+          cleanup() {
+            docker rm --force "$container_name" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          docker run --detach --name "$container_name" --publish 127.0.0.1:18080:8080 pandapages-web:ci
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error http://127.0.0.1:18080/ >/dev/null; then
+              break
+            fi
+            if [[ "$attempt" -eq 30 ]]; then
+              echo "production web image did not become ready" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+
+          readonly expected_csp="Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self'; font-src 'self'; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
+          readonly shell_headers="$(curl --fail --silent --show-error --head http://127.0.0.1:18080/)"
+          readonly worker_headers="$(curl --fail --silent --show-error --head http://127.0.0.1:18080/sw.js)"
+          grep --fixed-strings --quiet "$expected_csp" <<<"$shell_headers"
+          grep --fixed-strings --quiet "$expected_csp" <<<"$worker_headers"
+          grep --fixed-strings --quiet "X-Content-Type-Options: nosniff" <<<"$shell_headers"
+          grep --fixed-strings --quiet "Referrer-Policy: strict-origin-when-cross-origin" <<<"$shell_headers"
+          grep --fixed-strings --quiet "Permissions-Policy: camera=(), geolocation=(), microphone=(), payment=(), usb=()" <<<"$shell_headers"
+
 
       - name: Build migration image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0

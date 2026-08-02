@@ -14,6 +14,20 @@ export function isReaderRoute(pathname: string): boolean {
   return /^\/read\/[^/]+\/?$/.test(pathname)
 }
 
+export function markReaderThemeBoot(
+  pathname: string = window.location.pathname,
+  root: HTMLElement = document.documentElement,
+): void {
+  if (isReaderRoute(pathname)) root.dataset.readerThemeBooting = 'true'
+}
+
+// Loaded as the first external module in index.html so direct Reader navigation
+// can hide the shell until the persisted theme is applied, without an inline
+// script that would require a CSP exception.
+if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+  markReaderThemeBoot()
+}
+
 export function applyReaderTheme(
   value: unknown,
   root: HTMLElement = document.documentElement,

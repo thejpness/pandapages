@@ -929,8 +929,8 @@ func TestAccountStoreIntegration(t *testing.T) {
 		if err != nil || invalidIdentity.UnavailableItemCount != 4 || len(invalidIdentity.Items) != 1 {
 			t.Fatalf("malformed identity quarantine = %#v / %v", invalidIdentity, err)
 		}
-		if _, err := store.ReaderStory(accountA, "shared-story"); err == nil || !strings.Contains(err.Error(), "segment identities") {
-			t.Fatalf("ReaderStory malformed identity error = %v", err)
+		if _, err := store.ReaderStory(accountA, "shared-story"); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("ReaderStory malformed identity error = %v, want not-found quarantine", err)
 		}
 		if _, err := adminDB.Exec(`UPDATE story_segments SET chapter_occurrence = 1 WHERE story_version_id = $1 AND ordinal = 4`, versionA2); err != nil {
 			t.Fatalf("restore chapter propagation fixture: %v", err)

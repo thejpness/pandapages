@@ -1,3 +1,113 @@
+declare const safeRenderedStoryHTMLBrand: unique symbol
+
+// This opaque type marks HTML that crossed the API canonical story-rendering
+// contract. Only API response parsers may construct it; Vue v-html sinks must
+// not accept arbitrary caller-provided strings.
+export type SafeRenderedStoryHTML = string & {
+  readonly [safeRenderedStoryHTMLBrand]: 'Panda Pages canonical story HTML'
+}
+
+const safeStoryElements = new Set([
+  'p',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'em',
+  'strong',
+  'blockquote',
+  'ul',
+  'ol',
+  'li',
+  'hr',
+  'br',
+  'pre',
+  'code',
+  'a',
+])
+
+function isCanonicalHeadingID(value: string): boolean {
+  return (
+    /^[A-Za-z]/.test(value) &&
+    [...value].every((character) => /[A-Za-z0-9_-]/.test(character))
+  )
+}
+
+function isSafeStoryLink(value: string): boolean {
+  if (value.startsWith('//')) return false
+  try {
+    const url = new URL(value, window.location.origin)
+    if (
+      value === '/' ||
+      value.startsWith('/') ||
+      value.startsWith('./') ||
+      value.startsWith('../') ||
+      value.startsWith('?') ||
+      value.startsWith('#')
+    ) {
+      return url.origin === window.location.origin
+    }
+    return (
+      (url.protocol === 'http:' || url.protocol === 'https:') &&
+      /^https?:\/\//i.test(value)
+    )
+  } catch {
+    return false
+  }
+}
+
+function isSafeRenderedStoryHTML(value: string): boolean {
+  if (typeof document === 'undefined') {
+    // Panda Pages is a browser application: the detached-fragment branch below
+    // is the security boundary. This conservative fallback exists only so the
+    // Node API-shape tests can exercise their surrounding synchronous parsers;
+    // browser tests own the executable HTML validation contract.
+    if (/<!--|<!doctype|<\?|<\s*\/?\s*(?:html|head|body|script|style|title|iframe|object|embed|form|input|button|textarea|select|link|meta|base|svg|math)\b/iu.test(value)) {
+      return false
+    }
+    for (const match of value.matchAll(/<\s*\/?\s*([a-z][a-z0-9-]*)\b/giu)) {
+      const name = match[1]
+      if (!name || !safeStoryElements.has(name.toLowerCase())) return false
+    }
+    return !/(on[a-z]+\s*=|(?:javascript|vbscript|data)\s*:|srcdoc\s*=|style\s*=|href\s*=\s*["']?\s*\/\/)/iu.test(value)
+  }
+
+  const context = document.createElement('div')
+  const range = document.createRange()
+  range.selectNodeContents(context)
+  const fragment = range.createContextualFragment(value)
+  const validate = (node: Node): boolean => {
+    if (node.nodeType === Node.TEXT_NODE) return true
+    if (node.nodeType !== Node.ELEMENT_NODE) return false
+    const element = node as HTMLElement
+    if (element.namespaceURI !== 'http://www.w3.org/1999/xhtml') return false
+    const name = element.localName.toLowerCase()
+    if (!safeStoryElements.has(name)) return false
+    for (const attribute of element.attributes) {
+      if (attribute.namespaceURI !== null) return false
+      const attributeName = attribute.name.toLowerCase()
+      if (/^h[1-6]$/.test(name) && attributeName === 'id' && isCanonicalHeadingID(attribute.value)) continue
+      if (name === 'a' && attributeName === 'href' && isSafeStoryLink(attribute.value)) continue
+      if (name === 'a' && attributeName === 'rel') {
+        const tokens = attribute.value.split(/\s+/).filter(Boolean)
+        if (tokens.length > 0 && tokens.every((token) => token === 'nofollow' || token === 'noreferrer')) continue
+      }
+      return false
+    }
+    return [...node.childNodes].every(validate)
+  }
+  return [...fragment.childNodes].every(validate)
+}
+
+export function parseSafeRenderedStoryHTML(value: unknown): SafeRenderedStoryHTML {
+  if (typeof value !== 'string' || !isSafeRenderedStoryHTML(value)) {
+    throw new Error('Invalid canonical story HTML')
+  }
+  return value as SafeRenderedStoryHTML
+}
+
 export type ReaderSegmentKind = 'heading' | 'paragraph' | 'other'
 
 export type ReaderStorySegment = {
@@ -8,7 +118,7 @@ export type ReaderStorySegment = {
   contentOccurrence: number
   chapterKey: string | null
   chapterOccurrence: number | null
-  renderedHtml: string
+  renderedHtml: SafeRenderedStoryHTML
   wordCount: number
 }
 

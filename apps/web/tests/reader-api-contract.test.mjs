@@ -63,6 +63,37 @@ test('Reader payload boundary accepts one coherent strict response', async () =>
   }
 })
 
+test('Reader payload boundary rejects unsafe rendered HTML envelopes', async () => {
+  const api = await apiModule()
+  for (const renderedHtml of [
+    '<script>alert(1)</script>',
+    '<style>body { display: none }</style>',
+    '<link rel="stylesheet" href="https://example.invalid/story.css">',
+    '<meta http-equiv="refresh" content="0;url=https://example.invalid/">',
+    '<base href="https://example.invalid/">',
+    '<title>Hostile story title</title>',
+    '<!-- hidden payload --><p>Story</p>',
+    '<marquee>Unknown element</marquee>',
+    '<p onclick="alert(1)">unsafe</p>',
+    '<iframe srcdoc="<script>alert(1)</script>"></iframe>',
+    '<svg onload="alert(1)"></svg>',
+    '<math><mi>x</mi></math>',
+    '<a href="javascript:alert(1)">unsafe link</a>',
+    '<a href="//example.invalid/escape">protocol relative</a>',
+    '<p style="background:url(javascript:alert(1))">unsafe CSS</p>',
+  ]) {
+    assert.throws(
+      () => api.parseReaderStoryPayload(validStory({ segments: [validSegment({ renderedHtml })] })),
+      /canonical story HTML/,
+    )
+  }
+
+  const safe = validStory({
+    segments: [validSegment({ renderedHtml: '<p>Safe <em>UTF-8 世界</em></p>' })],
+  })
+  assert.deepEqual(api.parseReaderStoryPayload(safe), safe)
+})
+
 test('getReaderStory makes one coherent request and rejects malformed success', async (t) => {
   const api = await apiModule()
   const originalFetch = globalThis.fetch
