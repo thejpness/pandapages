@@ -8,6 +8,7 @@ set -euo pipefail
 umask 077
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
+source "$repo_root/scripts/tests/postgresql-stable-readiness.sh"
 seed_script="$repo_root/scripts/dev/seed-test-data.sh"
 migration_image=${PP_FIXTURE_TEST_MIGRATION_IMAGE:-pandapages-migrate:role-test}
 api_image=${PP_FIXTURE_TEST_API_IMAGE:-pandapages-api:role-test}
@@ -825,20 +826,8 @@ docker run --detach \
   --health-retries 60 \
   "$postgres_image" >/dev/null
 
-health=starting
-for ((attempt = 0; attempt < 60; attempt++)); do
-  health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$postgres_container")
-  [[ "$health" == healthy ]] && break
-  [[ "$health" != unhealthy ]] || {
-    printf 'Disposable fixture PostgreSQL became unhealthy\n' >&2
-    exit 1
-  }
-  sleep 1
-done
-[[ "$health" == healthy ]] || {
-  printf 'Timed out waiting for disposable fixture PostgreSQL\n' >&2
-  exit 1
-}
+wait_for_stable_postgres "$postgres_container" "$database_user" "$database" \
+  'Disposable fixture PostgreSQL'
 
 psql_query() {
   local statement=$1

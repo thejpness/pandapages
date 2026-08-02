@@ -4,6 +4,7 @@ set -euo pipefail
 umask 077
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
+source "$repo_root/scripts/tests/postgresql-stable-readiness.sh"
 readonly repo_root
 readonly migration_image=${PP_ACCOUNT_INTEGRITY_TEST_MIGRATION_IMAGE:-pandapages-migrate:role-test}
 readonly api_image=${PP_ACCOUNT_INTEGRITY_TEST_API_IMAGE:-pandapages-api:role-test}
@@ -117,20 +118,8 @@ docker run --detach \
   "$postgres_image" >/dev/null
 postgres_created=true
 
-health=starting
-for _ in {1..60}; do
-  health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$postgres_container")
-  [[ "$health" == healthy ]] && break
-  [[ "$health" != unhealthy ]] || {
-    printf 'Disposable account-integrity PostgreSQL became unhealthy\n' >&2
-    exit 1
-  }
-  sleep 1
-done
-[[ "$health" == healthy ]] || {
-  printf 'Disposable account-integrity PostgreSQL did not become healthy\n' >&2
-  exit 1
-}
+wait_for_stable_postgres "$postgres_container" "$database_user" postgres \
+  'Disposable account-integrity PostgreSQL'
 
 valid_database_name() {
   [[ "$1" =~ ^[a-z][a-z0-9_]{0,62}$ ]]

@@ -2,6 +2,7 @@
 set -euo pipefail
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
+source "$repo_root/scripts/tests/postgresql-stable-readiness.sh"
 readonly repo_root
 readonly database_name='pandapages_progress_store_test'
 readonly database_user='postgres'
@@ -59,20 +60,8 @@ docker run --detach \
   "$postgres_image" >/dev/null
 container_created=true
 
-health=starting
-for _ in {1..60}; do
-  health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_name")
-  [[ "$health" == healthy ]] && break
-  [[ "$health" != unhealthy ]] || {
-    printf 'disposable PostgreSQL became unhealthy\n' >&2
-    exit 1
-  }
-  sleep 1
-done
-[[ "$health" == healthy ]] || {
-  printf 'disposable PostgreSQL did not become healthy\n' >&2
-  exit 1
-}
+wait_for_stable_postgres "$container_name" "$database_user" "$database_name" \
+  'Disposable progress-store PostgreSQL'
 
 published_address=$(docker port "$container_name" 5432/tcp)
 published_port=${published_address##*:}
