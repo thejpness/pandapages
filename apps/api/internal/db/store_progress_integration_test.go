@@ -282,7 +282,7 @@ func TestProgressStoreIntegration(t *testing.T) {
 		assertProgressState(t, gotB, 1, locatorB, 0.4)
 
 		var profileA string
-		if err := adminDB.QueryRow(`SELECT id FROM profiles WHERE account_id = $1 AND is_default`, accountA).Scan(&profileA); err != nil {
+		if err := adminDB.QueryRow(`SELECT id FROM profiles WHERE account_id = $1 AND name = 'Default'`, accountA).Scan(&profileA); err != nil {
 			t.Fatalf("read account A default profile: %v", err)
 		}
 		if _, err := adminDB.Exec(`
@@ -359,14 +359,11 @@ func setupProgressIntegrationSchema(t *testing.T, database *sql.DB) {
 			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 			account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
 			name text NOT NULL,
-			is_default boolean NOT NULL DEFAULT false,
 			created_at timestamptz NOT NULL DEFAULT now(),
 			updated_at timestamptz NOT NULL DEFAULT now(),
 			UNIQUE (account_id, name),
 			UNIQUE (id, account_id)
 		)`,
-		`CREATE UNIQUE INDEX profiles_one_default_per_account_idx
-			ON profiles (account_id) WHERE is_default`,
 		`CREATE TABLE stories (
 			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 			account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,

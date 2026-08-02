@@ -233,210 +233,20 @@ func TestAccountStoreIntegration(t *testing.T) {
 			}
 		}
 
-		var profileCount, defaultCount, namedDefaultCount int
+		var profileCount, namedDefaultCount int
 		if err := adminDB.QueryRow(`
 			SELECT
 				count(*),
-				count(*) FILTER (WHERE is_default),
-				count(*) FILTER (WHERE name = 'Default' AND is_default)
+				count(*) FILTER (WHERE name = 'Default')
 			FROM profiles
 			WHERE account_id = $1
-		`, accountID).Scan(&profileCount, &defaultCount, &namedDefaultCount); err != nil {
+		`, accountID).Scan(&profileCount, &namedDefaultCount); err != nil {
 			t.Fatalf("count concurrent defaults: %v", err)
 		}
-		if profileCount != 1 || defaultCount != 1 || namedDefaultCount != 1 {
-			t.Fatalf("concurrent profiles/defaults/named defaults = %d/%d/%d, want 1/1/1", profileCount, defaultCount, namedDefaultCount)
+		if profileCount != 1 || namedDefaultCount != 1 {
+			t.Fatalf("concurrent profiles/named defaults = %d/%d, want 1/1", profileCount, namedDefaultCount)
 		}
 
-	})
-
-	t.Run("invalid default marker repair is concurrent and singular", func(t *testing.T) {
-		resetAccountIntegrationData(t, adminDB)
-		const (
-			accountID       = "34343434-3434-4343-8343-343434343434"
-			markedProfile   = "34343434-1000-4000-8000-000000000001"
-			otherProfile    = "34343434-1000-4000-8000-000000000002"
-			progressStory   = "34343434-3000-4000-8000-000000000001"
-			progressVersion = "34343434-4000-4000-8000-000000000001"
-		)
-		if _, err := adminDB.Exec(`INSERT INTO accounts (id, name) VALUES ($1, 'Concurrent repair')`, accountID); err != nil {
-			t.Fatalf("insert repair account: %v", err)
-		}
-		if _, err := adminDB.Exec(`
-			INSERT INTO profiles (id, account_id, name, is_default, created_at) VALUES
-				($1, $3, 'Incorrect marker', true, '2026-01-01T00:00:00Z'),
-				($2, $3, 'Unrelated reader', false, '2026-01-02T00:00:00Z')
-		`, markedProfile, otherProfile, accountID); err != nil {
-			t.Fatalf("insert repair profiles: %v", err)
-		}
-		if _, err := adminDB.Exec(`
-			INSERT INTO stories (id, account_id, slug, title)
-			VALUES ($1, $2, 'repair-progress', 'Repair progress')
-		`, progressStory, accountID); err != nil {
-			t.Fatalf("insert repair story: %v", err)
-		}
-		if _, err := adminDB.Exec(`
-			INSERT INTO story_versions (id, story_id, version, markdown, rendered_html)
-			VALUES ($1, $2, 1, 'repair body', '<p>repair body</p>')
-		`, progressVersion, progressStory); err != nil {
-			t.Fatalf("insert repair story version: %v", err)
-		}
-		if _, err := adminDB.Exec(`
-			INSERT INTO reading_progress (account_id, profile_id, story_id, story_version_id, percent)
-			VALUES ($1, $2, $3, $4, 0.37)
-		`, accountID, markedProfile, progressStory, progressVersion); err != nil {
-			t.Fatalf("insert repair progress: %v", err)
-		}
-		if _, err := adminDB.Exec(`
-			INSERT INTO profile_settings (account_id, profile_id)
-			VALUES ($1, $2)
-		`, accountID, markedProfile); err != nil {
-			t.Fatalf("insert repair settings: %v", err)
-		}
-
-		var originalCreatedAt time.Time
-		if err := adminDB.QueryRow(`SELECT created_at FROM profiles WHERE id = $1`, markedProfile).Scan(&originalCreatedAt); err != nil {
-			t.Fatalf("read marked profile timestamp: %v", err)
-		}
-		var originalProgressPercent float64
-		if err := adminDB.QueryRow(`
-			SELECT percent
-			FROM reading_progress
-			WHERE profile_id = $1 AND story_id = $2
-		`, markedProfile, progressStory).Scan(&originalProgressPercent); err != nil {
-			t.Fatalf("read repair progress before concurrent resolution: %v", err)
-		}
-
-		const callers = 12
-		stores := make([]*Store, 0, callers)
-		for range callers {
-			stores = append(stores, newAccountIntegrationStore(t, databaseURL))
-		}
-		type result struct {
-			id  string
-			err error
-		}
-		results := make([]result, callers)
-		start := make(chan struct{})
-		var wg sync.WaitGroup
-		wg.Add(callers)
-		for i, store := range stores {
-			go func() {
-				defer wg.Done()
-				<-start
-				ctx, cancel := store.ctx()
-				defer cancel()
-				results[i].id, results[i].err = store.getDefaultProfileID(ctx, accountID)
-			}()
-		}
-		close(start)
-		wg.Wait()
-
-		wantID := results[0].id
-		if results[0].err != nil || wantID == "" {
-			t.Fatalf("first repair resolution = %q / %v", wantID, results[0].err)
-		}
-		for i, result := range results {
-			if result.err != nil {
-				t.Errorf("repair resolver %d: %v", i, result.err)
-			} else if result.id != wantID {
-				t.Errorf("repair resolver %d id = %q, want %q", i, result.id, wantID)
-			}
-		}
-
-		var defaultID, defaultAccountID string
-		if err := adminDB.QueryRow(`
-			SELECT id, account_id
-			FROM profiles
-			WHERE account_id = $1
-			  AND name = 'Default'
-			  AND is_default
-		`, accountID).Scan(&defaultID, &defaultAccountID); err != nil {
-			t.Fatalf("read repaired Default: %v", err)
-		}
-		if defaultID != wantID || defaultAccountID != accountID {
-			t.Fatalf("repaired Default = %q/%q, want %q/%q", defaultID, defaultAccountID, wantID, accountID)
-		}
-
-		var totalProfiles, namedDefaults, activeDefaults, activeNamedProfiles int
-		if err := adminDB.QueryRow(`
-			SELECT
-				count(*),
-				count(*) FILTER (WHERE name = 'Default'),
-				count(*) FILTER (WHERE name = 'Default' AND is_default),
-				count(*) FILTER (WHERE name <> 'Default' AND is_default)
-			FROM profiles
-			WHERE account_id = $1
-		`, accountID).Scan(&totalProfiles, &namedDefaults, &activeDefaults, &activeNamedProfiles); err != nil {
-			t.Fatalf("count repaired profiles: %v", err)
-		}
-		if totalProfiles != 3 || namedDefaults != 1 || activeDefaults != 1 || activeNamedProfiles != 0 {
-			t.Fatalf("repaired profiles/defaults/active defaults/active named = %d/%d/%d/%d, want 3/1/1/0", totalProfiles, namedDefaults, activeDefaults, activeNamedProfiles)
-		}
-
-		var markedName string
-		var markedIsDefault bool
-		var markedCreatedAt time.Time
-		if err := adminDB.QueryRow(`
-			SELECT name, is_default, created_at
-			FROM profiles
-			WHERE id = $1 AND account_id = $2
-		`, markedProfile, accountID).Scan(&markedName, &markedIsDefault, &markedCreatedAt); err != nil {
-			t.Fatalf("read repaired old marker: %v", err)
-		}
-		if markedName != "Incorrect marker" || markedIsDefault || !markedCreatedAt.Equal(originalCreatedAt) {
-			t.Fatalf("old marker after repair = %q/default:%t/created:%s", markedName, markedIsDefault, markedCreatedAt)
-		}
-
-		var unrelatedName string
-		var unrelatedIsDefault bool
-		if err := adminDB.QueryRow(`
-			SELECT name, is_default
-			FROM profiles
-			WHERE id = $1 AND account_id = $2
-		`, otherProfile, accountID).Scan(&unrelatedName, &unrelatedIsDefault); err != nil {
-			t.Fatalf("read unrelated profile: %v", err)
-		}
-		if unrelatedName != "Unrelated reader" || unrelatedIsDefault {
-			t.Fatalf("unrelated profile after repair = %q/default:%t", unrelatedName, unrelatedIsDefault)
-		}
-
-		var progressAccountID, progressProfileID, progressStoryID, progressVersionID string
-		var progressPercent float64
-		if err := adminDB.QueryRow(`
-			SELECT account_id, profile_id, story_id, story_version_id, percent
-			FROM reading_progress
-			WHERE profile_id = $1 AND story_id = $2
-		`, markedProfile, progressStory).Scan(&progressAccountID, &progressProfileID, &progressStoryID, &progressVersionID, &progressPercent); err != nil {
-			t.Fatalf("read repaired progress: %v", err)
-		}
-		if progressAccountID != accountID || progressProfileID != markedProfile || progressStoryID != progressStory || progressVersionID != progressVersion || progressPercent != originalProgressPercent || math.Abs(progressPercent-0.37) > 1e-6 {
-			t.Fatalf("progress after repair = %q/%q/%q/%q/%v", progressAccountID, progressProfileID, progressStoryID, progressVersionID, progressPercent)
-		}
-
-		var settingsAccountID, settingsProfileID string
-		if err := adminDB.QueryRow(`
-			SELECT account_id, profile_id
-			FROM profile_settings
-			WHERE profile_id = $1
-		`, markedProfile).Scan(&settingsAccountID, &settingsProfileID); err != nil {
-			t.Fatalf("read repaired settings: %v", err)
-		}
-		if settingsAccountID != accountID || settingsProfileID != markedProfile {
-			t.Fatalf("settings after repair = %q/%q", settingsAccountID, settingsProfileID)
-		}
-
-		var defaultProgress, defaultSettings int
-		if err := adminDB.QueryRow(`
-			SELECT
-				(SELECT count(*) FROM reading_progress WHERE profile_id = $1),
-				(SELECT count(*) FROM profile_settings WHERE profile_id = $1)
-		`, defaultID).Scan(&defaultProgress, &defaultSettings); err != nil {
-			t.Fatalf("read new Default relations: %v", err)
-		}
-		if defaultProgress != 0 || defaultSettings != 0 {
-			t.Fatalf("new Default relations = progress:%d settings:%d, want 0/0", defaultProgress, defaultSettings)
-		}
 	})
 
 	t.Run("missing Default creates one without repurposing named profiles", func(t *testing.T) {
@@ -445,16 +255,16 @@ func TestAccountStoreIntegration(t *testing.T) {
 		const (
 			accountID = "33333333-3333-4333-8333-333333333333"
 			oldestID  = "33333333-0000-4000-8000-000000000001"
-			markedID  = "33333333-0000-4000-8000-000000000002"
+			secondID  = "33333333-0000-4000-8000-000000000002"
 		)
 		if _, err := adminDB.Exec(`INSERT INTO accounts (id, name) VALUES ($1, 'Profiles')`, accountID); err != nil {
 			t.Fatalf("insert profile account: %v", err)
 		}
 		if _, err := adminDB.Exec(`
-			INSERT INTO profiles (id, account_id, name, is_default, created_at) VALUES
-				($1, $3, 'Older named reader', false, '2026-01-01T00:00:00Z'),
-				($2, $3, 'Incorrect marker', true, '2026-01-02T00:00:00Z')
-		`, oldestID, markedID, accountID); err != nil {
+				INSERT INTO profiles (id, account_id, name, created_at) VALUES
+					($1, $3, 'Older named reader', '2026-01-01T00:00:00Z'),
+					($2, $3, 'Second named reader', '2026-01-02T00:00:00Z')
+			`, oldestID, secondID, accountID); err != nil {
 			t.Fatalf("insert named profiles without Default: %v", err)
 		}
 
@@ -462,68 +272,28 @@ func TestAccountStoreIntegration(t *testing.T) {
 		got, err := store.getDefaultProfileID(ctx, accountID)
 		cancel()
 		if err != nil {
-			t.Fatalf("repair missing Default: %v", err)
+			t.Fatalf("create missing Default: %v", err)
 		}
-		if got == oldestID || got == markedID {
-			t.Fatalf("repair selected existing named profile %q instead of creating Default", got)
+		if got == oldestID || got == secondID {
+			t.Fatalf("resolver selected existing named profile %q instead of creating Default", got)
 		}
 
-		var profiles, namedDefaults, activeNamedDefaults, activeNamedProfiles int
+		var profiles, namedDefaults, unchangedNamed int
 		if err := adminDB.QueryRow(`
-			SELECT
-				count(*),
-				count(*) FILTER (WHERE name = 'Default'),
-				count(*) FILTER (WHERE name = 'Default' AND is_default),
-				count(*) FILTER (WHERE name <> 'Default' AND is_default)
-			FROM profiles
-			WHERE account_id = $1
-		`, accountID).Scan(&profiles, &namedDefaults, &activeNamedDefaults, &activeNamedProfiles); err != nil {
-			t.Fatalf("inspect Default repair: %v", err)
+				SELECT
+					count(*),
+					count(*) FILTER (WHERE name = 'Default'),
+					count(*) FILTER (WHERE
+						(id = $2 AND name = 'Older named reader') OR
+						(id = $3 AND name = 'Second named reader')
+					)
+				FROM profiles
+				WHERE account_id = $1
+			`, accountID, oldestID, secondID).Scan(&profiles, &namedDefaults, &unchangedNamed); err != nil {
+			t.Fatalf("inspect created Default: %v", err)
 		}
-		if profiles != 3 || namedDefaults != 1 || activeNamedDefaults != 1 || activeNamedProfiles != 0 {
-			t.Fatalf("Default repair profiles/defaults/active defaults/active named = %d/%d/%d/%d, want 3/1/1/0", profiles, namedDefaults, activeNamedDefaults, activeNamedProfiles)
-		}
-	})
-
-	t.Run("valid Default lookup does not wait for the account repair lock", func(t *testing.T) {
-		resetAccountIntegrationData(t, adminDB)
-		store := newAccountIntegrationStore(t, databaseURL)
-		const accountID = "33333333-3333-4333-8333-333333333333"
-		if _, err := adminDB.Exec(`INSERT INTO accounts (id, name) VALUES ($1, 'Profiles')`, accountID); err != nil {
-			t.Fatalf("insert profile account: %v", err)
-		}
-		if _, err := adminDB.Exec(`INSERT INTO profiles (account_id, name, is_default) VALUES ($1, 'Default', true)`, accountID); err != nil {
-			t.Fatalf("insert valid Default profile: %v", err)
-		}
-
-		lockTx, err := adminDB.Begin()
-		if err != nil {
-			t.Fatalf("begin account lock transaction: %v", err)
-		}
-		defer func() { _ = lockTx.Rollback() }()
-		if _, err := lockTx.Exec(`SELECT id FROM accounts WHERE id = $1 FOR UPDATE`, accountID); err != nil {
-			t.Fatalf("lock account row: %v", err)
-		}
-
-		type result struct {
-			id  string
-			err error
-		}
-		resultCh := make(chan result, 1)
-		go func() {
-			ctx, cancel := store.ctx()
-			defer cancel()
-			id, err := store.getDefaultProfileID(ctx, accountID)
-			resultCh <- result{id: id, err: err}
-		}()
-
-		select {
-		case result := <-resultCh:
-			if result.err != nil || result.id == "" {
-				t.Fatalf("non-locking Default lookup = %q / %v", result.id, result.err)
-			}
-		case <-time.After(time.Second):
-			t.Fatal("valid Default lookup waited for the account repair lock")
+		if profiles != 3 || namedDefaults != 1 || unchangedNamed != 2 {
+			t.Fatalf("profiles/defaults/unchanged named = %d/%d/%d, want 3/1/2", profiles, namedDefaults, unchangedNamed)
 		}
 	})
 
@@ -533,7 +303,7 @@ func TestAccountStoreIntegration(t *testing.T) {
 		if _, err := adminDB.Exec(`INSERT INTO accounts (id, name) VALUES ($1, 'Owned')`, accountID); err != nil {
 			t.Fatalf("insert owned account: %v", err)
 		}
-		if _, err := adminDB.Exec(`INSERT INTO profiles (account_id, name, is_default) VALUES ($1, 'Reader', true)`, accountID); err != nil {
+		if _, err := adminDB.Exec(`INSERT INTO profiles (account_id, name) VALUES ($1, 'Reader')`, accountID); err != nil {
 			t.Fatalf("insert owned profile: %v", err)
 		}
 		if _, err := adminDB.Exec(`DELETE FROM accounts WHERE id = $1`, accountID); err == nil {
@@ -562,11 +332,10 @@ func TestAccountStoreIntegration(t *testing.T) {
 			t.Fatalf("insert settings accounts: %v", err)
 		}
 		if _, err := adminDB.Exec(`
-			INSERT INTO profiles (id, account_id, name, is_default) VALUES
-				($1, $3, 'Default', true),
-				($2, $4, 'Default', true)
+			INSERT INTO profiles (id, account_id, name) VALUES
+				($1, $3, 'Default'),
+				($2, $4, 'Default')
 		`, profileA, profileB, accountA, accountB); err != nil {
-			t.Fatalf("insert settings profiles: %v", err)
 		}
 
 		empty, err := store.SettingsGet(accountA)
@@ -804,10 +573,10 @@ func TestAccountStoreIntegration(t *testing.T) {
 			t.Fatalf("insert library accounts: %v", err)
 		}
 		if _, err := adminDB.Exec(`
-			INSERT INTO profiles (id, account_id, name, is_default, created_at) VALUES
-				($1, $3, 'Default', true, '2026-07-19T10:00:00Z'),
-				($2, $4, 'Default', true, '2026-07-19T10:00:00Z'),
-				($5, $3, 'Other', false, '2026-07-19T09:00:00Z')
+			INSERT INTO profiles (id, account_id, name, created_at) VALUES
+				($1, $3, 'Default', '2026-07-19T10:00:00Z'),
+				($2, $4, 'Default', '2026-07-19T10:00:00Z'),
+				($5, $3, 'Other', '2026-07-19T09:00:00Z')
 		`, profileA, profileB, accountA, accountB, profileAOther); err != nil {
 			t.Fatalf("insert library profiles: %v", err)
 		}
@@ -1251,14 +1020,11 @@ func setupAccountIntegrationSchema(t *testing.T, database *sql.DB) {
 			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 			account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
 			name text NOT NULL,
-			is_default boolean NOT NULL DEFAULT false,
 			created_at timestamptz NOT NULL DEFAULT now(),
 			updated_at timestamptz NOT NULL DEFAULT now(),
 			UNIQUE (account_id, name),
 			UNIQUE (id, account_id)
 		)`,
-		`CREATE UNIQUE INDEX profiles_one_default_per_account_idx
-			ON profiles (account_id) WHERE is_default`,
 		`CREATE TABLE child_profiles (
 			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 			account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,

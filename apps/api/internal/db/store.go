@@ -197,15 +197,12 @@ func (s *Store) getDefaultProfileID(ctx context.Context, accountID string) (stri
 		return "", sql.ErrNoRows
 	}
 
-	// Most lookups only need the already-validated marker. Do not take the
-	// account-row repair lock unless that marker is absent or invalid.
 	var id string
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id
 		FROM profiles
 		WHERE account_id = $1
 		  AND name = 'Default'
-		  AND is_default = true
 		ORDER BY created_at ASC, id ASC
 		LIMIT 1
 	`, accountID).Scan(&id)
@@ -216,58 +213,18 @@ func (s *Store) getDefaultProfileID(ctx context.Context, accountID string) (stri
 		return "", err
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	// The account-row lock serializes default-profile repair and creation for
-	// this account across API processes. The partial unique index remains the
-	// database-level final guard against multiple defaults.
-	var lockedAccountID string
-	if err := tx.QueryRowContext(ctx, `
-		SELECT id
-		FROM accounts
-		WHERE id = $1
-		FOR UPDATE
-	`, accountID).Scan(&lockedAccountID); err != nil {
-		return "", err
-	}
-
-	err = tx.QueryRowContext(ctx, `
-		SELECT id
-		FROM profiles
-		WHERE account_id = $1
-		  AND name = 'Default'
-		  AND is_default = true
-		ORDER BY created_at ASC, id ASC
-		LIMIT 1
-	`, accountID).Scan(&id)
-	if err == nil {
-		if err := tx.Commit(); err != nil {
-			return "", err
-		}
-		return id, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return "", err
-	}
-
-	// A marker-less or incorrectly marked account can exist after an
-	// interrupted or manual operation. Clear any invalid marker, then restore
-	// the legacy Default-profile rule without repurposing another named profile.
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE profiles
-		SET is_default = false,
-		    updated_at = now()
-		WHERE account_id = $1
-		  AND is_default = true
+	// The existing (account_id, name) uniqueness rule serializes concurrent
+	// exact-name creation without turning this temporary resolver into profile
+	// selection state or repurposing an existing differently named profile.
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO profiles (account_id, name)
+		VALUES ($1, 'Default')
+		ON CONFLICT (account_id, name) DO NOTHING
 	`, accountID); err != nil {
 		return "", err
 	}
 
-	err = tx.QueryRowContext(ctx, `
+	err = s.db.QueryRowContext(ctx, `
 		SELECT id
 		FROM profiles
 		WHERE account_id = $1
@@ -275,30 +232,7 @@ func (s *Store) getDefaultProfileID(ctx context.Context, accountID string) (stri
 		ORDER BY created_at ASC, id ASC
 		LIMIT 1
 	`, accountID).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
-		err = tx.QueryRowContext(ctx, `
-			INSERT INTO profiles (account_id, name, is_default)
-			VALUES ($1, 'Default', true)
-			RETURNING id
-		`, accountID).Scan(&id)
-	} else if err == nil {
-		err = tx.QueryRowContext(ctx, `
-			UPDATE profiles
-			SET is_default = true,
-			    updated_at = now()
-			WHERE id = $1
-			  AND account_id = $2
-			RETURNING id
-		`, id, accountID).Scan(&id)
-	}
-	if err != nil {
-		return "", err
-	}
-	if err := tx.Commit(); err != nil {
-		return "", err
-	}
-
-	return id, nil
+	return id, err
 }
 
 /* ----------------------------- Library ----------------------------- */

@@ -38,7 +38,7 @@ JOIN LATERAL (
   SELECT id, account_id
   FROM profiles
   WHERE account_id = story.account_id
-    AND is_default
+    AND name = 'Default'
   LIMIT 1
 ) AS profile ON true
 WHERE story.id = 'f17e0000-0000-4000-8000-000000000010'

@@ -238,13 +238,13 @@ grep -q 'OK.*00015_account_ownership_integrity.sql' \
 
 run_goose goose-down down-to 14
 rollback_shape=$(psql_as "$migration_role" --tuples-only --no-align \
-  --command="SELECT count(*) FILTER (WHERE table_name='profiles' AND column_name='is_default') || '|' || count(*) FILTER (WHERE table_name='reading_progress' AND column_name='account_id') || '|' || count(*) FILTER (WHERE table_name='profile_settings' AND column_name='account_id') FROM information_schema.columns WHERE table_schema='public';")
-[[ "$rollback_shape" == '0|0|0' ]]
+  --command="SELECT count(*) FILTER (WHERE table_name='reading_progress' AND column_name='account_id') || '|' || count(*) FILTER (WHERE table_name='profile_settings' AND column_name='account_id') FROM information_schema.columns WHERE table_schema='public';")
+[[ "$rollback_shape" == '0|0' ]]
 
 run_goose goose-reup up-to 15
 reapplied_shape=$(psql_as "$migration_role" --tuples-only --no-align \
-  --command="SELECT count(*) FILTER (WHERE table_name='profiles' AND column_name='is_default') || '|' || count(*) FILTER (WHERE table_name='reading_progress' AND column_name='account_id') || '|' || count(*) FILTER (WHERE table_name='profile_settings' AND column_name='account_id') FROM information_schema.columns WHERE table_schema='public';")
-[[ "$reapplied_shape" == '1|1|1' ]]
+  --command="SELECT count(*) FILTER (WHERE table_name='reading_progress' AND column_name='account_id') || '|' || count(*) FILTER (WHERE table_name='profile_settings' AND column_name='account_id') FROM information_schema.columns WHERE table_schema='public';")
+[[ "$reapplied_shape" == '1|1' ]]
 printf 'ok 2 - Goose applies migration 15 and rolls it down and up as a non-superuser owner session\n'
 
 docker exec -i "$source_container" \
@@ -304,10 +304,10 @@ psql_as "$application_role" --command="
 INSERT INTO accounts (id, name) VALUES
   ('a1500000-0000-4000-8000-000000000001', 'Integrity household A'),
   ('b1500000-0000-4000-8000-000000000001', 'Integrity household B');
-INSERT INTO profiles (id, name, account_id, is_default) VALUES
-  ('a1500000-0000-4000-8000-000000000011', 'Reader A', 'a1500000-0000-4000-8000-000000000001', true),
-  ('a1500000-0000-4000-8000-000000000012', 'Reader A2', 'a1500000-0000-4000-8000-000000000001', false),
-  ('b1500000-0000-4000-8000-000000000011', 'Reader B', 'b1500000-0000-4000-8000-000000000001', true);
+INSERT INTO profiles (id, name, account_id) VALUES
+  ('a1500000-0000-4000-8000-000000000011', 'Reader A', 'a1500000-0000-4000-8000-000000000001'),
+  ('a1500000-0000-4000-8000-000000000012', 'Reader A2', 'a1500000-0000-4000-8000-000000000001'),
+  ('b1500000-0000-4000-8000-000000000011', 'Reader B', 'b1500000-0000-4000-8000-000000000001');
 INSERT INTO child_profiles (id, name, age_months, account_id) VALUES
   ('a1500000-0000-4000-8000-000000000021', 'Child A', 84, 'a1500000-0000-4000-8000-000000000001'),
   ('b1500000-0000-4000-8000-000000000021', 'Child B', 96, 'b1500000-0000-4000-8000-000000000001');

@@ -217,38 +217,6 @@ ALTER TABLE prompt_profiles
 ALTER TABLE story_versions
   ADD CONSTRAINT story_versions_id_story_id_key UNIQUE (id, story_id);
 
--- Preserve the legacy Default-profile rule. An account's existing profile
--- named exactly Default remains the default candidate; accounts without one
--- receive a new Default profile rather than repurposing another named profile.
-ALTER TABLE profiles
-  ADD COLUMN is_default boolean NOT NULL DEFAULT false;
-
-WITH default_profiles AS (
-  SELECT DISTINCT ON (account_id)
-    id
-  FROM profiles
-  WHERE name = 'Default'
-  ORDER BY account_id, created_at ASC, id ASC
-)
-UPDATE profiles AS profile
-SET is_default = true
-FROM default_profiles AS default_profile
-WHERE default_profile.id = profile.id;
-
-INSERT INTO profiles (account_id, name, is_default)
-SELECT account.id, 'Default', true
-FROM accounts AS account
-WHERE NOT EXISTS (
-  SELECT 1
-  FROM profiles AS profile
-  WHERE profile.account_id = account.id
-    AND profile.name = 'Default'
-);
-
-CREATE UNIQUE INDEX profiles_one_default_per_account_idx
-  ON profiles (account_id)
-  WHERE is_default;
-
 -- Store the account tuple directly on progress so PostgreSQL can reject both
 -- cross-account profile/story links and cross-story version links.
 ALTER TABLE reading_progress ADD COLUMN account_id uuid;
@@ -414,9 +382,6 @@ DROP INDEX reading_progress_story_account_idx;
 
 ALTER TABLE profile_settings DROP COLUMN account_id;
 ALTER TABLE reading_progress DROP COLUMN account_id;
-
-DROP INDEX profiles_one_default_per_account_idx;
-ALTER TABLE profiles DROP COLUMN is_default;
 
 ALTER TABLE profiles DROP CONSTRAINT profiles_account_id_fkey;
 ALTER TABLE stories DROP CONSTRAINT stories_account_id_fkey;
