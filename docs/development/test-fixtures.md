@@ -84,8 +84,8 @@ and its paragraph are six independent rows with deterministic Reader 2
 content keys, occurrences, kinds, heading levels, and H2 chapter propagation.
 It does not include progress by default.
 
-Add the explicitly marked default-profile progress row only for a test that
-needs it:
+Add the progress row for the account-owned profile named exactly `Default` only
+for a test that needs it:
 
 ```bash
 PP_ALLOW_TEST_SEED=1 \
@@ -153,8 +153,8 @@ non-production data and local Docker resources.
 `scripts/tests/account-integrity-migration-integration.sh` separately creates
 disposable PostgreSQL databases and exercises a representative version-14
 upgrade, a fresh full migration chain, version-15 rollback/reapplication,
-fail-closed orphan and cross-account preflight cases, progress/settings
-composite constraints, deterministic default-profile backfill, account deletion
+fail-closed orphan and cross-account preflight cases, derived progress/settings
+account-ownership backfills, composite constraints, account deletion
 restriction, data preservation, and version-aware `/readyz`. Its containers,
 network, volume, credentials, and temporary evidence are generated for the run
 and removed afterward.

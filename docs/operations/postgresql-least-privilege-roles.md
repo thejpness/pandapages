@@ -150,10 +150,15 @@ Perform the rollout in this order:
 
 1. Confirm an approved recent backup and disposable restore, sufficient disk
    and WAL headroom, reviewed migration/API images, and an authorised rollback
-   operator. Run the count-only version-14 preflight from the
-   [account ownership model](../architecture/account-ownership-model.md#read-only-migration-preflight).
-   All corruption categories must be zero; `accounts_without_profiles` is
-   informational. Stop rather than repair unexpected data.
+   operator. Run the [broader optional read-only operator audit](../architecture/account-ownership-model.md#broader-optional-read-only-operator-audit)
+   for rollout inspection; it includes additional hygiene checks and is not the
+   exact migration `00015` preflight. The migration preflight categories must be
+   zero: orphan profiles, stories,
+   child profiles, and prompt profiles; missing profile, story, or version
+   references on progress; cross-account or cross-story progress; missing
+   profile, child, or prompt references in settings; and cross-account child or
+   prompt settings. Accounts without profiles are valid. Stop rather than repair
+   unexpected data.
 2. Quiesce all application writes and prevent a second API or migration process
    from entering the change. Capture non-secret lock and connection evidence.
    Reads may continue only if the change plan accepts the migration's brief
@@ -185,13 +190,12 @@ the route exists.
 Neither an old API on schema 15 nor the version-15 API on schema 14 is a
 supported steady state:
 
-- An old API does not supply the new non-null progress/settings ownership tuples
-  and does not resolve the explicit default marker. Its writes are incompatible
-  with schema 15.
-- The version-15 API expects `account_id` ownership tuples and `is_default`.
-  Against schema 14, `/readyz` returns HTTP 503 with `schema_not_ready`, but that
-  readiness response is not a compatibility layer: application SQL is also
-  incompatible with the older schema.
+- An old API does not supply the new non-null progress/settings ownership tuples.
+  Its writes are incompatible with schema 15.
+- The version-15 API expects `account_id` ownership tuples. Against schema 14,
+  `/readyz` returns HTTP 503 with `schema_not_ready`, but that readiness response
+  is not a compatibility layer: application SQL is also incompatible with the
+  older schema.
 
 Treat the migration and API replacement as one coordinated change window. If
 rollback is required:
@@ -205,9 +209,8 @@ rollback is required:
 
 Never start the old API against schema 15 and never run the Down migration while
 the version-15 API can write. The Down migration preserves application rows but
-removes redundant ownership columns and the explicit default marker; the old
-API resumes its legacy profile-selection semantics.
-
+removes redundant ownership columns; the old API resumes its existing exact-name
+`Default` resolver.
 ## Forward `/readyz` role-grant rollout
 
 > Historical record: this was the forward procedure for introducing the

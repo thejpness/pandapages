@@ -139,9 +139,9 @@ The current shared passcode is not an individual identity and has no signup,
 email verification, password recovery/change, social login, session refresh,
 server-side revocation, account management, account selection, profile
 selection, or profile PIN. Normal unlock still reaches one implicit legacy
-account. Within that account, application behavior uses the explicit
-`profiles.is_default` marker; transactional resolution creates or repairs one
-deterministically without treating a profile display name as identity. See the
+account. Within that account, runtime code temporarily resolves a profile named
+exactly `Default`, creating that exact account-owned name only when absent. This
+is not active-profile selection and not a durable schema contract. See the
 [current account ownership model](account-ownership-model.md).
 
 ## Transition rule

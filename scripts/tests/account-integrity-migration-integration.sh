@@ -361,8 +361,7 @@ expect_migration_failure() {
     FROM information_schema.columns
     WHERE table_schema = 'public'
       AND (
-        (table_name = 'profiles' AND column_name = 'is_default')
-        OR (table_name = 'reading_progress' AND column_name = 'account_id')
+        (table_name = 'reading_progress' AND column_name = 'account_id')
         OR (table_name = 'profile_settings' AND column_name = 'account_id')
       );
   " "$description left no partial schema"
@@ -535,7 +534,7 @@ assert_query '15|1|1|0' "$full_database" "
       FROM goose_db_version WHERE version_id > 0 ORDER BY version_id, id DESC
     ) SELECT max(version_id) FILTER (WHERE is_applied) FROM latest),
     (SELECT count(*) FROM accounts),
-    (SELECT count(*) FROM profiles WHERE is_default),
+    (SELECT count(*) FROM profiles),
     (SELECT count(*) FROM pg_constraint WHERE contype = 'f' AND NOT convalidated);
 " 'fresh full migration chain'
 printf 'ok 1 - a fresh database migrates through account-integrity version 15\n'
@@ -603,7 +602,7 @@ expect_migration_failure 8 'cross-story progress version' \
 
 clone_database "$v14_database" "$clean_database"
 run_goose "$clean_database" up-to 15 >"$test_root/clean-up.out" 2>"$test_root/clean-up.err"
-assert_query '15|15|0|3|3' "$clean_database" "
+assert_query '15|15|0|2|2' "$clean_database" "
   SELECT
     (WITH latest AS (
       SELECT DISTINCT ON (version_id) version_id, is_applied
@@ -621,33 +620,31 @@ assert_query '15|15|0|3|3' "$clean_database" "
     ) AND convalidated),
     (SELECT count(*) FROM pg_constraint WHERE contype = 'f' AND NOT convalidated),
     (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND
-      ((table_name='profiles' AND column_name='is_default' AND is_nullable='NO') OR
-       (table_name='reading_progress' AND column_name='account_id' AND is_nullable='NO') OR
+      ((table_name='reading_progress' AND column_name='account_id' AND is_nullable='NO') OR
        (table_name='profile_settings' AND column_name='account_id' AND is_nullable='NO'))),
     (SELECT count(*) FROM pg_class WHERE oid IN (
-      to_regclass('public.profiles_one_default_per_account_idx'),
       to_regclass('public.reading_progress_story_account_idx'),
       to_regclass('public.reading_progress_story_version_story_idx')
     ));
 " 'validated ownership schema'
-assert_query 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa|aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa|aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa|aaaaaaaa-1000-4000-8000-000000000002|Default|1|0|1|6|bbbbbbbb-1000-4000-8000-000000000001|bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb|bbbbbbbb-1000-4000-8000-000000000001|bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb|bbbbbbbb-2000-4000-8000-000000000001|bbbbbbbb-2100-4000-8000-000000000001' "$clean_database" "
+assert_query 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa|aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa|aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa|aaaaaaaa-1000-4000-8000-000000000002|0|0|4|Older named reader,Default|First tied reader,Second tied reader|bbbbbbbb-1000-4000-8000-000000000001|bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb|bbbbbbbb-1000-4000-8000-000000000001|bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb|bbbbbbbb-2000-4000-8000-000000000001|bbbbbbbb-2100-4000-8000-000000000001' "$clean_database" "
   SELECT
     (SELECT account_id FROM reading_progress WHERE profile_id='aaaaaaaa-1000-4000-8000-000000000002'),
     (SELECT account_id FROM profile_settings WHERE profile_id='aaaaaaaa-1000-4000-8000-000000000002'),
     (SELECT account_id FROM stories WHERE id='aaaaaaaa-3000-4000-8000-000000000001'),
-    (SELECT id FROM profiles WHERE account_id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' AND is_default),
-    (SELECT name FROM profiles WHERE account_id='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' AND is_default),
-    (SELECT count(*) FROM profiles WHERE account_id='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' AND name='Default' AND is_default),
-    (SELECT count(*) FROM profiles WHERE account_id='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' AND name<>'Default' AND is_default),
-    (SELECT count(*) FROM profiles WHERE account_id='cccccccc-cccc-4ccc-8ccc-cccccccccccc' AND name='Default' AND is_default),
+    (SELECT id FROM profiles WHERE account_id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' AND name='Default'),
+    (SELECT count(*) FROM profiles WHERE account_id='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' AND name='Default'),
+    (SELECT count(*) FROM profiles WHERE account_id='cccccccc-cccc-4ccc-8ccc-cccccccccccc' AND name='Default'),
     (SELECT count(*) FROM profiles),
+    (SELECT string_agg(name, ',' ORDER BY id) FROM profiles WHERE account_id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
+    (SELECT string_agg(name, ',' ORDER BY id) FROM profiles WHERE account_id='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'),
     (SELECT profile_id FROM reading_progress WHERE story_id='bbbbbbbb-3000-4000-8000-000000000001'),
     (SELECT account_id FROM reading_progress WHERE story_id='bbbbbbbb-3000-4000-8000-000000000001'),
     (SELECT profile_id FROM profile_settings WHERE profile_id='bbbbbbbb-1000-4000-8000-000000000001'),
     (SELECT account_id FROM profile_settings WHERE profile_id='bbbbbbbb-1000-4000-8000-000000000001'),
     (SELECT active_child_profile_id FROM profile_settings WHERE profile_id='bbbbbbbb-1000-4000-8000-000000000001'),
     (SELECT active_prompt_profile_id FROM profile_settings WHERE profile_id='bbbbbbbb-1000-4000-8000-000000000001');
-" 'ownership and legacy Default-profile backfill'
+" 'ownership and profile/progress/settings preservation'
 assert_query 'bbbbbbbb-1000-4000-8000-000000000001|bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb|bbbbbbbb-3000-4000-8000-000000000001|bbbbbbbb-4000-4000-8000-000000000001|true|true|0' "$clean_database" "
   SELECT
     progress.profile_id,
@@ -674,7 +671,7 @@ assert_query 'bbbbbbbb-1000-4000-8000-000000000001|bbbbbbbb-bbbb-4bbb-8bbb-bbbbb
   FROM reading_progress AS progress
   WHERE progress.profile_id='bbbbbbbb-1000-4000-8000-000000000001'
     AND progress.story_id='bbbbbbbb-3000-4000-8000-000000000001';
-" 'Household B v15 progress payload and new Default isolation'
+" 'Household B v15 progress payload without migration-created Default'
 assert_query 'profiles_account_id_fkey:r,stories_account_id_fkey:r,child_profiles_account_id_fkey:r,prompt_profiles_account_id_fkey:r' "$clean_database" "
   SELECT string_agg(conname || ':' || confdeltype::text, ',' ORDER BY CASE conname
     WHEN 'profiles_account_id_fkey' THEN 1 WHEN 'stories_account_id_fkey' THEN 2
@@ -683,7 +680,7 @@ assert_query 'profiles_account_id_fkey:r,stories_account_id_fkey:r,child_profile
   WHERE conname IN ('profiles_account_id_fkey','stories_account_id_fkey',
     'child_profiles_account_id_fkey','prompt_profiles_account_id_fkey');
 " 'account delete actions'
-printf 'ok 11 - valid data receives validated ownership, deterministic defaults, and restrictive roots\n'
+printf 'ok 11 - valid data receives validated ownership and restrictive roots without profile-selection schema\n'
 
 expect_sql_failure "$clean_database" 'cross-account progress insert' \
   "INSERT INTO reading_progress (account_id,profile_id,story_id,story_version_id,locator,percent) VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','aaaaaaaa-1000-4000-8000-000000000001','bbbbbbbb-3000-4000-8000-000000000001','bbbbbbbb-4000-4000-8000-000000000001','{\"schema\":2,\"segment\":{\"key\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"occurrence\":1,\"ordinal\":1,\"offset\":0}}',0);" \
@@ -733,35 +730,29 @@ assert_query '1|aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa|null|aaaaaaaa-2100-4000-800
 expect_sql_failure "$clean_database" 'owned account deletion' \
   "DELETE FROM accounts WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';" \
   '_account_id_fkey'
-expect_sql_failure "$clean_database" 'multiple account defaults' \
-  "UPDATE profiles SET is_default=true WHERE id='aaaaaaaa-1000-4000-8000-000000000001';" \
-  'profiles_one_default_per_account_idx'
 psql_query "$clean_database" "
   INSERT INTO accounts (id, name) VALUES ('dddddddd-dddd-4ddd-8ddd-dddddddddddd', 'Deletable empty household');
   DELETE FROM accounts WHERE id='dddddddd-dddd-4ddd-8ddd-dddddddddddd';
 " >/dev/null
-assert_query '3|6|3' "$clean_database" "
+assert_query '3|4' "$clean_database" "
   SELECT
     (SELECT count(*) FROM accounts),
-    (SELECT count(*) FROM profiles),
-    (SELECT count(*) FROM profiles WHERE is_default);
-" 'account deletion and default policy'
-printf 'ok 13 - owned account deletion and duplicate defaults fail while a new empty account remains deletable\n'
-
+    (SELECT count(*) FROM profiles);
+" 'account deletion policy'
+printf 'ok 13 - owned account deletion fails while a new empty account remains deletable\n'
 probe_readiness "$v14_database" 503 '"reason":"schema_not_ready"'
 probe_readiness "$clean_database" 200 '"status":"ready"'
 printf 'ok 14 - the API reports v14 schema_not_ready and v15 ready while health stays live\n'
 
 run_goose "$clean_database" down-to 14 >"$test_root/clean-down.out" 2>"$test_root/clean-down.err"
-assert_query '14|0|6|3|6|2|2|2|2' "$clean_database" "
+assert_query '14|0|6|3|4|2|2|2|2' "$clean_database" "
   SELECT
     (WITH latest AS (
       SELECT DISTINCT ON (version_id) version_id, is_applied
       FROM goose_db_version WHERE version_id > 0 ORDER BY version_id, id DESC
     ) SELECT max(version_id) FILTER (WHERE is_applied) FROM latest),
     (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND
-      ((table_name='profiles' AND column_name='is_default') OR
-       (table_name='reading_progress' AND column_name='account_id') OR
+      ((table_name='reading_progress' AND column_name='account_id') OR
        (table_name='profile_settings' AND column_name='account_id'))),
     (SELECT count(*) FROM pg_constraint WHERE conname IN (
       'reading_progress_profile_id_fkey','reading_progress_story_id_fkey',
@@ -801,10 +792,10 @@ assert_query 'bbbbbbbb-1000-4000-8000-000000000001|bbbbbbbb-3000-4000-8000-00000
   FROM reading_progress AS progress
   WHERE progress.profile_id='bbbbbbbb-1000-4000-8000-000000000001'
     AND progress.story_id='bbbbbbbb-3000-4000-8000-000000000001';
-" 'Household B rollback progress payload and retained Default isolation'
+" 'Household B rollback progress payload without migration-created Default'
 
 run_goose "$clean_database" up-to 15 >"$test_root/clean-reup.out" 2>"$test_root/clean-reup.err"
-assert_query '15|3|6|2|2|1|1|2|2' "$clean_database" "
+assert_query '15|3|4|2|2|1|1|2|2' "$clean_database" "
   SELECT
     (WITH latest AS (
       SELECT DISTINCT ON (version_id) version_id, is_applied
@@ -845,11 +836,11 @@ assert_query 'bbbbbbbb-1000-4000-8000-000000000001|bbbbbbbb-bbbb-4bbb-8bbb-bbbbb
   FROM reading_progress AS progress
   WHERE progress.profile_id='bbbbbbbb-1000-4000-8000-000000000001'
     AND progress.story_id='bbbbbbbb-3000-4000-8000-000000000001';
-" 'Household B v15 progress payload and new Default isolation'
+" 'Household B v15 progress payload without migration-created Default'
 
-assert_query '3|3|0' "$clean_database" "
+assert_query '4|1|0' "$clean_database" "
   SELECT
-    (SELECT count(*) FROM profiles WHERE is_default),
+    (SELECT count(*) FROM profiles),
     (SELECT count(*) FROM profiles WHERE name='Default'),
     (SELECT count(*) FROM pg_constraint WHERE contype='f' AND NOT convalidated);
 " 'v15 reapplication constraints'

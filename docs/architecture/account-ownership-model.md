@@ -18,8 +18,8 @@ boundary, not a person and not an external authentication identity.
   segments inherit that ownership through their story.
 - Every `child_profile` and `prompt_profile` belongs to exactly one account.
   They are application configuration and children's personas, not login users.
-- An account can contain multiple reader profiles, but the current application
-  uses only its explicitly marked default profile.
+- An account can contain multiple reader profiles. The current runtime still
+  has a temporary exact-name `Default` resolver, not profile selection.
 - Reading progress and profile settings cannot connect data from different
   accounts.
 
@@ -64,34 +64,24 @@ nullable selection. Deleting a profile retains the existing cascades to its
 settings and progress. Deleting a story retains the existing cascades beneath
 that story. Migration 00015 does not introduce an account-wide cascade.
 
-## Explicit default profile
+## Transitional `Default` resolver
 
-`profiles.is_default` is a non-null Boolean marker. The partial unique index
-`profiles_one_default_per_account_idx` permits at most one marked profile per
-account.
+Migration 00015 deliberately adds no default-profile marker, partial index, or
+profile-selection schema. Its durable concern is account ownership and
+referential integrity only.
 
-Migration 00015 preserves the legacy effective rule for every account present
-at migration time: it marks the account-owned profile named exactly `Default`
-when one exists; otherwise it creates a separate account-owned `Default`
-profile. It never designates an existing differently named profile because it
-is oldest. The v14 per-account name uniqueness rule makes duplicate
-`Default` names invalid; the migration's `created_at ASC, id ASC` ordering is
-deterministic defensive handling.
+Until explicit profile selection is implemented, the runtime has a temporary,
+account-scoped compatibility resolver:
 
-At runtime, default-profile resolution:
+1. it reads a profile named exactly `Default` for the supplied account;
+2. if absent, it inserts that exact name under the existing
+   `(account_id, name)` uniqueness constraint with `ON CONFLICT DO NOTHING`;
+3. it reads and returns the exact-name profile.
 
-1. reads an account-owned profile named exactly `Default` whose
-   `is_default` marker is true without taking an account-row lock;
-2. on a missing or invalid marker, starts a transaction and locks that account
-   row;
-3. re-reads the marker after the lock, returning it when another request has
-   already repaired it;
-4. otherwise clears an invalid marker, selects an existing exact `Default`,
-   or creates one, then marks that profile before committing.
-
-The account-row lock serializes repair or creation across API processes, and
-the partial unique index is the final concurrency guard. The frontend still
-uses this one profile; migration 00015 adds no profile-selection UI.
+It never repurposes an existing differently named profile and it does not
+represent an active selected reader profile. This transitional resolver will be
+removed by the later explicit profile-selection work; migration 00015 creates no
+new persistent selection contract.
 
 ## Account deletion policy
 
@@ -106,11 +96,14 @@ therefore delete an empty account, while the root foreign keys reject deletion
 of an owned account. There is no current delete-account API; this migration does
 not add one.
 
-## Read-only migration preflight
+## Broader optional read-only operator audit
 
-Run the following against a version-14 database only from an approved
-read-only operator context. It returns categories and counts, never IDs,
-profile names, story content, or other personal data:
+Before rollout, an approved read-only operator may run the following broader
+audit against a version-14 database. It includes the ownership and
+reference-integrity shapes that migration `00015` rejects, plus additional
+hygiene checks for orphan story versions and duplicate profile names and story
+slugs. It returns categories and counts, never IDs, profile names, story
+content, or other personal data:
 
 ```sql
 WITH integrity_counts(category, row_count) AS (
@@ -184,19 +177,6 @@ WITH integrity_counts(category, row_count) AS (
   JOIN prompt_profiles pp ON pp.id = ps.active_prompt_profile_id
   WHERE p.account_id IS DISTINCT FROM pp.account_id
   UNION ALL
-  SELECT 'accounts_without_profiles', count(*)
-  FROM accounts a
-  WHERE NOT EXISTS (SELECT 1 FROM profiles p WHERE p.account_id = a.id)
-  UNION ALL
-  SELECT 'multiple_legacy_default_candidates', count(*)
-  FROM (
-    SELECT account_id
-    FROM profiles
-    WHERE name = 'Default'
-    GROUP BY account_id
-    HAVING count(*) > 1
-  ) conflicts
-  UNION ALL
   SELECT 'duplicate_profile_names_per_account', count(*)
   FROM (
     SELECT account_id, name
@@ -218,25 +198,17 @@ FROM integrity_counts
 ORDER BY category;
 ```
 
-Every category except `accounts_without_profiles` must be zero. Accounts without
-profiles are valid before migration 00015; the migration creates an
-account-owned `Default` profile for each such account. Stop on any other
-non-zero count; do not delete, merge, or reassign rows automatically. Migration
-00015 repeats its required checks while holding write-blocking table locks and
-rolls its entire transaction back on failure.
+Every category in this broader audit should be zero. Accounts without profiles
+are valid; migration `00015` does not create a profile or choose one for an
+account. Stop on any non-zero count; do not delete, merge, or reassign rows
+automatically.
 
-After migration, this count must also be zero:
+Migration `00015` remains authoritative for its own fail-closed preflight. It
+performs the narrower ownership and reference-integrity checks in the migration
+transaction while holding write-blocking table locks and rolls the transaction
+back on failure. The orphan-story-version and duplicate-name/slug hygiene
+checks above are useful operator inspection, not migration `00015` categories.
 
-```sql
-SELECT count(*) AS accounts_with_invalid_default_count
-FROM accounts a
-WHERE EXISTS (SELECT 1 FROM profiles p WHERE p.account_id = a.id)
-  AND 1 <> (
-    SELECT count(*)
-    FROM profiles p
-    WHERE p.account_id = a.id AND p.is_default
-  );
-```
 
 ## Migration and rollback characteristics
 
@@ -247,17 +219,12 @@ and settings account backfills rewrite those rows; unique-index construction
 and foreign-key validation scan the affected tables. Operators must assess row
 counts, lock waiters, WAL capacity, and change-window duration beforehand.
 
-The Down migration removes only version-15 columns, constraints, and indexes and
-restores the version-14 simple foreign keys. It does not delete profiles,
-stories, progress, settings, or content. In particular, it does not delete
-`Default` profiles created by migration 00015: they remain valid ordinary v14
-profiles. Rollback is therefore schema-reversible but is not guaranteed to
-restore the original profile count. Preserving those profiles is intentional
-because they may have acquired progress, settings, or relationships after
-migration; operators must not interpret retained additional profiles as a
-failed rollback. The Down migration necessarily discards the redundant
-progress/settings account columns and the explicit default marker. An older API
-may therefore resume its legacy name-based profile choice after rollback. The
+The Down migration removes only version-15 ownership columns, constraints, and
+indexes and restores the version-14 simple foreign keys. It does not delete or
+create profiles, stories, progress, settings, or content. Rollback is therefore
+schema-reversible and preserves the existing data graph, while necessarily
+discarding the redundant progress/settings account columns. An older API resumes
+its existing exact-name `Default` resolver after rollback. The
 [coordinated rollout and rollback order](../operations/postgresql-least-privilege-roles.md#migration-00015-coordinated-forward-rollout)
 must be followed; mixed API/schema versions are not a supported steady state.
 
