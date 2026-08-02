@@ -1417,7 +1417,7 @@ assert_query '1|1|1|1|1|1|2|6|1|0' "
 " 'explicit seed inventory'
 printf 'ok 12 - explicit seed installs deterministic published UTF-8 chapter/segment fixtures without progress\n'
 
-assert_query '6|3|3|2|2|2|6|3|3|t|## Chapter Two — 世界|<h2>Chapter Two — 世界</h2>|星の光 shimmered over the quiet water. 🐼|<p>星の光 shimmered over the quiet water. 🐼</p>|t' "
+assert_query '6|3|3|2|2|2|6|3|3|t|## Chapter Two — 世界|t|星の光 shimmered over the quiet water. 🐼|t|t' "
   SELECT
     (SELECT count(*) FROM story_segments WHERE story_version_id = heading.story_version_id),
     (SELECT count(*) FROM story_segments WHERE story_version_id = heading.story_version_id AND segment_kind = 'heading'),
@@ -1430,9 +1430,9 @@ assert_query '6|3|3|2|2|2|6|3|3|t|## Chapter Two — 世界|<h2>Chapter Two — 
     (SELECT count(*) FROM story_segments WHERE story_version_id = heading.story_version_id AND segment_kind = 'paragraph' AND heading_level IS NULL),
     (SELECT bool_and(content_key ~ '^[0-9a-f]{64}$') FROM story_segments WHERE story_version_id = heading.story_version_id),
     heading.markdown,
-    heading.rendered_html,
+    encode(convert_to(heading.rendered_html, 'UTF8'), 'base64') = 'PGgyIGlkPSJjaGFwdGVyLXR3by0tIj5DaGFwdGVyIFR3byDigJQg5LiW55WMPC9oMj4K',
     paragraph.markdown,
-    paragraph.rendered_html,
+    paragraph.rendered_html = ('<p>星の光 shimmered over the quiet water. 🐼</p>' || chr(10)),
     heading.section_id = paragraph.section_id
       AND heading.section_id = 'f17e0000-0000-4000-8000-000000000021'
   FROM story_segments AS heading
