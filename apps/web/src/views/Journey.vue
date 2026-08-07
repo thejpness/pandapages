@@ -8,15 +8,13 @@ import {
   saveSettings,
   type SettingsPayload,
 } from '../lib/api'
-import { authState } from '../lib/session'
-import { navigationDidFail } from '../lib/session-transitions'
 
 const router = useRouter()
 
 const defaultLoadUnavailableMessage =
   'Panda Pages could not load this reading profile. The connection, server or database may be temporarily unavailable.'
-const unlockNavigationMessage =
-  'Your session ended, but Panda Pages could not open the unlock page. Try again.'
+const signInNavigationMessage =
+  'Your session ended, but Panda Pages could not open the sign-in page. Try again.'
 const nameValidationMessage = 'Add a nickname/name first.'
 
 function storedRuleValue(value: unknown): unknown {
@@ -134,14 +132,13 @@ function applySettings(settings: SettingsPayload) {
   }
 }
 
-async function moveToUnlock(): Promise<boolean> {
-  authState.confirmLocked()
+async function moveToSignIn(): Promise<boolean> {
   try {
-    const result = await router.replace({
-      path: '/unlock',
+    await router.replace({
+      path: '/account/login',
       query: { next: '/journey' },
     })
-    return !navigationDidFail(result)
+    return true
   } catch {
     return false
   }
@@ -160,8 +157,8 @@ async function load() {
     loadState.value = 'ready'
   } catch (error) {
     if (classifySettingsRequestFailure(error, 'load') === 'unauthorized') {
-      if (!(await moveToUnlock())) {
-        loadUnavailableMessage.value = unlockNavigationMessage
+      if (!(await moveToSignIn())) {
+        loadUnavailableMessage.value = signInNavigationMessage
         loadState.value = 'unavailable'
       }
       return
@@ -195,7 +192,7 @@ async function persist() {
     },
     prompt: {
       id: promptId.value,
-      name: 'Default prompt v1',
+      name: 'Panda Pages prompt v1',
       schemaVersion: 1,
       rules: promptRules.value,
     },
@@ -214,8 +211,8 @@ async function persist() {
   } catch (error) {
     const failure = classifySettingsRequestFailure(error, 'save')
     if (failure === 'unauthorized') {
-      if (!(await moveToUnlock())) {
-        loadUnavailableMessage.value = unlockNavigationMessage
+      if (!(await moveToSignIn())) {
+        loadUnavailableMessage.value = signInNavigationMessage
         loadState.value = 'unavailable'
       }
       return

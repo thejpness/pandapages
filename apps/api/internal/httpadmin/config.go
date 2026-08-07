@@ -1,8 +1,8 @@
 package httpadmin
 
-import "pandapages/api/internal/session"
+import "pandapages/api/internal/httpbearer"
 
 type Config struct {
-	AdminKey string
-	Sessions *session.Manager
+	AdminKey            string
+	BearerAuthenticator *httpbearer.Authenticator
 }

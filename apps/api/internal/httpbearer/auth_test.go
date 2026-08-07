@@ -122,7 +122,7 @@ func TestAuthenticateAcceptsValidBearerAndIgnoresCookie(t *testing.T) {
 	verifier, store := validDependencies()
 	auth := New(verifier, store)
 	request := authenticatedRequest(http.MethodGet)
-	request.AddCookie(&http.Cookie{Name: "pp_session", Value: "legacy"})
+	request.AddCookie(&http.Cookie{Name: "obsolete_cookie", Value: "legacy"})
 	response := httptest.NewRecorder()
 	identity, ok := auth.Authenticate(response, request)
 	if !ok || identity.Subject != "subject-1" || verifier.token != testToken || store.calls != 0 {

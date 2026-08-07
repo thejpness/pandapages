@@ -52,14 +52,6 @@ jobs:
       - name: Run Go vet
         run: go vet ./...
 
-      - name: Test concurrent default-account initialization
-        working-directory: .
-        run: scripts/tests/account-store-integration.sh
-
-      - name: Test progress persistence
-        working-directory: .
-        run: scripts/tests/progress-store-integration.sh
-
       - name: Build migration image for Reader contract tests
         run: docker build --target migrate --tag pandapages-migrate:reader-test .
 
@@ -149,8 +141,6 @@ jobs:
       POSTGRES_PASSWORD: ci-only-admin-password-not-for-production
       PP_ADMIN_IPS: 192.0.2.1/32
       PP_ADMIN_KEY: ci-only-admin-key-not-for-production-00000000
-      PP_PASSCODE: "123456"
-      PP_SESSION_SECRET: ci-only-session-secret-not-for-production-00000000
       SUPABASE_URL: https://auth-ci.invalid
       SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci-only-not-for-production
       SUPABASE_JWT_AUDIENCE: authenticated
@@ -201,14 +191,11 @@ jobs:
             scripts/postgresql-backup-retention.sh \
             scripts/postgresql-readonly-audit.sh \
             scripts/postgresql-roles.sh \
-            scripts/postgresql-api-role-verify.sh \
             scripts/postgresql-restore-rehearsal.sh \
             scripts/tests/account-store-integration.sh \
             scripts/tests/account-integrity-migration-integration.sh \
             scripts/tests/env-example-contract.sh \
             scripts/tests/identity-store-integration.sh \
-            scripts/tests/postgresql-api-role-smoke.sh \
-            scripts/tests/postgresql-api-role-session-contract.sh \
             scripts/tests/postgresql-backup-integration.sh \
             scripts/tests/postgresql-backup-unit.sh \
             scripts/tests/postgresql-fixtures-integration.sh \
@@ -225,13 +212,8 @@ jobs:
           scripts/postgresql-backup-retention.sh --help >/dev/null
           scripts/postgresql-readonly-audit.sh --help >/dev/null
           scripts/postgresql-roles.sh --help >/dev/null
-          scripts/postgresql-api-role-verify.sh --help >/dev/null
           scripts/postgresql-restore-rehearsal.sh --help >/dev/null
           scripts/dev/seed-test-data.sh --help >/dev/null
-
-      - name: Test API role verifier session contracts
-        shell: bash
-        run: scripts/tests/postgresql-api-role-session-contract.sh
 
       - name: Build API and migration images for generated database tests
         run: |

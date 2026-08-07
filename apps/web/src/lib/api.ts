@@ -1,203 +1,192 @@
-import { parseSafeRenderedStoryHTML, type SafeRenderedStoryHTML } from './reader-locator-v2'
+import {
+  parseSafeRenderedStoryHTML,
+  type SafeRenderedStoryHTML,
+} from "./reader-locator-v2";
+import { currentAccountContext } from "./account-context";
+import { clearSelectedAccount } from './account-context'
+import { signOutSupabaseSession } from './supabase-auth'
 import {
   isReaderContentKey,
   parseReaderLocatorV2,
   type ReaderLocatorV2,
   type ReaderSegmentKind,
   type ReaderStorySegment,
-} from './reader-locator-v2'
+} from "./reader-locator-v2";
 
-const rawBase = (import.meta.env.VITE_API_BASE || '').trim()
+const rawBase = (import.meta.env.VITE_API_BASE || "").trim();
 
 // Normalise base:
 // - allow '' (same-origin)
 // - strip trailing slashes so `${BASE}${path}` doesn't become `//api/...`
-const BASE = rawBase.replace(/\/+$/, '')
+const BASE = rawBase.replace(/\/+$/, "");
 
 export type JsonValue =
-  | null
-  | boolean
-  | number
-  | string
-  | JsonValue[]
-  | JsonObject
+  null | boolean | number | string | JsonValue[] | JsonObject;
 
 export type JsonObject = {
-  [key: string]: JsonValue
-}
+  [key: string]: JsonValue;
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function isJsonValue(value: unknown): value is JsonValue {
-  if (value === null) return true
-  if (typeof value === 'string' || typeof value === 'boolean') return true
-  if (typeof value === 'number') return Number.isFinite(value)
-  if (Array.isArray(value)) return value.every(isJsonValue)
-  return isJsonObject(value)
+  if (value === null) return true;
+  if (typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every(isJsonValue);
+  return isJsonObject(value);
 }
 
 export function isJsonObject(value: unknown): value is JsonObject {
-  return isRecord(value) && Object.values(value).every(isJsonValue)
+  return isRecord(value) && Object.values(value).every(isJsonValue);
 }
 
-export type APIErrorBody = JsonValue
+export type APIErrorBody = JsonValue;
 
 export type APIError = Error & {
-  status?: number
-  code?: string
-  body?: APIErrorBody
-}
+  status?: number;
+  code?: string;
+  body?: APIErrorBody;
+};
 
 export function getAPIErrorStatus(error: unknown): number | undefined {
-  if (typeof error !== 'object' || error === null || !(error instanceof Error)) {
-    return undefined
+  if (
+    typeof error !== "object" ||
+    error === null ||
+    !(error instanceof Error)
+  ) {
+    return undefined;
   }
-  const status = (error as APIError).status
-  return typeof status === 'number' ? status : undefined
+  const status = (error as APIError).status;
+  return typeof status === "number" ? status : undefined;
 }
 
 function getErrorDetails(body: APIErrorBody): {
-  code?: string
-  message?: string
+  code?: string;
+  message?: string;
 } {
-  if (!isJsonObject(body) || !isJsonObject(body.error)) return {}
+  if (!isJsonObject(body)) return {};
+  if (typeof body.error === "string") return { code: body.error };
+  if (!isJsonObject(body.error)) return {};
 
   const code =
-    typeof body.error.code === 'string' && body.error.code
+    typeof body.error.code === "string" && body.error.code
       ? body.error.code
-      : undefined
+      : undefined;
 
   const message =
-    typeof body.error.message === 'string' && body.error.message
+    typeof body.error.message === "string" && body.error.message
       ? body.error.message
-      : undefined
+      : undefined;
 
-  return { code, message }
+  return { code, message };
 }
 
 function buildHeaders(init: RequestInit): Headers {
-  const headers = new Headers(init.headers)
+  const headers = new Headers(init.headers);
 
-  const hasBody = init.body !== undefined && init.body !== null
-  const isStringBody = typeof init.body === 'string'
+  const hasBody = init.body !== undefined && init.body !== null;
+  const isStringBody = typeof init.body === "string";
 
   // Only set JSON content-type when body is a JSON string. (Never for FormData)
-  if (hasBody && isStringBody && !headers.has('Content-Type')) {
-    headers.set('Content-Type', 'application/json')
+  if (hasBody && isStringBody && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
   }
 
-  return headers
+  return headers;
 }
 
 function buildUrl(path: string): string {
   // ensure path always starts with /
-  const p = path.startsWith('/') ? path : `/${path}`
-  return `${BASE}${p}`
+  const p = path.startsWith("/") ? path : `/${path}`;
+  return `${BASE}${p}`;
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const account = await currentAccountContext();
+  const headers = buildHeaders(init);
+  headers.set("Authorization", `Bearer ${account.accessToken}`);
+  headers.set("X-PP-Account-ID", account.membership.accountId);
   const res = await fetch(buildUrl(path), {
-    credentials: 'include',
+    credentials: "omit",
     ...init,
-    headers: buildHeaders(init),
-  })
+    headers,
+  });
 
-  const contentType = res.headers.get('content-type') || ''
-  const isJSON = contentType.includes('application/json')
+  const contentType = res.headers.get("content-type") || "";
+  const isJSON = contentType.includes("application/json");
 
-  let rawBody: unknown = null
+  let rawBody: unknown = null;
   if (res.status !== 204) {
     rawBody = isJSON
       ? await res.json().catch(() => null)
-      : await res.text().catch(() => '')
+      : await res.text().catch(() => "");
   }
 
-  const body: APIErrorBody = isJsonValue(rawBody) ? rawBody : null
+  const body: APIErrorBody = isJsonValue(rawBody) ? rawBody : null;
 
   if (!res.ok) {
-    const details = getErrorDetails(body)
+    const details = getErrorDetails(body);
     const message =
-      typeof body === 'string'
+      typeof body === "string"
         ? body || `Request failed: ${res.status}`
-        : details.message ?? `Request failed: ${res.status}`
+        : (details.message ?? `Request failed: ${res.status}`);
 
-    const error: APIError = new Error(message)
-    error.status = res.status
-    error.body = body
-    error.code = details.code
-    throw error
+    const error: APIError = new Error(message);
+    error.status = res.status;
+    error.body = body;
+    error.code = details.code;
+    throw error;
   }
 
-  return body as T
+  return body as T;
 }
 
-/* ----------------------------- Auth ----------------------------- */
-
-export async function unlock(passcode: string) {
-  const result = await request<unknown>('/api/v1/auth/unlock', {
-    method: 'POST',
-    body: JSON.stringify({ passcode }),
-  })
-  if (!isRecord(result) || result.ok !== true) {
-    throw new Error('Invalid unlock response')
-  }
-}
-
-export async function authStatus(): Promise<{ unlocked: boolean }> {
-  const result = await request<unknown>('/api/v1/auth/status')
-  if (!isRecord(result) || typeof result.unlocked !== 'boolean') {
-    throw new Error('Invalid authentication status response')
-  }
-  return { unlocked: result.unlocked }
-}
-
+// Browser sign-out is owned by the official Supabase client; Panda Pages does
+// not call a cookie-auth endpoint or persist a custom bearer token.
 export async function logout(): Promise<void> {
-  const result = await request<unknown>('/api/v1/auth/logout', {
-    method: 'POST',
-  })
-  if (!isRecord(result) || result.ok !== true) {
-    throw new Error('Invalid logout response')
-  }
+  await signOutSupabaseSession()
+  clearSelectedAccount()
 }
 
 /* ---------------------------- Library --------------------------- */
 
 export type LibraryProgress = {
-  version: number
-  percent: number
-  updatedAt: string
-  isCurrentVersion: boolean
-}
+  version: number;
+  percent: number;
+  updatedAt: string;
+  isCurrentVersion: boolean;
+};
 
-export type LibraryProgressAvailability = 'available' | 'unavailable'
+export type LibraryProgressAvailability = "available" | "unavailable";
 
 export type LibraryStory = {
-  slug: string
-  title: string
-  author: string | null
-  language: string
-  publishedVersion: number
-  wordCount: number
-  chapterCount: number
-  progress: LibraryProgress | null
-  progressAvailability: LibraryProgressAvailability
-}
+  slug: string;
+  title: string;
+  author: string | null;
+  language: string;
+  publishedVersion: number;
+  wordCount: number;
+  chapterCount: number;
+  progress: LibraryProgress | null;
+  progressAvailability: LibraryProgressAvailability;
+};
 
 // Kept as an alias for existing imports while the additive response grows into
 // the complete Library read model.
-export type LibraryItem = LibraryStory
+export type LibraryItem = LibraryStory;
 
 export type LibraryResponse = {
-  items: LibraryStory[]
-  unavailableItemCount: number
-}
+  items: LibraryStory[];
+  unavailableItemCount: number;
+};
 
 export class InvalidLibraryResponseError extends Error {
   constructor() {
-    super('Invalid library response')
-    this.name = 'InvalidLibraryResponseError'
+    super("Invalid library response");
+    this.name = "InvalidLibraryResponseError";
   }
 }
 
@@ -206,63 +195,63 @@ export function isInvalidLibraryResponseError(
 ): error is InvalidLibraryResponseError {
   return (
     error instanceof InvalidLibraryResponseError ||
-    (error instanceof Error && error.name === 'InvalidLibraryResponseError')
-  )
+    (error instanceof Error && error.name === "InvalidLibraryResponseError")
+  );
 }
 
 const libraryStoryRequiredKeys = [
-  'slug',
-  'title',
-  'language',
-  'publishedVersion',
-  'wordCount',
-  'chapterCount',
-] as const
+  "slug",
+  "title",
+  "language",
+  "publishedVersion",
+  "wordCount",
+  "chapterCount",
+] as const;
 
 const libraryProgressKeys = [
-  'version',
-  'percent',
-  'updatedAt',
-  'isCurrentVersion',
-] as const
+  "version",
+  "percent",
+  "updatedAt",
+  "isCurrentVersion",
+] as const;
 
-const librarySlugPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+const librarySlugPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const rfc3339Pattern =
-  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:Z|([+-])(\d{2}):(\d{2}))$/
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:Z|([+-])(\d{2}):(\d{2}))$/;
 
 const unsafeLibraryKeys = new Set([
-  'account',
-  'accountdata',
-  'accountemail',
-  'accountid',
-  'accounts',
-  'aid',
-  'child',
-  'html',
-  'id',
-  'locator',
-  'markdown',
-  'profile',
-  'profiledata',
-  'profileid',
-  'profiles',
-  'prompt',
-  'publishedversionid',
-  'renderedhtml',
-  'segment',
-  'segments',
-  'settings',
-  'storyid',
-  'versionid',
-])
+  "account",
+  "accountdata",
+  "accountemail",
+  "accountid",
+  "accounts",
+  "aid",
+  "child",
+  "html",
+  "id",
+  "locator",
+  "markdown",
+  "profile",
+  "profiledata",
+  "profileid",
+  "profiles",
+  "prompt",
+  "publishedversionid",
+  "renderedhtml",
+  "segment",
+  "segments",
+  "settings",
+  "storyid",
+  "versionid",
+]);
 
 function isUnsafeLibraryKey(key: string): boolean {
-  const compact = key.replaceAll(/[_-]/g, '').toLocaleLowerCase('en-GB')
+  const compact = key.replaceAll(/[_-]/g, "").toLocaleLowerCase("en-GB");
   return (
     unsafeLibraryKeys.has(compact) ||
     /(?:^|[_-])ids?$/iu.test(key) ||
     /(?:Id|ID|Ids|IDs)$/u.test(key)
-  )
+  );
 }
 
 function hasUnsafeLibraryFields(
@@ -270,40 +259,40 @@ function hasUnsafeLibraryFields(
   seen: WeakSet<object> = new WeakSet(),
 ): boolean {
   if (Array.isArray(value)) {
-    if (seen.has(value)) return false
-    seen.add(value)
-    return value.some((item) => hasUnsafeLibraryFields(item, seen))
+    if (seen.has(value)) return false;
+    seen.add(value);
+    return value.some((item) => hasUnsafeLibraryFields(item, seen));
   }
-  if (!isRecord(value)) return false
-  if (seen.has(value)) return false
-  seen.add(value)
+  if (!isRecord(value)) return false;
+  if (seen.has(value)) return false;
+  seen.add(value);
   return Object.entries(value).some(
     ([key, child]) =>
       isUnsafeLibraryKey(key) || hasUnsafeLibraryFields(child, seen),
-  )
+  );
 }
 
 function isNonNegativeInteger(value: unknown): value is number {
-  return Number.isSafeInteger(value) && Number(value) >= 0
+  return Number.isSafeInteger(value) && Number(value) >= 0;
 }
 
 function isPositiveSafeInteger(value: unknown): value is number {
-  return Number.isSafeInteger(value) && Number(value) >= 1
+  return Number.isSafeInteger(value) && Number(value) >= 1;
 }
 
 function isRFC3339Timestamp(value: unknown): value is string {
-  if (typeof value !== 'string') return false
-  const match = rfc3339Pattern.exec(value)
-  if (!match) return false
+  if (typeof value !== "string") return false;
+  const match = rfc3339Pattern.exec(value);
+  if (!match) return false;
 
-  const year = Number(match[1])
-  const month = Number(match[2])
-  const day = Number(match[3])
-  const hour = Number(match[4])
-  const minute = Number(match[5])
-  const second = Number(match[6])
-  const offsetHour = match[8] === undefined ? 0 : Number(match[8])
-  const offsetMinute = match[9] === undefined ? 0 : Number(match[9])
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const offsetHour = match[8] === undefined ? 0 : Number(match[8]);
+  const offsetMinute = match[9] === undefined ? 0 : Number(match[9]);
 
   if (
     year < 1 ||
@@ -316,48 +305,48 @@ function isRFC3339Timestamp(value: unknown): value is string {
     offsetHour > 23 ||
     offsetMinute > 59
   ) {
-    return false
+    return false;
   }
 
-  const calendarDate = new Date(Date.UTC(year, month - 1, day))
+  const calendarDate = new Date(Date.UTC(year, month - 1, day));
   if (
     calendarDate.getUTCFullYear() !== year ||
     calendarDate.getUTCMonth() !== month - 1 ||
     calendarDate.getUTCDate() !== day
   ) {
-    return false
+    return false;
   }
 
-  return Number.isFinite(Date.parse(value))
+  return Number.isFinite(Date.parse(value));
 }
 
 function invalidLibraryResponse(): never {
-  throw new InvalidLibraryResponseError()
+  throw new InvalidLibraryResponseError();
 }
 
 function parseLibraryProgress(
   value: unknown,
   publishedVersion: number,
-): Pick<LibraryStory, 'progress' | 'progressAvailability'> {
+): Pick<LibraryStory, "progress" | "progressAvailability"> {
   if (value === null) {
-    return { progress: null, progressAvailability: 'available' }
+    return { progress: null, progressAvailability: "available" };
   }
   if (!isRecord(value)) {
-    return { progress: null, progressAvailability: 'unavailable' }
+    return { progress: null, progressAvailability: "unavailable" };
   }
 
   if (
     !libraryProgressKeys.every((key) => Object.hasOwn(value, key)) ||
     !isPositiveSafeInteger(value.version) ||
-    typeof value.percent !== 'number' ||
+    typeof value.percent !== "number" ||
     !Number.isFinite(value.percent) ||
     value.percent < 0 ||
     value.percent > 1 ||
     !isRFC3339Timestamp(value.updatedAt) ||
-    typeof value.isCurrentVersion !== 'boolean' ||
+    typeof value.isCurrentVersion !== "boolean" ||
     value.isCurrentVersion !== (value.version === publishedVersion)
   ) {
-    return { progress: null, progressAvailability: 'unavailable' }
+    return { progress: null, progressAvailability: "unavailable" };
   }
 
   return {
@@ -367,38 +356,38 @@ function parseLibraryProgress(
       updatedAt: value.updatedAt,
       isCurrentVersion: value.isCurrentVersion,
     },
-    progressAvailability: 'available',
-  }
+    progressAvailability: "available",
+  };
 }
 
 function parseLibraryStory(value: unknown): LibraryStory {
   if (
     !isRecord(value) ||
     !libraryStoryRequiredKeys.every((key) => Object.hasOwn(value, key)) ||
-    typeof value.slug !== 'string' ||
+    typeof value.slug !== "string" ||
     !librarySlugPattern.test(value.slug) ||
-    typeof value.title !== 'string' ||
+    typeof value.title !== "string" ||
     value.title.trim().length === 0 ||
-    typeof value.language !== 'string' ||
+    typeof value.language !== "string" ||
     value.language.trim().length === 0 ||
     !isPositiveSafeInteger(value.publishedVersion) ||
     !isNonNegativeInteger(value.wordCount) ||
     !isNonNegativeInteger(value.chapterCount)
   ) {
-    return invalidLibraryResponse()
+    return invalidLibraryResponse();
   }
 
-  const author = Object.hasOwn(value, 'author') ? value.author : null
+  const author = Object.hasOwn(value, "author") ? value.author : null;
   if (
     author !== null &&
-    (typeof author !== 'string' || author.trim().length === 0)
+    (typeof author !== "string" || author.trim().length === 0)
   ) {
-    return invalidLibraryResponse()
+    return invalidLibraryResponse();
   }
 
-  const parsedProgress = Object.hasOwn(value, 'progress')
+  const parsedProgress = Object.hasOwn(value, "progress")
     ? parseLibraryProgress(value.progress, value.publishedVersion)
-    : { progress: null, progressAvailability: 'unavailable' as const }
+    : { progress: null, progressAvailability: "unavailable" as const };
 
   return {
     slug: value.slug,
@@ -409,151 +398,152 @@ function parseLibraryStory(value: unknown): LibraryStory {
     wordCount: value.wordCount,
     chapterCount: value.chapterCount,
     ...parsedProgress,
-  }
+  };
 }
 
 export function parseLibraryResponse(value: unknown): LibraryResponse {
   if (
     !isRecord(value) ||
     hasUnsafeLibraryFields(value) ||
-    !Object.hasOwn(value, 'items') ||
+    !Object.hasOwn(value, "items") ||
     !Array.isArray(value.items)
   ) {
-    return invalidLibraryResponse()
+    return invalidLibraryResponse();
   }
 
-  const unavailableItemCount = Object.hasOwn(value, 'unavailableItemCount')
+  const unavailableItemCount = Object.hasOwn(value, "unavailableItemCount")
     ? value.unavailableItemCount
-    : 0
+    : 0;
   if (!isNonNegativeInteger(unavailableItemCount)) {
-    return invalidLibraryResponse()
+    return invalidLibraryResponse();
   }
 
-  const items = value.items.map(parseLibraryStory)
-  const slugs = new Set<string>()
+  const items = value.items.map(parseLibraryStory);
+  const slugs = new Set<string>();
   for (const item of items) {
-    if (slugs.has(item.slug)) return invalidLibraryResponse()
-    slugs.add(item.slug)
+    if (slugs.has(item.slug)) return invalidLibraryResponse();
+    slugs.add(item.slug);
   }
-  return { items, unavailableItemCount }
+  return { items, unavailableItemCount };
 }
 
 export async function getLibrary(): Promise<LibraryResponse> {
-  const data = await request<unknown>('/api/v1/library')
-  return parseLibraryResponse(data)
+  const data = await request<unknown>("/api/v1/library");
+  return parseLibraryResponse(data);
 }
 
 /* ----------------------------- Story ---------------------------- */
 
 export type ReaderStoryPayload = {
-  slug: string
-  title: string
-  author: string | null
-  language: string
-  version: number
-  segments: ReaderStorySegment[]
-}
+  slug: string;
+  title: string;
+  author: string | null;
+  language: string;
+  version: number;
+  segments: ReaderStorySegment[];
+};
 
 function hasExactKeys(
   record: Record<string, unknown>,
   required: readonly string[],
 ): boolean {
-  const allowed = new Set(required)
+  const allowed = new Set(required);
   return (
     required.every((key) => Object.hasOwn(record, key)) &&
     Object.keys(record).every((key) => allowed.has(key))
-  )
+  );
 }
 
 function isPositiveInteger(value: unknown): value is number {
-  return Number.isInteger(value) && Number(value) >= 1
+  return Number.isInteger(value) && Number(value) >= 1;
 }
 
 function parseReaderSegment(value: unknown): ReaderStorySegment {
   if (
     !isRecord(value) ||
     !hasExactKeys(value, [
-      'ordinal',
-      'kind',
-      'headingLevel',
-      'contentKey',
-      'contentOccurrence',
-      'chapterKey',
-      'chapterOccurrence',
-      'renderedHtml',
-      'wordCount',
+      "ordinal",
+      "kind",
+      "headingLevel",
+      "contentKey",
+      "contentOccurrence",
+      "chapterKey",
+      "chapterOccurrence",
+      "renderedHtml",
+      "wordCount",
     ]) ||
     !isPositiveInteger(value.ordinal) ||
-    !['heading', 'paragraph', 'other'].includes(String(value.kind)) ||
+    !["heading", "paragraph", "other"].includes(String(value.kind)) ||
     !isReaderContentKey(value.contentKey) ||
     !isPositiveInteger(value.contentOccurrence) ||
-    typeof value.renderedHtml !== 'string' ||
+    typeof value.renderedHtml !== "string" ||
     !Number.isInteger(value.wordCount) ||
     Number(value.wordCount) < 0
   ) {
-    throw new Error('Invalid Reader segment response')
+    throw new Error("Invalid Reader segment response");
   }
 
-  const kind = value.kind as ReaderSegmentKind
+  const kind = value.kind as ReaderSegmentKind;
   if (
-    (kind === 'heading' &&
+    (kind === "heading" &&
       (!Number.isInteger(value.headingLevel) ||
         Number(value.headingLevel) < 1 ||
         Number(value.headingLevel) > 6)) ||
-    (kind !== 'heading' && value.headingLevel !== null)
+    (kind !== "heading" && value.headingLevel !== null)
   ) {
-    throw new Error('Invalid Reader segment heading level')
+    throw new Error("Invalid Reader segment heading level");
   }
 
-  const hasChapter = value.chapterKey !== null || value.chapterOccurrence !== null
+  const hasChapter =
+    value.chapterKey !== null || value.chapterOccurrence !== null;
   if (
     hasChapter &&
     (!isReaderContentKey(value.chapterKey) ||
       !isPositiveInteger(value.chapterOccurrence))
   ) {
-    throw new Error('Invalid Reader segment chapter identity')
+    throw new Error("Invalid Reader segment chapter identity");
   }
 
   return {
     ordinal: value.ordinal,
     kind,
-    headingLevel: kind === 'heading' ? Number(value.headingLevel) : null,
+    headingLevel: kind === "heading" ? Number(value.headingLevel) : null,
     contentKey: value.contentKey,
     contentOccurrence: value.contentOccurrence,
     chapterKey: hasChapter ? String(value.chapterKey) : null,
     chapterOccurrence: hasChapter ? Number(value.chapterOccurrence) : null,
     renderedHtml: parseSafeRenderedStoryHTML(value.renderedHtml),
     wordCount: Number(value.wordCount),
-  }
+  };
 }
 
 export function parseReaderStoryPayload(value: unknown): ReaderStoryPayload {
   if (
     !isRecord(value) ||
     !hasExactKeys(value, [
-      'slug',
-      'title',
-      'author',
-      'language',
-      'version',
-      'segments',
+      "slug",
+      "title",
+      "author",
+      "language",
+      "version",
+      "segments",
     ]) ||
-    typeof value.slug !== 'string' ||
+    typeof value.slug !== "string" ||
     value.slug.length === 0 ||
-    typeof value.title !== 'string' ||
-    (value.author !== null && typeof value.author !== 'string') ||
-    typeof value.language !== 'string' ||
+    typeof value.title !== "string" ||
+    (value.author !== null && typeof value.author !== "string") ||
+    typeof value.language !== "string" ||
     !isPositiveInteger(value.version) ||
     !Array.isArray(value.segments) ||
     value.segments.length === 0
   ) {
-    throw new Error('Invalid Reader response')
+    throw new Error("Invalid Reader response");
   }
 
-  const segments = value.segments.map(parseReaderSegment)
+  const segments = value.segments.map(parseReaderSegment);
   for (let index = 1; index < segments.length; index += 1) {
     if (segments[index].ordinal <= segments[index - 1].ordinal) {
-      throw new Error('Reader segments are not in strict ordinal order')
+      throw new Error("Reader segments are not in strict ordinal order");
     }
   }
 
@@ -564,7 +554,7 @@ export function parseReaderStoryPayload(value: unknown): ReaderStoryPayload {
     language: value.language,
     version: value.version,
     segments,
-  }
+  };
 }
 
 export async function getReaderStory(
@@ -574,189 +564,183 @@ export async function getReaderStory(
   const data = await request<unknown>(
     `/api/v1/reader/${encodeURIComponent(slug)}`,
     { signal },
-  )
-  return parseReaderStoryPayload(data)
+  );
+  return parseReaderStoryPayload(data);
 }
 
 /* ----------------------------- Admin ---------------------------- */
 
 export type AdminStoryInput = {
-  slug: string
-  title: string
-  author?: string | null
-  markdown: string
-  language?: string | null
-  sourceUrl?: string | null
-  rights?: JsonObject
-}
+  slug: string;
+  title: string;
+  author?: string | null;
+  markdown: string;
+  language?: string | null;
+  sourceUrl?: string | null;
+  rights?: JsonObject;
+};
 
-export type AdminPreviewRequest = AdminStoryInput
-export type AdminDraftUpsertRequest = AdminStoryInput
+export type AdminPreviewRequest = AdminStoryInput;
+export type AdminDraftUpsertRequest = AdminStoryInput;
 
 export type AdminValidationIssue = {
-  field: string
-  code: string
-  message: string
-}
+  field: string;
+  code: string;
+  message: string;
+};
 
 export type AdminPreviewResponse = {
-  slug: string
-  title: string
-  author: string | null
-  language: string
-  rights: JsonObject
-  sourceUrl: string | null
-  renderedHtml: SafeRenderedStoryHTML
-  segmentCount: number
-  wordCount: number
-  chapterCount: number
-  warnings: AdminValidationIssue[]
-}
+  slug: string;
+  title: string;
+  author: string | null;
+  language: string;
+  rights: JsonObject;
+  sourceUrl: string | null;
+  renderedHtml: SafeRenderedStoryHTML;
+  segmentCount: number;
+  wordCount: number;
+  chapterCount: number;
+  warnings: AdminValidationIssue[];
+};
 
-export type AdminDraftOutcome =
-  | 'created_story'
-  | 'created_version'
-  | 'reused'
+export type AdminDraftOutcome = "created_story" | "created_version" | "reused";
 
 export type AdminDraftUpsertResponse = {
-  slug: string
-  versionId: string
-  version: number
-  segmentCount: number
-  wordCount: number
-  chapterCount: number
-  renderedHtml: string
-  outcome: AdminDraftOutcome
-}
+  slug: string;
+  versionId: string;
+  version: number;
+  segmentCount: number;
+  wordCount: number;
+  chapterCount: number;
+  renderedHtml: string;
+  outcome: AdminDraftOutcome;
+};
 
 export type AdminStoryStatus =
-  | 'draft_only'
-  | 'published'
-  | 'published_with_draft'
-  | 'unpublished'
-  | 'repair_required'
+  | "draft_only"
+  | "published"
+  | "published_with_draft"
+  | "unpublished"
+  | "repair_required";
 
-export type AdminVersionHealth =
-  | 'ready'
-  | 'repair_required'
-  | 'unavailable'
+export type AdminVersionHealth = "ready" | "repair_required" | "unavailable";
 
 export type AdminVersionPointer = {
-  versionId: string
-  version: number
-}
+  versionId: string;
+  version: number;
+};
 
 export type AdminStoryListItem = {
-  slug: string
-  title: string
-  author: string | null
-  language: string
-  rights: JsonObject
-  sourceUrl: string | null
-  status: AdminStoryStatus
-  publishedVersion: AdminVersionPointer | null
-  draftVersion: AdminVersionPointer | null
-  versionCount: number
-  updatedAt: string
-}
+  slug: string;
+  title: string;
+  author: string | null;
+  language: string;
+  rights: JsonObject;
+  sourceUrl: string | null;
+  status: AdminStoryStatus;
+  publishedVersion: AdminVersionPointer | null;
+  draftVersion: AdminVersionPointer | null;
+  versionCount: number;
+  updatedAt: string;
+};
 
 export type AdminVersionSummary = {
-  versionId: string
-  version: number
-  createdAt: string
-  isDraft: boolean
-  isPublished: boolean
-  segmentCount: number
-  wordCount: number
-  chapterCount: number
-  health: AdminVersionHealth
-}
+  versionId: string;
+  version: number;
+  createdAt: string;
+  isDraft: boolean;
+  isPublished: boolean;
+  segmentCount: number;
+  wordCount: number;
+  chapterCount: number;
+  health: AdminVersionHealth;
+};
 
 export type AdminStoryDetail = AdminStoryListItem & {
-  createdAt: string
-  versions: AdminVersionSummary[]
-}
+  createdAt: string;
+  versions: AdminVersionSummary[];
+};
 
 export type AdminVersionSource = {
-  slug: string
-  title: string
-  author: string | null
-  language: string
-  rights: JsonObject
-  sourceUrl: string | null
-  versionId: string
-  version: number
-  markdown: string
-  renderedHtml: string
-  segmentCount: number
-  wordCount: number
-  chapterCount: number
-  createdAt: string
-  isDraft: boolean
-  isPublished: boolean
-  health: AdminVersionHealth
-}
+  slug: string;
+  title: string;
+  author: string | null;
+  language: string;
+  rights: JsonObject;
+  sourceUrl: string | null;
+  versionId: string;
+  version: number;
+  markdown: string;
+  renderedHtml: string;
+  segmentCount: number;
+  wordCount: number;
+  chapterCount: number;
+  createdAt: string;
+  isDraft: boolean;
+  isPublished: boolean;
+  health: AdminVersionHealth;
+};
 
-export type AdminStoriesListResponse = { items: AdminStoryListItem[] }
+export type AdminStoriesListResponse = { items: AdminStoryListItem[] };
 
 export type AdminStoryStatusResponse = {
-  slug: string
-  status: AdminStoryStatus
-  publishedVersion: AdminVersionPointer | null
-  draftVersion: AdminVersionPointer | null
-  versionCount: number
-  updatedAt: string
-}
+  slug: string;
+  status: AdminStoryStatus;
+  publishedVersion: AdminVersionPointer | null;
+  draftVersion: AdminVersionPointer | null;
+  versionCount: number;
+  updatedAt: string;
+};
 
 const adminStoryStatuses = new Set<AdminStoryStatus>([
-  'draft_only',
-  'published',
-  'published_with_draft',
-  'unpublished',
-  'repair_required',
-])
+  "draft_only",
+  "published",
+  "published_with_draft",
+  "unpublished",
+  "repair_required",
+]);
 const adminVersionHealthValues = new Set<AdminVersionHealth>([
-  'ready',
-  'repair_required',
-  'unavailable',
-])
+  "ready",
+  "repair_required",
+  "unavailable",
+]);
 const adminDraftOutcomes = new Set<AdminDraftOutcome>([
-  'created_story',
-  'created_version',
-  'reused',
-])
+  "created_story",
+  "created_version",
+  "reused",
+]);
 const adminUUIDPattern =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const forbiddenAdminKeys = new Set([
-  'account',
-  'accountdata',
-  'accountemail',
-  'accountid',
-  'accounts',
-  'chapterkey',
-  'chapteroccurrence',
-  'contenthash',
-  'contentkey',
-  'contentoccurrence',
-  'databaseid',
-  'headinglevel',
-  'internalid',
-  'locator',
-  'ordinal',
-  'profile',
-  'profiledata',
-  'profileid',
-  'profiles',
-  'segment',
-  'segments',
-  'session',
-  'sessiondata',
-  'sessionid',
-  'storyid',
-])
+  "account",
+  "accountdata",
+  "accountemail",
+  "accountid",
+  "accounts",
+  "chapterkey",
+  "chapteroccurrence",
+  "contenthash",
+  "contentkey",
+  "contentoccurrence",
+  "databaseid",
+  "headinglevel",
+  "internalid",
+  "locator",
+  "ordinal",
+  "profile",
+  "profiledata",
+  "profileid",
+  "profiles",
+  "segment",
+  "segments",
+  "session",
+  "sessiondata",
+  "sessionid",
+  "storyid",
+]);
 
 function compactAdminKey(key: string): string {
-  return key.replaceAll(/[_-]/g, '').toLocaleLowerCase('en-GB')
+  return key.replaceAll(/[_-]/g, "").toLocaleLowerCase("en-GB");
 }
 
 function hasForbiddenAdminFields(
@@ -765,26 +749,26 @@ function hasForbiddenAdminFields(
   seen: WeakSet<object> = new WeakSet(),
 ): boolean {
   if (Array.isArray(value)) {
-    if (seen.has(value)) return false
-    seen.add(value)
+    if (seen.has(value)) return false;
+    seen.add(value);
     return value.some((item) =>
       hasForbiddenAdminFields(item, allowedContent, seen),
-    )
+    );
   }
-  if (!isRecord(value)) return false
-  if (seen.has(value)) return false
-  seen.add(value)
+  if (!isRecord(value)) return false;
+  if (seen.has(value)) return false;
+  seen.add(value);
   return Object.entries(value).some(([key, child]) => {
-    const compact = compactAdminKey(key)
-    if (forbiddenAdminKeys.has(compact)) return true
+    const compact = compactAdminKey(key);
+    if (forbiddenAdminKeys.has(compact)) return true;
     if (
-      (compact === 'markdown' || compact === 'renderedhtml') &&
+      (compact === "markdown" || compact === "renderedhtml") &&
       !allowedContent.has(compact)
     ) {
-      return true
+      return true;
     }
-    return hasForbiddenAdminFields(child, allowedContent, seen)
-  })
+    return hasForbiddenAdminFields(child, allowedContent, seen);
+  });
 }
 
 function adminRecord(
@@ -796,104 +780,104 @@ function adminRecord(
     !isJsonObject(value) ||
     hasForbiddenAdminFields(value, new Set(allowedContent))
   ) {
-    throw new Error('Invalid admin response')
+    throw new Error("Invalid admin response");
   }
-  return value
+  return value;
 }
 
 function requiredAdminString(
   record: Record<string, unknown>,
   key: string,
 ): string {
-  const value = record[key]
-  if (typeof value !== 'string' || value.trim().length === 0) {
-    throw new Error('Invalid admin response')
+  const value = record[key];
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error("Invalid admin response");
   }
-  return value
+  return value;
 }
 
 function nullableAdminString(
   record: Record<string, unknown>,
   key: string,
 ): string | null {
-  const value = record[key]
-  if (value === null) return null
-  if (typeof value !== 'string' || value.trim().length === 0) {
-    throw new Error('Invalid admin response')
+  const value = record[key];
+  if (value === null) return null;
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error("Invalid admin response");
   }
-  return value
+  return value;
 }
 
 function parseAdminSlug(value: unknown): string {
-  if (typeof value !== 'string' || !librarySlugPattern.test(value)) {
-    throw new Error('Invalid admin response')
+  if (typeof value !== "string" || !librarySlugPattern.test(value)) {
+    throw new Error("Invalid admin response");
   }
-  return value
+  return value;
 }
 
 function parseAdminUUID(value: unknown): string {
-  if (typeof value !== 'string' || !adminUUIDPattern.test(value)) {
-    throw new Error('Invalid admin response')
+  if (typeof value !== "string" || !adminUUIDPattern.test(value)) {
+    throw new Error("Invalid admin response");
   }
-  return value
+  return value;
 }
 
 function parseAdminStatus(value: unknown): AdminStoryStatus {
   if (
-    typeof value !== 'string' ||
+    typeof value !== "string" ||
     !adminStoryStatuses.has(value as AdminStoryStatus)
   ) {
-    throw new Error('Invalid admin response')
+    throw new Error("Invalid admin response");
   }
-  return value as AdminStoryStatus
+  return value as AdminStoryStatus;
 }
 
 function parseAdminHealth(value: unknown): AdminVersionHealth {
   if (
-    typeof value !== 'string' ||
+    typeof value !== "string" ||
     !adminVersionHealthValues.has(value as AdminVersionHealth)
   ) {
-    throw new Error('Invalid admin response')
+    throw new Error("Invalid admin response");
   }
-  return value as AdminVersionHealth
+  return value as AdminVersionHealth;
 }
 
 function parseAdminPointer(value: unknown): AdminVersionPointer | null {
-  if (value === null) return null
-  const record = adminRecord(value)
+  if (value === null) return null;
+  const record = adminRecord(value);
   if (!isPositiveSafeInteger(record.version)) {
-    throw new Error('Invalid admin response')
+    throw new Error("Invalid admin response");
   }
   return {
     versionId: parseAdminUUID(record.versionId),
     version: record.version,
-  }
+  };
 }
 
 function parseAdminMetadata(record: Record<string, unknown>) {
   if (
     !isJsonObject(record.rights) ||
-    typeof record.language !== 'string' ||
+    typeof record.language !== "string" ||
     record.language.trim().length === 0
   ) {
-    throw new Error('Invalid admin response')
+    throw new Error("Invalid admin response");
   }
   return {
-    title: requiredAdminString(record, 'title'),
-    author: nullableAdminString(record, 'author'),
+    title: requiredAdminString(record, "title"),
+    author: nullableAdminString(record, "author"),
     language: record.language,
     rights: record.rights,
-    sourceUrl: nullableAdminString(record, 'sourceUrl'),
-  }
+    sourceUrl: nullableAdminString(record, "sourceUrl"),
+  };
 }
 
 export function parseAdminStorySummary(value: unknown): AdminStoryListItem {
-  const record = adminRecord(value)
+  const record = adminRecord(value);
   if (
     !isNonNegativeInteger(record.versionCount) ||
     !isRFC3339Timestamp(record.updatedAt)
   ) {
-    throw new Error('Invalid admin response')
+    throw new Error("Invalid admin response");
   }
   return {
     slug: parseAdminSlug(record.slug),
@@ -903,21 +887,21 @@ export function parseAdminStorySummary(value: unknown): AdminStoryListItem {
     draftVersion: parseAdminPointer(record.draftVersion),
     versionCount: record.versionCount,
     updatedAt: record.updatedAt,
-  }
+  };
 }
 
 function parseAdminVersionSummary(value: unknown): AdminVersionSummary {
-  const record = adminRecord(value)
+  const record = adminRecord(value);
   if (
     !isPositiveSafeInteger(record.version) ||
     !isRFC3339Timestamp(record.createdAt) ||
-    typeof record.isDraft !== 'boolean' ||
-    typeof record.isPublished !== 'boolean' ||
+    typeof record.isDraft !== "boolean" ||
+    typeof record.isPublished !== "boolean" ||
     !isNonNegativeInteger(record.segmentCount) ||
     !isNonNegativeInteger(record.wordCount) ||
     !isNonNegativeInteger(record.chapterCount)
   ) {
-    throw new Error('Invalid admin response')
+    throw new Error("Invalid admin response");
   }
   return {
     versionId: parseAdminUUID(record.versionId),
@@ -929,56 +913,59 @@ function parseAdminVersionSummary(value: unknown): AdminVersionSummary {
     wordCount: record.wordCount,
     chapterCount: record.chapterCount,
     health: parseAdminHealth(record.health),
-  }
+  };
 }
 
 export function parseAdminStoriesListResponse(
   value: unknown,
 ): AdminStoriesListResponse {
-  const record = adminRecord(value)
-  if (!Array.isArray(record.items)) throw new Error('Invalid admin response')
-  const items = record.items.map(parseAdminStorySummary)
-  const slugs = new Set(items.map((item) => item.slug))
-  if (slugs.size !== items.length) throw new Error('Invalid admin response')
-  return { items }
+  const record = adminRecord(value);
+  if (!Array.isArray(record.items)) throw new Error("Invalid admin response");
+  const items = record.items.map(parseAdminStorySummary);
+  const slugs = new Set(items.map((item) => item.slug));
+  if (slugs.size !== items.length) throw new Error("Invalid admin response");
+  return { items };
 }
 
 export function parseAdminStoryDetail(value: unknown): AdminStoryDetail {
-  const record = adminRecord(value)
-  const summary = parseAdminStorySummary(record)
-  if (!isRFC3339Timestamp(record.createdAt) || !Array.isArray(record.versions)) {
-    throw new Error('Invalid admin response')
+  const record = adminRecord(value);
+  const summary = parseAdminStorySummary(record);
+  if (
+    !isRFC3339Timestamp(record.createdAt) ||
+    !Array.isArray(record.versions)
+  ) {
+    throw new Error("Invalid admin response");
   }
-  const versions = record.versions.map(parseAdminVersionSummary)
-  const ids = new Set<string>()
-  let previousVersion = Number.POSITIVE_INFINITY
+  const versions = record.versions.map(parseAdminVersionSummary);
+  const ids = new Set<string>();
+  let previousVersion = Number.POSITIVE_INFINITY;
   for (const version of versions) {
     if (ids.has(version.versionId) || version.version >= previousVersion) {
-      throw new Error('Invalid admin response')
+      throw new Error("Invalid admin response");
     }
-    ids.add(version.versionId)
-    previousVersion = version.version
+    ids.add(version.versionId);
+    previousVersion = version.version;
   }
   if (versions.length !== summary.versionCount) {
-    throw new Error('Invalid admin response')
+    throw new Error("Invalid admin response");
   }
-  return { ...summary, createdAt: record.createdAt, versions }
+  return { ...summary, createdAt: record.createdAt, versions };
 }
 
 export function parseAdminVersionSource(value: unknown): AdminVersionSource {
-  const record = adminRecord(value, ['markdown', 'renderedhtml'])
+  const record = adminRecord(value, ["markdown", "renderedhtml"]);
   if (
     !isPositiveSafeInteger(record.version) ||
     !isRFC3339Timestamp(record.createdAt) ||
-    typeof record.markdown !== 'string' ||
-    typeof record.renderedHtml !== 'string' ||
-    typeof record.isDraft !== 'boolean' ||
-    typeof record.isPublished !== 'boolean' ||
+    typeof record.markdown !== "string" ||
+    typeof record.renderedHtml !== "string" ||
+    typeof record.isDraft !== "boolean" ||
+    typeof record.isPublished !== "boolean" ||
     !isNonNegativeInteger(record.segmentCount) ||
     !isNonNegativeInteger(record.wordCount) ||
     !isNonNegativeInteger(record.chapterCount)
   ) {
-    throw new Error('Invalid admin response')
+    throw new Error("Invalid admin response");
   }
   return {
     slug: parseAdminSlug(record.slug),
@@ -994,44 +981,44 @@ export function parseAdminVersionSource(value: unknown): AdminVersionSource {
     isDraft: record.isDraft,
     isPublished: record.isPublished,
     health: parseAdminHealth(record.health),
-  }
+  };
 }
 
 function parseAdminIssue(value: unknown): AdminValidationIssue {
-  const record = adminRecord(value)
+  const record = adminRecord(value);
   return {
-    field: requiredAdminString(record, 'field'),
-    code: requiredAdminString(record, 'code'),
-    message: requiredAdminString(record, 'message'),
-  }
+    field: requiredAdminString(record, "field"),
+    code: requiredAdminString(record, "code"),
+    message: requiredAdminString(record, "message"),
+  };
 }
 
 export function getAdminValidationIssues(
   error: unknown,
 ): AdminValidationIssue[] | null {
-  if (!(error instanceof Error)) return null
-  const body = (error as APIError).body
-  if (!isJsonObject(body) || !isJsonObject(body.error)) return null
-  if (!Array.isArray(body.error.issues)) return null
+  if (!(error instanceof Error)) return null;
+  const body = (error as APIError).body;
+  if (!isJsonObject(body) || !isJsonObject(body.error)) return null;
+  if (!Array.isArray(body.error.issues)) return null;
   try {
-    return body.error.issues.map(parseAdminIssue)
+    return body.error.issues.map(parseAdminIssue);
   } catch {
-    return null
+    return null;
   }
 }
 
 export function parseAdminPreviewResponse(
   value: unknown,
 ): AdminPreviewResponse {
-  const record = adminRecord(value, ['renderedhtml'])
+  const record = adminRecord(value, ["renderedhtml"]);
   if (
-    typeof record.renderedHtml !== 'string' ||
+    typeof record.renderedHtml !== "string" ||
     !isNonNegativeInteger(record.segmentCount) ||
     !isNonNegativeInteger(record.wordCount) ||
     !isNonNegativeInteger(record.chapterCount) ||
     !Array.isArray(record.warnings)
   ) {
-    throw new Error('Invalid admin response')
+    throw new Error("Invalid admin response");
   }
   return {
     slug: parseAdminSlug(record.slug),
@@ -1041,23 +1028,23 @@ export function parseAdminPreviewResponse(
     wordCount: record.wordCount,
     chapterCount: record.chapterCount,
     warnings: record.warnings.map(parseAdminIssue),
-  }
+  };
 }
 
 export function parseAdminDraftUpsertResponse(
   value: unknown,
 ): AdminDraftUpsertResponse {
-  const record = adminRecord(value, ['renderedhtml'])
+  const record = adminRecord(value, ["renderedhtml"]);
   if (
     !isPositiveSafeInteger(record.version) ||
     !isNonNegativeInteger(record.segmentCount) ||
     !isNonNegativeInteger(record.wordCount) ||
     !isNonNegativeInteger(record.chapterCount) ||
-    typeof record.renderedHtml !== 'string' ||
-    typeof record.outcome !== 'string' ||
+    typeof record.renderedHtml !== "string" ||
+    typeof record.outcome !== "string" ||
     !adminDraftOutcomes.has(record.outcome as AdminDraftOutcome)
   ) {
-    throw new Error('Invalid admin response')
+    throw new Error("Invalid admin response");
   }
   return {
     slug: parseAdminSlug(record.slug),
@@ -1068,18 +1055,18 @@ export function parseAdminDraftUpsertResponse(
     chapterCount: record.chapterCount,
     renderedHtml: parseSafeRenderedStoryHTML(record.renderedHtml),
     outcome: record.outcome as AdminDraftOutcome,
-  }
+  };
 }
 
 export function parseAdminStoryStatusResponse(
   value: unknown,
 ): AdminStoryStatusResponse {
-  const record = adminRecord(value)
+  const record = adminRecord(value);
   if (
     !isNonNegativeInteger(record.versionCount) ||
     !isRFC3339Timestamp(record.updatedAt)
   ) {
-    throw new Error('Invalid admin response')
+    throw new Error("Invalid admin response");
   }
   return {
     slug: parseAdminSlug(record.slug),
@@ -1088,36 +1075,36 @@ export function parseAdminStoryStatusResponse(
     draftVersion: parseAdminPointer(record.draftVersion),
     versionCount: record.versionCount,
     updatedAt: record.updatedAt,
-  }
+  };
 }
 
 export async function adminPreview(
   payload: AdminPreviewRequest,
   signal?: AbortSignal,
 ): Promise<AdminPreviewResponse> {
-  const data = await request<unknown>('/api/v1/admin/preview', {
-    method: 'POST',
+  const data = await request<unknown>("/api/v1/admin/preview", {
+    method: "POST",
     body: JSON.stringify(payload),
     signal,
-  })
-  return parseAdminPreviewResponse(data)
+  });
+  return parseAdminPreviewResponse(data);
 }
 
 export async function adminDraftUpsertStory(
   payload: AdminDraftUpsertRequest,
 ): Promise<AdminDraftUpsertResponse> {
-  const data = await request<unknown>('/api/v1/admin/stories/draft', {
-    method: 'POST',
+  const data = await request<unknown>("/api/v1/admin/stories/draft", {
+    method: "POST",
     body: JSON.stringify(payload),
-  })
-  return parseAdminDraftUpsertResponse(data)
+  });
+  return parseAdminDraftUpsertResponse(data);
 }
 
 export async function adminListStories(
   signal?: AbortSignal,
 ): Promise<AdminStoriesListResponse> {
-  const data = await request<unknown>('/api/v1/admin/stories', { signal })
-  return parseAdminStoriesListResponse(data)
+  const data = await request<unknown>("/api/v1/admin/stories", { signal });
+  return parseAdminStoriesListResponse(data);
 }
 
 export async function adminGetStory(
@@ -1127,8 +1114,8 @@ export async function adminGetStory(
   const data = await request<unknown>(
     `/api/v1/admin/stories/${encodeURIComponent(slug)}`,
     { signal },
-  )
-  return parseAdminStoryDetail(data)
+  );
+  return parseAdminStoryDetail(data);
 }
 
 export async function adminGetVersionSource(
@@ -1139,8 +1126,8 @@ export async function adminGetVersionSource(
   const data = await request<unknown>(
     `/api/v1/admin/stories/${encodeURIComponent(slug)}/versions/${encodeURIComponent(versionId)}`,
     { signal },
-  )
-  return parseAdminVersionSource(data)
+  );
+  return parseAdminVersionSource(data);
 }
 
 export async function adminPublishStory(
@@ -1149,9 +1136,9 @@ export async function adminPublishStory(
 ): Promise<AdminStoryStatusResponse> {
   const data = await request<unknown>(
     `/api/v1/admin/stories/${encodeURIComponent(slug)}/publish`,
-    { method: 'POST', body: JSON.stringify({ versionId }) },
-  )
-  return parseAdminStoryStatusResponse(data)
+    { method: "POST", body: JSON.stringify({ versionId }) },
+  );
+  return parseAdminStoryStatusResponse(data);
 }
 
 export async function adminUnpublishStory(
@@ -1159,38 +1146,38 @@ export async function adminUnpublishStory(
 ): Promise<AdminStoryStatusResponse> {
   const data = await request<unknown>(
     `/api/v1/admin/stories/${encodeURIComponent(slug)}/unpublish`,
-    { method: 'POST' },
-  )
-  return parseAdminStoryStatusResponse(data)
+    { method: "POST" },
+  );
+  return parseAdminStoryStatusResponse(data);
 }
 
 /* ---------------------------- Progress -------------------------- */
 
 export type ProgressState = {
-  version: number
-  locator: ReaderLocatorV2
-  percent: number
-}
+  version: number;
+  locator: ReaderLocatorV2;
+  percent: number;
+};
 
 export type ProgressResponse = {
-  progress: ProgressState | null
-}
+  progress: ProgressState | null;
+};
 
 export function parseProgressResponse(value: unknown): ProgressResponse {
-  if (!isRecord(value) || !hasExactKeys(value, ['progress'])) {
-    throw new Error('Invalid progress response')
+  if (!isRecord(value) || !hasExactKeys(value, ["progress"])) {
+    throw new Error("Invalid progress response");
   }
-  if (value.progress === null) return { progress: null }
+  if (value.progress === null) return { progress: null };
   if (
     !isRecord(value.progress) ||
-    !hasExactKeys(value.progress, ['version', 'locator', 'percent']) ||
+    !hasExactKeys(value.progress, ["version", "locator", "percent"]) ||
     !isPositiveInteger(value.progress.version) ||
-    typeof value.progress.percent !== 'number' ||
+    typeof value.progress.percent !== "number" ||
     !Number.isFinite(value.progress.percent) ||
     value.progress.percent < 0 ||
     value.progress.percent > 1
   ) {
-    throw new Error('Invalid progress response')
+    throw new Error("Invalid progress response");
   }
   return {
     progress: {
@@ -1198,14 +1185,14 @@ export function parseProgressResponse(value: unknown): ProgressResponse {
       locator: parseReaderLocatorV2(value.progress.locator),
       percent: value.progress.percent,
     },
-  }
+  };
 }
 
 export async function getProgress(slug: string): Promise<ProgressResponse> {
   const data = await request<unknown>(
     `/api/v1/progress/${encodeURIComponent(slug)}`,
-  )
-  return parseProgressResponse(data)
+  );
+  return parseProgressResponse(data);
 }
 
 export async function saveProgress(
@@ -1213,65 +1200,69 @@ export async function saveProgress(
   version: number,
   locator: ReaderLocatorV2,
   percent: number,
-  options: { keepalive?: boolean } = {}
+  options: { keepalive?: boolean } = {},
 ): Promise<void> {
   const result = await request<unknown>(
     `/api/v1/progress/${encodeURIComponent(slug)}`,
     {
-      method: 'PUT',
+      method: "PUT",
       body: JSON.stringify({ version, locator, percent }),
       keepalive: options.keepalive,
-    }
-  )
+    },
+  );
   if (!isRecord(result) || result.ok !== true) {
-    throw new Error('Invalid progress-save response')
+    throw new Error("Invalid progress-save response");
   }
 }
 
 /* ------------------------- Continue / Recent -------------------- */
 
 export type ContinueItem = {
-  slug: string
-  percent: number
-  updatedAt: string
-}
+  slug: string;
+  percent: number;
+  updatedAt: string;
+};
 
-export async function getContinue(limit = 3): Promise<{ items: ContinueItem[] }> {
-  const data = await request<{ items?: ContinueItem[] }>(`/api/v1/continue?limit=${limit}`)
-  return { items: Array.isArray(data.items) ? data.items : [] }
+export async function getContinue(
+  limit = 3,
+): Promise<{ items: ContinueItem[] }> {
+  const data = await request<{ items?: ContinueItem[] }>(
+    `/api/v1/continue?limit=${limit}`,
+  );
+  return { items: Array.isArray(data.items) ? data.items : [] };
 }
 
 /* -------------------------- Settings / Journey ------------------- */
 
 export type ChildProfile = {
-  id?: string
-  name: string
-  ageMonths: number
-  interests: string[]
-  sensitivities: string[]
-}
+  id?: string;
+  name: string;
+  ageMonths: number;
+  interests: string[];
+  sensitivities: string[];
+};
 
 export type PromptProfile = {
-  id?: string
-  name: string
-  schemaVersion: number
-  rules: JsonObject
-}
+  id?: string;
+  name: string;
+  schemaVersion: number;
+  rules: JsonObject;
+};
 
 export type SettingsPayload = {
-  child: ChildProfile
-  prompt: PromptProfile
-}
+  child: ChildProfile;
+  prompt: PromptProfile;
+};
 
 export type SettingsUpsert = {
-  child: ChildProfile
-  prompt: PromptProfile
-}
+  child: ChildProfile;
+  prompt: PromptProfile;
+};
 
 export class InvalidSettingsResponseError extends Error {
   constructor() {
-    super('Invalid settings response')
-    this.name = 'InvalidSettingsResponseError'
+    super("Invalid settings response");
+    this.name = "InvalidSettingsResponseError";
   }
 }
 
@@ -1280,100 +1271,103 @@ export function isInvalidSettingsResponseError(
 ): error is InvalidSettingsResponseError {
   return (
     error instanceof InvalidSettingsResponseError ||
-    (error instanceof Error && error.name === 'InvalidSettingsResponseError')
-  )
+    (error instanceof Error && error.name === "InvalidSettingsResponseError")
+  );
 }
 
 export type SettingsRequestFailure =
-  | 'unauthorized'
-  | 'validation'
-  | 'unavailable'
+  "unauthorized" | "validation" | "unavailable";
 
 export function classifySettingsRequestFailure(
   error: unknown,
-  operation: 'load' | 'save',
+  operation: "load" | "save",
 ): SettingsRequestFailure {
-  const status = getAPIErrorStatus(error)
-  if (status === 401) return 'unauthorized'
-  if (operation === 'save' && (status === 400 || status === 413)) {
-    return 'validation'
+  const status = getAPIErrorStatus(error);
+  if (status === 401) return "unauthorized";
+  if (operation === "save" && (status === 400 || status === 413)) {
+    return "validation";
   }
-  return 'unavailable'
+  return "unavailable";
 }
 
 function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === 'string')
+  return (
+    Array.isArray(value) && value.every((item) => typeof item === "string")
+  );
 }
 
 function invalidSettingsResponse(): never {
-  throw new InvalidSettingsResponseError()
+  throw new InvalidSettingsResponseError();
 }
 
 function settingsID(value: unknown): string | undefined {
-  if (value === undefined) return undefined
-  if (typeof value === 'string' && value.length > 0) return value
-  return invalidSettingsResponse()
+  if (value === undefined) return undefined;
+  if (typeof value === "string" && value.length > 0) return value;
+  return invalidSettingsResponse();
 }
 
 export function parseSettingsResponse(data: unknown): SettingsPayload {
   if (!isRecord(data) || !isRecord(data.child) || !isRecord(data.prompt)) {
-    return invalidSettingsResponse()
+    return invalidSettingsResponse();
   }
 
-  const child = data.child
-  const prompt = data.prompt
+  const child = data.child;
+  const prompt = data.prompt;
   if (
-    typeof child.name !== 'string' ||
-    typeof child.ageMonths !== 'number' ||
+    typeof child.name !== "string" ||
+    typeof child.ageMonths !== "number" ||
     !Number.isSafeInteger(child.ageMonths) ||
     child.ageMonths < 0 ||
-    typeof prompt.name !== 'string' ||
-    typeof prompt.schemaVersion !== 'number' ||
+    typeof prompt.name !== "string" ||
+    typeof prompt.schemaVersion !== "number" ||
     !Number.isSafeInteger(prompt.schemaVersion) ||
     prompt.schemaVersion < 0
   ) {
-    return invalidSettingsResponse()
+    return invalidSettingsResponse();
   }
 
-  const childID = settingsID(child.id)
-  const promptID = settingsID(prompt.id)
-  let interests: string[]
-  let sensitivities: string[]
-  let rules: JsonObject
+  const childID = settingsID(child.id);
+  const promptID = settingsID(prompt.id);
+  let interests: string[];
+  let sensitivities: string[];
+  let rules: JsonObject;
 
   if (childID === undefined) {
     if (
-      child.name !== '' ||
+      child.name !== "" ||
       child.ageMonths !== 0 ||
       child.interests !== null ||
       child.sensitivities !== null
     ) {
-      return invalidSettingsResponse()
+      return invalidSettingsResponse();
     }
-    interests = []
-    sensitivities = []
+    interests = [];
+    sensitivities = [];
   } else {
-    if (!isStringArray(child.interests) || !isStringArray(child.sensitivities)) {
-      return invalidSettingsResponse()
+    if (
+      !isStringArray(child.interests) ||
+      !isStringArray(child.sensitivities)
+    ) {
+      return invalidSettingsResponse();
     }
-    interests = [...child.interests]
-    sensitivities = [...child.sensitivities]
+    interests = [...child.interests];
+    sensitivities = [...child.sensitivities];
   }
 
   if (promptID === undefined) {
     if (
-      prompt.name !== '' ||
+      prompt.name !== "" ||
       prompt.schemaVersion !== 0 ||
       prompt.rules !== null
     ) {
-      return invalidSettingsResponse()
+      return invalidSettingsResponse();
     }
-    rules = {}
+    rules = {};
   } else {
     if (prompt.schemaVersion < 1 || !isJsonObject(prompt.rules)) {
-      return invalidSettingsResponse()
+      return invalidSettingsResponse();
     }
-    rules = prompt.rules
+    rules = prompt.rules;
   }
 
   return {
@@ -1390,21 +1384,23 @@ export function parseSettingsResponse(data: unknown): SettingsPayload {
       schemaVersion: prompt.schemaVersion,
       rules,
     },
-  }
+  };
 }
 
 export async function getSettings(): Promise<SettingsPayload> {
-  const data = await request<unknown>('/api/v1/settings')
-  return parseSettingsResponse(data)
+  const data = await request<unknown>("/api/v1/settings");
+  return parseSettingsResponse(data);
 }
 
-export async function saveSettings(payload: SettingsUpsert): Promise<SettingsPayload> {
-  const data = await request<unknown>('/api/v1/settings', {
-    method: 'PUT',
+export async function saveSettings(
+  payload: SettingsUpsert,
+): Promise<SettingsPayload> {
+  const data = await request<unknown>("/api/v1/settings", {
+    method: "PUT",
     body: JSON.stringify({
       child: payload.child,
       prompt: { ...payload.prompt, rules: payload.prompt.rules ?? {} },
     }),
-  })
-  return parseSettingsResponse(data)
+  });
+  return parseSettingsResponse(data);
 }

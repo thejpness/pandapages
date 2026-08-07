@@ -31,8 +31,6 @@ import {
   writeLibrarySortPreference,
   type LibrarySort,
 } from '../lib/library-sorting'
-import { authState } from '../lib/session'
-import { navigationDidFail, runLockTransition } from '../lib/session-transitions'
 
 type HeaderExpose = { focusSearch: () => void }
 type LoadErrorKind = 'server-error' | 'malformed' | null
@@ -279,22 +277,16 @@ function clearAccountState(clearQuery: boolean) {
   if (clearQuery) q.value = ''
 }
 
-async function moveToUnlockAfterConfirmedSignOut() {
+async function moveToSignInAfterSessionEnded() {
   clearAccountState(false)
-  authState.confirmLocked()
-
   try {
-    const result = await router.replace({
-      path: '/unlock',
+    await router.replace({
+      path: '/account/login',
       query: { next: '/library' },
     })
-    if (navigationDidFail(result)) {
-      lockError.value =
-        'Your session ended, but the Unlock screen could not be opened. Reload to continue.'
-    }
   } catch {
     lockError.value =
-      'Your session ended, but the Unlock screen could not be opened. Reload to continue.'
+      'Your session ended, but the sign-in screen could not be opened. Reload to continue.'
   }
 }
 
@@ -306,18 +298,11 @@ async function lockLibrary() {
   let restoreQuerySync = false
 
   try {
-    const result = await runLockTransition({
-      requestLogout: logoutSession,
-      clearAccountState: () => clearAccountState(true),
-      markLocked: authState.confirmLocked,
-      navigateToUnlock: () => router.replace('/unlock'),
-    })
-    if (result === 'navigation-failed') {
-      lockError.value =
-        'Panda Pages is locked, but the Unlock screen could not be opened. Reload to continue.'
-    }
+    await logoutSession()
+    clearAccountState(true)
+    await router.replace('/account/login')
   } catch {
-    lockError.value = 'Could not lock Panda Pages. Your library is still open. Try again.'
+    lockError.value = 'Could not sign out of Panda Pages. Your library is still open. Try again.'
     restoreQuerySync = true
   } finally {
     locking.value = false
@@ -339,7 +324,7 @@ async function loadLibrary() {
   } catch (error) {
     if (generation !== loadGeneration || sessionLeaving.value) return
     if (getAPIErrorStatus(error) === 401) {
-      await moveToUnlockAfterConfirmedSignOut()
+      await moveToSignInAfterSessionEnded()
       return
     }
     loadError.value = isInvalidLibraryResponseError(error)
@@ -420,7 +405,7 @@ function navigateFromLibrary(path: string) {
       <h1 class="library-sr-only">Panda Pages story library</h1>
 
       <div v-if="lockError" class="library-alert" role="alert">
-        <strong>Lock not completed</strong>
+        <strong>Sign-out not completed</strong>
         <span>{{ lockError }}</span>
       </div>
 

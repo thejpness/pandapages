@@ -16,6 +16,29 @@ async function compiledModuleURL(sourceURL) {
 
 async function resolveKnownImports(source, sourceURL) {
   let resolved = source
+  // API contract tests execute modules from data: URLs.  The browser account
+  // context is deliberately replaced with a deterministic test boundary so
+  // those tests exercise request construction without emulating Supabase.
+  if (resolved.includes('./account-context')) {
+    const accountContext =
+      'data:text/javascript;base64,' +
+      Buffer.from(`
+        export async function currentAccountContext() {
+          return globalThis.__pandapagesTestAccountContext ?? {
+            accessToken: 'test-access-token',
+            membership: { accountId: '11111111-1111-4111-8111-111111111111', role: 'adult' },
+          };
+        }
+        export function clearSelectedAccount() {}
+      `).toString('base64')
+    resolved = resolved.replaceAll('./account-context', accountContext)
+  }
+  if (resolved.includes('./supabase-auth')) {
+    const supabaseAuth =
+      'data:text/javascript;base64,' +
+      Buffer.from('export async function signOutSupabaseSession() {}').toString('base64')
+    resolved = resolved.replaceAll('./supabase-auth', supabaseAuth)
+  }
   for (const dependency of [
     './reader-locator-v2',
     './reader-themes',

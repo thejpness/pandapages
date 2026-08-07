@@ -2,8 +2,6 @@
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { logout as logoutSession } from '@/lib/api'
-import { authState } from '@/lib/session'
-import { runLockTransition } from '@/lib/session-transitions'
 import StoryStudioDialog from '@/components/admin/story-studio/StoryStudioDialog.vue'
 import StoryStudioHeader from '@/components/admin/story-studio/StoryStudioHeader.vue'
 
@@ -13,7 +11,7 @@ const router = useRouter()
 const editorDirty = ref(false)
 const leaveDialogOpen = ref(false)
 const pendingPath = ref<string | null>(null)
-const pendingLock = ref(false)
+const pendingSignOut = ref(false)
 const locking = ref(false)
 const lockError = ref('')
 let bypassNextGuard = false
@@ -31,7 +29,7 @@ function beforeUnload(event: BeforeUnloadEvent) {
 
 function askToLeave(path: string) {
   pendingPath.value = path
-  pendingLock.value = false
+  pendingSignOut.value = false
   leaveDialogOpen.value = true
 }
 
@@ -44,55 +42,46 @@ function cancelLeave() {
   if (locking.value) return
   leaveDialogOpen.value = false
   pendingPath.value = null
-  pendingLock.value = false
+  pendingSignOut.value = false
 }
 
-async function runLock() {
+async function runSignOut() {
   if (locking.value) return
   locking.value = true
   lockError.value = ''
   try {
-    const result = await runLockTransition({
-      requestLogout: logoutSession,
-      clearAccountState: () => {
-        editorDirty.value = false
-        bypassNextGuard = true
-      },
-      markLocked: authState.confirmLocked,
-      navigateToUnlock: () => router.replace('/unlock'),
-    })
-    if (result === 'navigation-failed') {
-      lockError.value =
-        'Panda Pages is locked, but the Unlock screen could not be opened. Reload to continue.'
-    }
+    await logoutSession()
+    editorDirty.value = false
+    bypassNextGuard = true
+    await router.replace('/account/login')
   } catch {
     lockError.value =
-      'Could not lock Panda Pages. Story Studio is still open; try again.'
+      'Could not sign out of Panda Pages. Story Studio is still open; try again.'
   } finally {
     locking.value = false
     bypassNextGuard = false
   }
 }
 
-function requestLock() {
+function requestSignOut() {
   if (editorDirty.value) {
-    pendingLock.value = true
+    pendingSignOut.value = true
     pendingPath.value = null
     leaveDialogOpen.value = true
     return
   }
-  void runLock()
+  void runSignOut()
 }
 
 async function confirmLeave() {
-  const lock = pendingLock.value
+  const signOut = pendingSignOut.value
   const path = pendingPath.value
   leaveDialogOpen.value = false
-  pendingLock.value = false
+  pendingSignOut.value = false
   pendingPath.value = null
 
-  if (lock) {
-    await runLock()
+  if (signOut) {
+    await runSignOut()
     return
   }
   if (!path) return
@@ -136,11 +125,11 @@ onBeforeUnmount(() => {
       :current-path="route.path"
       :locking="locking"
       @navigate="navigate"
-      @lock="requestLock"
+      @signout="requestSignOut"
     />
 
     <p v-if="lockError" class="studio-shell-alert" role="alert">
-      <strong>Lock not completed.</strong> {{ lockError }}
+      <strong>Sign-out not completed.</strong> {{ lockError }}
     </p>
 
     <main id="studio-main" class="studio-main" tabindex="-1">
@@ -153,7 +142,7 @@ onBeforeUnmount(() => {
       :open="leaveDialogOpen"
       title="Leave with unsaved changes?"
       description="Your latest edits have not been saved as an immutable draft."
-      :confirm-label="pendingLock ? 'Discard changes and lock' : 'Discard changes and leave'"
+      :confirm-label="pendingSignOut ? 'Discard changes and sign out' : 'Discard changes and leave'"
       danger
       @confirm="confirmLeave"
       @cancel="cancelLeave"

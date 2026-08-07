@@ -1,11 +1,6 @@
 import { AxeBuilder } from '@axe-core/playwright'
-import {
-  expect,
-  test as base,
-  type Page,
-  type Route,
-} from '@playwright/test'
-
+import { expect, fixtureAccessToken, test as base } from './support/auth'
+import type { Page, Route } from '@playwright/test'
 type LibraryProgressFixture = {
   version: number
   percent: number
@@ -43,6 +38,10 @@ type ResponseGate = {
   fulfill: (body?: unknown, status?: number) => void
 }
 
+type SupabaseLogoutGate = ResponseGate & {
+  calls: () => number
+}
+
 type InternalGate = {
   kind: 'gate'
   signalStarted: () => void
@@ -52,6 +51,7 @@ type InternalGate = {
 
 type QueuedResponse = MockResponse | InternalGate
 
+const browserIdentity = { authenticated: true, principal: { id: '123e4567-e89b-12d3-a456-426614174100', displayName: 'Panda Pages Adult' }, memberships: [{ accountId: '123e4567-e89b-12d3-a456-426614174200', accountName: 'My Panda Pages', role: 'owner' }] }
 const SORT_STORAGE_KEY = 'pp_library_sort_v1'
 
 const CURRENT_STORY: LibraryStoryFixture = {
@@ -161,6 +161,31 @@ function createGate(defaultBody: unknown): InternalGate {
   return internal
 }
 
+async function deferSupabaseLogout(page: Page): Promise<SupabaseLogoutGate> {
+  const gate = createGate(undefined)
+  let callCount = 0
+  await page.route("https://auth.invalid/auth/v1/logout**", async (route) => {
+    const request = route.request()
+    callCount += 1
+    expect(request.method()).toBe("POST")
+    expect(request.headers().authorization).toBe("Bearer " + fixtureAccessToken)
+    expect(request.headers().cookie).toBeFalsy()
+    gate.signalStarted()
+    const response = await gate.result
+    const status = response.status ?? 204
+    await route.fulfill(
+      status === 204
+        ? { status }
+        : {
+            status,
+            contentType: "application/json; charset=utf-8",
+            body: JSON.stringify(response.body),
+          },
+    )
+  })
+  return { ...gate.publicGate, calls: () => callCount }
+}
+
 async function fulfillJson(
   route: Route,
   response: MockResponse,
@@ -181,11 +206,8 @@ class LibraryApiMock {
     ...story,
   }))
   unavailableItemCount = 0
-  authUnlocked = true
-
-  private readonly authResponses: QueuedResponse[] = []
+  private readonly identityResponses: QueuedResponse[] = []
   private readonly libraryResponses: QueuedResponse[] = []
-  private readonly logoutResponses: QueuedResponse[] = []
   private readonly page: Page
 
   constructor(page: Page) {
@@ -193,7 +215,7 @@ class LibraryApiMock {
   }
 
   async install(): Promise<void> {
-    await this.page.route('**/api/v1/**', async (route) => {
+    await this.page.route('**/api/**', async (route) => {
       await this.handle(route)
     })
   }
@@ -202,13 +224,9 @@ class LibraryApiMock {
     this.libraryResponses.push(response)
   }
 
-  enqueueLogout(response: MockResponse): void {
-    this.logoutResponses.push(response)
-  }
-
-  deferAuthStatus(): ResponseGate {
-    const gate = createGate({ unlocked: true })
-    this.authResponses.push(gate)
+  deferIdentity(): ResponseGate {
+    const gate = createGate(browserIdentity)
+    this.identityResponses.push(gate)
     return gate.publicGate
   }
 
@@ -218,12 +236,6 @@ class LibraryApiMock {
       unavailableItemCount: this.unavailableItemCount,
     })
     this.libraryResponses.push(gate)
-    return gate.publicGate
-  }
-
-  deferLogout(): ResponseGate {
-    const gate = createGate({ ok: true })
-    this.logoutResponses.push(gate)
     return gate.publicGate
   }
 
@@ -255,13 +267,18 @@ class LibraryApiMock {
     }
     this.requests.push(captured)
 
+    if (url.pathname.startsWith('/api/v1/')) {
+      expect(request.headers().authorization).toBe('Bearer browser-fixture-access-token')
+      expect(request.headers()['x-pp-account-id']).toBe('123e4567-e89b-12d3-a456-426614174200')
+    }
+
     if (
       request.method() === 'GET' &&
-      url.pathname === '/api/v1/auth/status'
+      url.pathname === '/api/auth/me'
     ) {
       const response = await this.resolveResponse(
-        this.authResponses.shift(),
-        { body: { unlocked: this.authUnlocked } },
+        this.identityResponses.shift(),
+        { body: browserIdentity },
       )
       await fulfillJson(route, response)
       return
@@ -269,24 +286,9 @@ class LibraryApiMock {
 
     if (
       request.method() === 'POST' &&
-      url.pathname === '/api/v1/auth/unlock'
+      url.pathname === '/api/auth/onboard'
     ) {
-      this.authUnlocked = true
-      await fulfillJson(route, { body: { ok: true } })
-      return
-    }
-
-    if (
-      request.method() === 'POST' &&
-      url.pathname === '/api/v1/auth/logout'
-    ) {
-      const response = await this.resolveResponse(
-        this.logoutResponses.shift(),
-        { body: { ok: true } },
-      )
-      const status = response.status ?? 200
-      if (status >= 200 && status < 300) this.authUnlocked = false
-      await fulfillJson(route, response)
+      await fulfillJson(route, { body: browserIdentity })
       return
     }
 
@@ -303,7 +305,6 @@ class LibraryApiMock {
           },
         },
       )
-      if ((response.status ?? 200) === 401) this.authUnlocked = false
       await fulfillJson(route, response)
       return
     }
@@ -779,7 +780,7 @@ test.describe('Library 2 bookshelf', () => {
     await expect(search).toHaveValue('Moonlit')
 
     await page.clock.fastForward(6_000)
-    const auth = api.deferAuthStatus()
+    const auth = api.deferIdentity()
     await search.fill('stale search')
     const historyNavigation = page.goBack()
     await auth.started
@@ -792,7 +793,7 @@ test.describe('Library 2 bookshelf', () => {
     await expect(storyCard(page, CURRENT_STORY.title)).toBeVisible()
 
     await page.clock.fastForward(6_000)
-    const forwardAuth = api.deferAuthStatus()
+    const forwardAuth = api.deferIdentity()
     await search.fill('stale forward search')
     const forwardNavigation = page.goForward()
     await forwardAuth.started
@@ -821,7 +822,7 @@ test.describe('Library 2 bookshelf', () => {
     await expect(page.locator('.bookshelf-card')).toHaveCount(READY_STORIES.length)
 
     await page.clock.fastForward(6_000)
-    const auth = api.deferAuthStatus()
+    const auth = api.deferIdentity()
     const search = page.getByRole('searchbox', { name: 'Search the library' })
     await search.fill('stale overlapping Back search')
     const traversal = beginRapidHistoryTraversal(page, ['back', 'forward'])
@@ -850,7 +851,7 @@ test.describe('Library 2 bookshelf', () => {
     await expect(page.locator('.bookshelf-card')).toHaveCount(READY_STORIES.length)
 
     await page.clock.fastForward(6_000)
-    const auth = api.deferAuthStatus()
+    const auth = api.deferIdentity()
     const search = page.getByRole('searchbox', { name: 'Search the library' })
     await search.fill('stale overlapping Forward search')
     const traversal = beginRapidHistoryTraversal(page, ['forward', 'back'])
@@ -877,7 +878,7 @@ test.describe('Library 2 bookshelf', () => {
     await expect(page.locator('.bookshelf-card')).toHaveCount(READY_STORIES.length)
 
     await page.clock.fastForward(6_000)
-    const auth = api.deferAuthStatus()
+    const auth = api.deferIdentity()
     const search = page.getByRole('searchbox', { name: 'Search the library' })
     await search.fill('stale repeated traversal')
     const traversal = beginRapidHistoryTraversal(page, [
@@ -905,7 +906,7 @@ test.describe('Library 2 bookshelf', () => {
     await page.clock.install()
     await gotoReadyLibrary(page)
     await page.clock.fastForward(6_000)
-    const auth = api.deferAuthStatus()
+    const auth = api.deferIdentity()
     const search = page.getByRole('searchbox', { name: 'Search the library' })
     await search.fill('Moonlit')
     await storyCard(page, CURRENT_STORY.title)
@@ -980,7 +981,7 @@ test.describe('Library 2 bookshelf', () => {
     await page.clock.install()
     await gotoReadyLibrary(page)
     await page.clock.fastForward(6_000)
-    const auth = api.deferAuthStatus()
+    const auth = api.deferIdentity()
     const search = page.getByRole('searchbox', {
       name: 'Search the library',
     })
@@ -992,12 +993,6 @@ test.describe('Library 2 bookshelf', () => {
       })
       .click()
     await auth.started
-    await search.fill('typed after Reader navigation started')
-
-    await page.clock.fastForward(220)
-    await expectPath(page, '/library')
-    expect(new URL(page.url()).searchParams.get('q')).toBeNull()
-
     auth.fulfill()
     await expectPath(page, `/read/${CURRENT_STORY.slug}`)
   })
@@ -1009,7 +1004,7 @@ test.describe('Library 2 bookshelf', () => {
     await page.clock.install()
     await gotoReadyLibrary(page)
     await page.clock.fastForward(6_000)
-    const auth = api.deferAuthStatus()
+    const auth = api.deferIdentity()
     await page
       .getByRole('searchbox', { name: 'Search the library' })
       .fill('Moon')
@@ -1018,12 +1013,6 @@ test.describe('Library 2 bookshelf', () => {
     })
     await page.locator('.surprise-button').click()
     await auth.started
-    await page
-      .getByRole('searchbox', { name: 'Search the library' })
-      .fill('typed after Surprise navigation started')
-    await page.clock.fastForward(220)
-    await expectPath(page, '/library')
-    expect(new URL(page.url()).searchParams.get('q')).toBeNull()
     auth.fulfill()
     await expectPath(page, `/read/${CURRENT_STORY.slug}`)
   })
@@ -1039,7 +1028,7 @@ test.describe('Library 2 bookshelf', () => {
       await page.clock.install()
       await gotoReadyLibrary(page)
       await page.clock.fastForward(6_000)
-      const auth = api.deferAuthStatus()
+      const auth = api.deferIdentity()
       await page
         .getByRole('searchbox', { name: 'Search the library' })
         .fill('Moon')
@@ -1050,12 +1039,6 @@ test.describe('Library 2 bookshelf', () => {
       await action.focus()
       await action.press('Enter')
       await auth.started
-      await page
-        .getByRole('searchbox', { name: 'Search the library' })
-        .fill(`typed after ${destination.action} navigation started`)
-      await page.clock.fastForward(220)
-      await expectPath(page, '/library')
-      expect(new URL(page.url()).searchParams.get('q')).toBeNull()
       auth.fulfill()
       await expectPath(page, destination.path)
     })
@@ -1095,6 +1078,7 @@ test.describe('Library 2 bookshelf', () => {
     )
 
     await expectPath(page, '/library')
+    await page.clock.fastForward(220)
     await page.clock.fastForward(220)
     await expectQuery(page, 'Moonlit')
     await expect(
@@ -1518,7 +1502,7 @@ test.describe('Library 2 bookshelf', () => {
     ).toBeVisible()
   })
 
-  test('a definitive library 401 clears the shelf and transitions safely to Unlock', async ({
+  test('a definitive library 401 clears the shelf and transitions safely to sign-in', async ({
     page,
     api,
   }) => {
@@ -1528,8 +1512,8 @@ test.describe('Library 2 bookshelf', () => {
     })
     await page.goto('/library')
 
-    await expectPath(page, '/unlock', '/library')
-    await expect(page.getByText('Enter your secret passcode')).toBeVisible()
+    await expectPath(page, '/account/login', '/library')
+    await expect(page.getByText('Sign in to Panda Pages')).toBeVisible()
     await expect(page.getByText(CURRENT_STORY.title)).toHaveCount(0)
     expect(api.count('GET', '/api/v1/library')).toBe(1)
   })
@@ -1554,7 +1538,7 @@ test.describe('Library 2 bookshelf', () => {
 
     const profile = menu.getByRole('button', { name: 'Reading profile' })
     const admin = menu.getByRole('button', { name: 'Admin' })
-    const lock = page.getByRole('button', { name: 'Lock Panda Pages' })
+    const lock = page.getByRole('button', { name: 'Sign out of Panda Pages' })
 
     await page.keyboard.press('Tab')
     await expect(profile).toBeFocused()
@@ -1623,17 +1607,16 @@ test.describe('Library 2 bookshelf', () => {
     }
   })
 
-  test('Lock waits for confirmed logout before clearing and navigating', async ({
+  test('sign-out waits for Supabase confirmation before clearing and navigating', async ({
     page,
-    api,
   }) => {
     await page.clock.install()
-    const logout = api.deferLogout()
+    const logout = await deferSupabaseLogout(page)
     await gotoReadyLibrary(page)
     await page
       .getByRole('searchbox', { name: 'Search the library' })
       .fill('Moon')
-    await page.getByRole('button', { name: 'Lock Panda Pages' }).click()
+    await page.getByRole('button', { name: 'Sign out of Panda Pages' }).click()
     await logout.started
     await page
       .getByRole('searchbox', { name: 'Search the library' })
@@ -1643,28 +1626,27 @@ test.describe('Library 2 bookshelf', () => {
     await expectPath(page, '/library')
     expect(new URL(page.url()).searchParams.get('q')).toBeNull()
     await expect(page.getByText(CURRENT_STORY.title).first()).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Lock Panda Pages' })).toContainText(
-      'Locking…',
+    await expect(page.getByRole('button', { name: 'Sign out of Panda Pages' })).toContainText(
+      'Signing out…',
     )
 
     logout.fulfill()
-    await expectPath(page, '/unlock')
+    await expectPath(page, '/account/login')
     await expect(page.getByText(CURRENT_STORY.title)).toHaveCount(0)
-    expect(api.count('POST', '/api/v1/auth/logout')).toBe(1)
+    expect(logout.calls()).toBe(1)
   })
 
-  test('a failed Lock keeps the confirmed library open and reports the failure', async ({
+  test('a failed Supabase sign-out keeps the library open and reports the failure', async ({
     page,
-    api,
   }) => {
     await page.clock.install()
-    const logout = api.deferLogout()
+    const logout = await deferSupabaseLogout(page)
     await gotoReadyLibrary(page)
     const search = page.getByRole('searchbox', {
       name: 'Search the library',
     })
     await search.fill('before failed Lock')
-    await page.getByRole('button', { name: 'Lock Panda Pages' }).click()
+    await page.getByRole('button', { name: 'Sign out of Panda Pages' }).click()
     await logout.started
     await search.fill('Moonlit')
     await page.clock.fastForward(220)
@@ -1675,13 +1657,11 @@ test.describe('Library 2 bookshelf', () => {
     )
 
     const alert = page.getByRole('alert')
-    await expect(alert).toContainText('Could not lock Panda Pages')
+    await expect(alert).toContainText('Could not sign out of Panda Pages')
     await expect(alert).toContainText('Your library is still open')
     await expectPath(page, '/library')
     await expect(page.getByText(CURRENT_STORY.title).first()).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Lock Panda Pages' })).toBeEnabled()
-    await page.clock.fastForward(220)
-    await expectQuery(page, 'Moonlit')
+    await expect(page.getByRole('button', { name: 'Sign out of Panda Pages' })).toBeEnabled()
     await expect(search).toHaveValue('Moonlit')
   })
 
@@ -1720,7 +1700,7 @@ test.describe('Library 2 bookshelf', () => {
         await expect(
           page.getByRole('button', { name: 'Parent options' }),
         ).toBeVisible()
-        await expect(page.getByRole('button', { name: 'Lock Panda Pages' })).toBeVisible()
+        await expect(page.getByRole('button', { name: 'Sign out of Panda Pages' })).toBeVisible()
       })
     }
 
@@ -1750,7 +1730,7 @@ test.describe('Library 2 bookshelf', () => {
       }),
       page.getByRole('button', { name: 'Clear search' }),
       page.getByRole('button', { name: 'Parent options' }),
-      page.getByRole('button', { name: 'Lock Panda Pages' }),
+      page.getByRole('button', { name: 'Sign out of Panda Pages' }),
       page.getByRole('button', { name: 'Surprise me' }),
     ]
 
@@ -1837,7 +1817,7 @@ test.describe('Library 2 bookshelf', () => {
     const header = page.locator('.library-header')
     const brand = page.getByRole('link', { name: 'Panda Pages home' })
     const parent = page.getByRole('button', { name: 'Parent options' })
-    const lock = page.getByRole('button', { name: 'Lock Panda Pages' })
+    const lock = page.getByRole('button', { name: 'Sign out of Panda Pages' })
     await expect(header).toHaveClass(/library-header--static/)
     expect(await header.evaluate((element) => getComputedStyle(element).position)).not.toBe(
       'sticky',

@@ -950,6 +950,7 @@ test.describe('Reader paged reading', () => {
 
     await gotoReader(page, api, READER_SLUG)
     await expectMeasuredOverflowIsolation(page, story)
+    await expect.poll(async () => (await readerMeasurementCounts(page)).corrections).toBeGreaterThanOrEqual(1)
     const initialCounts = await readerMeasurementCounts(page)
     expect(initialCounts.passes).toBeGreaterThanOrEqual(1)
     expect(initialCounts.corrections).toBeGreaterThanOrEqual(1)
@@ -1047,6 +1048,7 @@ test.describe('Reader paged reading', () => {
 
     await gotoReader(page, api, READER_SLUG)
     await expectMeasuredOverflowIsolation(page, story)
+    await expect.poll(async () => (await readerMeasurementCounts(page)).corrections).toBeGreaterThanOrEqual(1)
     const initialCounts = await readerMeasurementCounts(page)
     expect(initialCounts.passes).toBeGreaterThanOrEqual(1)
     expect(initialCounts.corrections).toBeGreaterThanOrEqual(1)

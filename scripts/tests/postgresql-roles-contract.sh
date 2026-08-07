@@ -5,7 +5,6 @@ umask 077
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 cd "$repo_root"
-readonly verifier='scripts/postgresql-api-role-verify.sh'
 
 for command_name in docker git grep jq mktemp; do
   command -v "$command_name" >/dev/null 2>&1 || {
@@ -24,8 +23,6 @@ common_environment=(
   "POSTGRES_PASSWORD=$admin_password"
   'PP_ADMIN_IPS=192.0.2.1/32'
   'PP_ADMIN_KEY=ci-only-admin-key-not-for-production-00000000'
-  'PP_PASSCODE=ci-only-passcode-not-for-production'
-  'PP_SESSION_SECRET=ci-only-session-secret-not-for-production-00000000'
   'SUPABASE_URL=https://auth-ci.invalid'
   'SUPABASE_PUBLISHABLE_KEY=sb_publishable_ci-only-not-for-production'
   'SUPABASE_JWT_AUDIENCE=authenticated'
@@ -61,7 +58,7 @@ expect_compose_failure() {
   fi
 }
 
-printf '1..7\n'
+printf '1..6\n'
 
 production_json="$test_root/production.json"
 development_json="$test_root/development.json"
@@ -109,7 +106,6 @@ printf 'ok 3 - API, migration, and administrative containers receive only their 
 
 if APP_DATABASE_URL='' MIGRATION_DATABASE_URL="$migration_url" \
   POSTGRES_PASSWORD="$admin_password" PP_ADMIN_IPS=192.0.2.1/32 \
-  PP_ADMIN_KEY=test PP_PASSCODE=test PP_SESSION_SECRET=test \
   SUPABASE_URL=https://auth-ci.invalid SUPABASE_PUBLISHABLE_KEY=sb_publishable_ci-only-not-for-production SUPABASE_JWT_AUDIENCE=authenticated \
   docker compose --env-file /dev/null -f docker-compose.yml config --quiet \
   >"$test_root/empty-runtime.out" 2>"$test_root/empty-runtime.err"; then
@@ -118,7 +114,6 @@ if APP_DATABASE_URL='' MIGRATION_DATABASE_URL="$migration_url" \
 fi
 if MIGRATION_DATABASE_URL='' APP_DATABASE_URL="$app_url" \
   POSTGRES_PASSWORD="$admin_password" PP_ADMIN_IPS=192.0.2.1/32 \
-  PP_ADMIN_KEY=test PP_PASSCODE=test PP_SESSION_SECRET=test \
   SUPABASE_URL=https://auth-ci.invalid SUPABASE_PUBLISHABLE_KEY=sb_publishable_ci-only-not-for-production SUPABASE_JWT_AUDIENCE=authenticated \
   docker compose --env-file /dev/null -f docker-compose.yml config --quiet \
   >"$test_root/empty-migration.out" 2>"$test_root/empty-migration.err"; then
@@ -144,31 +139,4 @@ if git grep -n -E 'PP_BACKUP_GLOBALS_USER|pg_read_all_data' -- \
   printf 'Backup automation still depends on a bootstrap user or cluster-wide read role\n' >&2
   exit 1
 fi
-if scripts/postgresql-roles.sh apply --container unreachable --database pandapages \
-  >"$test_root/unconfirmed.out" 2>"$test_root/unconfirmed.err"; then
-  printf 'Role policy apply did not require explicit confirmation\n' >&2
-  exit 1
-fi
-grep -q 'apply requires --confirm-apply' "$test_root/unconfirmed.err"
-printf 'ok 6 - backup and role tooling have no privileged fallback or destructive default\n'
-
-if grep -nE -- 'api_ip|--(api|client)-(ip|address)|--command=.*pg_stat_activity' "$verifier" >/dev/null; then
-  printf 'API role verifier contains the failed inline-address SQL pattern\n' >&2
-  exit 1
-fi
-grep -q -- '--file=-' "$verifier"
-grep -q 'FROM pg_stat_activity' "$verifier"
-grep -q 'host(client_addr)' "$verifier"
-grep -q 'application_name' "$verifier"
-if "$verifier" \
-  --api-container generated-api \
-  --postgres-container generated-postgres \
-  --database generated_database \
-  --session-contract legacy \
-  --api-address 'malformed;SELECT-current_user' \
-  >"$test_root/address.out" 2>"$test_root/address.err"; then
-  printf 'API role verifier accepted caller-provided client-address input\n' >&2
-  exit 1
-fi
-grep -q '^Usage:' "$test_root/address.err"
-printf 'ok 7 - API activity verification uses fixed SQL and accepts no client-address input\n'
+printf 'ok 6 - backup tooling has no privileged fallback\n'

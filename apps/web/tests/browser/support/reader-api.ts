@@ -1,10 +1,5 @@
-import {
-  expect,
-  test as base,
-  type Page,
-  type Request,
-  type Route,
-} from '@playwright/test'
+import { expect, fixtureAccessToken, fixtureAccountID, test as base } from './auth'
+import type { Page, Request, Route } from '@playwright/test'
 
 export const READER_SLUG = 'test-only-moonlit-cafe'
 
@@ -309,7 +304,7 @@ export class ReaderApiMock {
   readonly stories = new Map<string, ReaderStoryFixture>()
   readonly progress = new Map<string, ProgressFixture | null>()
 
-  authUnlocked = true
+  authSignedIn = true
   libraryItems: ReaderLibraryItemFixture[] = []
 
   private readonly storyResponses = new Map<string, QueuedResponse[]>()
@@ -463,6 +458,11 @@ export class ReaderApiMock {
     }
     this.requests.push(captured)
 
+    if (url.pathname.startsWith('/api/v1/')) {
+      expect(request.headers().authorization).toBe(`Bearer ${fixtureAccessToken}`)
+      expect(request.headers()['x-pp-account-id']).toBe(fixtureAccountID)
+    }
+
     if (
       url.pathname === '/api/v1/story' ||
       url.pathname.startsWith('/api/v1/story/')
@@ -472,11 +472,11 @@ export class ReaderApiMock {
       return
     }
 
-    if (request.method() === 'GET' && url.pathname === '/api/v1/auth/status') {
-      await this.respond(route, captured, undefined, { unlocked: this.authUnlocked })
+    if (request.method() === 'GET' && url.pathname === '/api/auth/me') {
+      await this.respond(route, captured, undefined, { signedIn: this.authSignedIn })
       return
     }
-    if (request.method() === 'POST' && url.pathname === '/api/v1/auth/unlock') {
+    if (request.method() === 'POST' && url.pathname === '/api/auth/onboard') {
       await this.respond(route, captured, undefined, { ok: true })
       return
     }

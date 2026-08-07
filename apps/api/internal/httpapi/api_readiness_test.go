@@ -14,10 +14,9 @@ import (
 
 func TestHealthzIsDependencyFreeLiveness(t *testing.T) {
 	store := &authTestStore{readinessErr: errors.New("database must not be consulted")}
-	manager := testSessionManager(t, false, func() time.Time { return testSessionTime })
 
 	response := httptest.NewRecorder()
-	testHandler(t, store, manager).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	testHandler(t, store).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 
 	if response.Code != http.StatusOK || response.Body.String() != "ok" {
 		t.Fatalf("health response = %d %q, want 200 ok", response.Code, response.Body.String())
@@ -25,16 +24,15 @@ func TestHealthzIsDependencyFreeLiveness(t *testing.T) {
 	if response.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("Cache-Control = %q, want no-store", response.Header().Get("Cache-Control"))
 	}
-	if store.readinessCalls != 0 || store.existsCalls != 0 {
-		t.Fatalf("health consulted dependencies: readiness=%d account=%d", store.readinessCalls, store.existsCalls)
+	if store.readinessCalls != 0 {
+		t.Fatalf("health consulted readiness: %d", store.readinessCalls)
 	}
 }
 
 func TestHealthzRejectsOtherMethods(t *testing.T) {
 	store := &authTestStore{}
-	manager := testSessionManager(t, false, func() time.Time { return testSessionTime })
 	response := httptest.NewRecorder()
-	testHandler(t, store, manager).ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/healthz", nil))
+	testHandler(t, store).ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/healthz", nil))
 
 	if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != http.MethodGet {
 		t.Fatalf("health method response = %d Allow %q; body = %s", response.Code, response.Header().Get("Allow"), response.Body.String())
@@ -83,9 +81,8 @@ func TestReadyzStableSafeContracts(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			store := &authTestStore{readinessErr: test.checkErr}
-			manager := testSessionManager(t, false, func() time.Time { return testSessionTime })
 			response := httptest.NewRecorder()
-			testHandler(t, store, manager).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+			testHandler(t, store).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 
 			if response.Code != test.wantStatus {
 				t.Fatalf("ready response status = %d, want %d; body = %s", response.Code, test.wantStatus, response.Body.String())
@@ -99,8 +96,8 @@ func TestReadyzStableSafeContracts(t *testing.T) {
 			if response.Header().Get("Cache-Control") != "no-store" || response.Header().Get("Content-Type") != "application/json" {
 				t.Fatalf("ready response headers = %#v", response.Header())
 			}
-			if store.readinessCalls != 1 || store.existsCalls != 0 {
-				t.Fatalf("ready calls readiness/account = %d/%d, want 1/0", store.readinessCalls, store.existsCalls)
+			if store.readinessCalls != 1 {
+				t.Fatalf("ready calls = %d, want 1", store.readinessCalls)
 			}
 		})
 	}
@@ -117,10 +114,9 @@ func TestReadyzUsesOneTwoSecondDeadline(t *testing.T) {
 		<-ctx.Done()
 		return ctx.Err()
 	}}
-	manager := testSessionManager(t, false, func() time.Time { return testSessionTime })
 	response := httptest.NewRecorder()
 	started := time.Now()
-	testHandler(t, store, manager).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	testHandler(t, store).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	elapsed := time.Since(started)
 
 	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), `"reason":"database_unavailable"`) {
@@ -139,9 +135,8 @@ func TestReadyzUsesOneTwoSecondDeadline(t *testing.T) {
 
 func TestReadyzRejectsOtherMethodsWithoutProbe(t *testing.T) {
 	store := &authTestStore{}
-	manager := testSessionManager(t, false, func() time.Time { return testSessionTime })
 	response := httptest.NewRecorder()
-	testHandler(t, store, manager).ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/readyz", nil))
+	testHandler(t, store).ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/readyz", nil))
 
 	if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != http.MethodGet {
 		t.Fatalf("ready method response = %d Allow %q; body = %s", response.Code, response.Header().Get("Allow"), response.Body.String())

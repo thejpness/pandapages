@@ -112,7 +112,7 @@ const emit = defineEmits<{
 
 .studio-dialog__description {
   margin-top: 0.55rem;
-  color: var(--panda-muted);
+  color: var(--panda-soft-ink);
   line-height: 1.55;
 }
 
@@ -121,7 +121,7 @@ const emit = defineEmits<{
   padding: 0.9rem 1rem;
   border-radius: var(--panda-radius-compact);
   background: var(--panda-mist);
-  color: var(--panda-soft-ink);
+  color: var(--panda-ink);
   font-size: 0.92rem;
 }
 

@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"pandapages/api/internal/model"
 	"pandapages/api/internal/readercontract"
@@ -28,7 +27,6 @@ func validProgressBody(percent float64) string {
 }
 
 func TestProgressPutStrictlyValidatesLocatorV2BeforeStore(t *testing.T) {
-	manager := testSessionManager(t, false, func() time.Time { return testSessionTime })
 	tests := []struct {
 		name     string
 		body     string
@@ -52,14 +50,14 @@ func TestProgressPutStrictlyValidatesLocatorV2BeforeStore(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			store := &authTestStore{accountExists: true}
-			request := sessionRequest(t, manager, http.MethodPut, "/api/v1/progress/test-story")
+			store := &authTestStore{}
+			request := bearerRequest(http.MethodPut, "/api/v1/progress/test-story")
 			request.Body = io.NopCloser(strings.NewReader(test.body))
 			request.ContentLength = int64(len(test.body))
 			request.Header.Set("Content-Type", "application/json")
 			response := httptest.NewRecorder()
 
-			testHandler(t, store, manager).ServeHTTP(response, request)
+			testHandler(t, store).ServeHTTP(response, request)
 
 			if response.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusBadRequest, response.Body.String())
@@ -83,7 +81,6 @@ func TestProgressPutStrictlyValidatesLocatorV2BeforeStore(t *testing.T) {
 }
 
 func TestProgressPutResponseFollowsTypedStoreResult(t *testing.T) {
-	manager := testSessionManager(t, false, func() time.Time { return testSessionTime })
 
 	for _, test := range []struct {
 		name       string
@@ -98,15 +95,15 @@ func TestProgressPutResponseFollowsTypedStoreResult(t *testing.T) {
 		{name: "database failure", storeErr: errors.New("private database detail"), wantStatus: http.StatusInternalServerError, wantCode: "db"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			store := &authTestStore{accountExists: true, progressPutErr: test.storeErr}
-			request := sessionRequest(t, manager, http.MethodPut, "/api/v1/progress/test-story")
+			store := &authTestStore{progressPutErr: test.storeErr}
+			request := bearerRequest(http.MethodPut, "/api/v1/progress/test-story")
 			body := validProgressBody(0.5)
 			request.Body = io.NopCloser(strings.NewReader(body))
 			request.ContentLength = int64(len(body))
 			request.Header.Set("Content-Type", "application/json")
 			response := httptest.NewRecorder()
 
-			testHandler(t, store, manager).ServeHTTP(response, request)
+			testHandler(t, store).ServeHTTP(response, request)
 
 			if response.Code != test.wantStatus {
 				t.Fatalf("status = %d, want %d; body = %s", response.Code, test.wantStatus, response.Body.String())
@@ -142,17 +139,15 @@ func TestProgressPutResponseFollowsTypedStoreResult(t *testing.T) {
 }
 
 func TestProgressGetDistinguishesMissingStoryFromKnownEmptyProgress(t *testing.T) {
-	manager := testSessionManager(t, false, func() time.Time { return testSessionTime })
 
 	t.Run("known empty", func(t *testing.T) {
 		store := &authTestStore{
-			accountExists:    true,
 			progressGetState: model.ProgressResponse{Progress: nil},
 		}
 		response := httptest.NewRecorder()
-		testHandler(t, store, manager).ServeHTTP(
+		testHandler(t, store).ServeHTTP(
 			response,
-			sessionRequest(t, manager, http.MethodGet, "/api/v1/progress/test-story"),
+			bearerRequest(http.MethodGet, "/api/v1/progress/test-story"),
 		)
 		if response.Code != http.StatusOK || strings.TrimSpace(response.Body.String()) != `{"progress":null}` {
 			t.Fatalf("response = %d %s", response.Code, response.Body.String())
@@ -163,11 +158,11 @@ func TestProgressGetDistinguishesMissingStoryFromKnownEmptyProgress(t *testing.T
 	})
 
 	t.Run("missing story", func(t *testing.T) {
-		store := &authTestStore{accountExists: true, progressGetErr: sql.ErrNoRows}
+		store := &authTestStore{progressGetErr: sql.ErrNoRows}
 		response := httptest.NewRecorder()
-		testHandler(t, store, manager).ServeHTTP(
+		testHandler(t, store).ServeHTTP(
 			response,
-			sessionRequest(t, manager, http.MethodGet, "/api/v1/progress/missing"),
+			bearerRequest(http.MethodGet, "/api/v1/progress/missing"),
 		)
 		if response.Code != http.StatusNotFound {
 			t.Fatalf("status = %d, want 404; body = %s", response.Code, response.Body.String())
@@ -176,8 +171,7 @@ func TestProgressGetDistinguishesMissingStoryFromKnownEmptyProgress(t *testing.T
 }
 
 func TestProgressPutRequiresVerifiedSession(t *testing.T) {
-	manager := testSessionManager(t, false, func() time.Time { return testSessionTime })
-	store := &authTestStore{accountExists: true}
+	store := &authTestStore{}
 	request := httptest.NewRequest(
 		http.MethodPut,
 		"/api/v1/progress/test-story",
@@ -186,7 +180,7 @@ func TestProgressPutRequiresVerifiedSession(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 
-	testHandler(t, store, manager).ServeHTTP(response, request)
+	testHandler(t, store).ServeHTTP(response, request)
 
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusUnauthorized, response.Body.String())

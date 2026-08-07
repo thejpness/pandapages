@@ -1,5 +1,6 @@
 import { AxeBuilder } from '@axe-core/playwright'
-import { expect, test, type Page, type Route } from '@playwright/test'
+import { expect, test } from './support/auth'
+import type { Page, Route } from '@playwright/test'
 
 const versionOne = '11111111-1111-4111-8111-111111111111'
 const versionTwo = '22222222-2222-4222-8222-222222222222'
@@ -196,11 +197,11 @@ class StudioAPI {
     const body = request.postDataJSON() ?? null
     this.requests.push({ method, path, body })
 
-    if (path === '/api/v1/auth/status') {
-      await this.fulfill(route, { unlocked: true })
+    if (path === '/api/auth/me') {
+      await this.fulfill(route, { signedIn: true })
       return
     }
-    if (path === '/api/v1/auth/logout' && method === 'POST') {
+    if (path === '/auth/v1/logout' && method === 'POST') {
       await this.fulfill(route, { ok: true })
       return
     }
@@ -759,7 +760,7 @@ test('dirty navigation requires an accessible decision while clean navigation do
   await expect(dialog).toBeHidden()
 })
 
-test('401 goes to Unlock with a safe next while 403 and retryable failures stay truthful', async ({
+test('401 goes to sign-in with a safe next while 403 and retryable failures stay truthful', async ({
   page,
 }) => {
   const api = new StudioAPI()
@@ -795,9 +796,9 @@ test('401 goes to Unlock with a safe next while 403 and retryable failures stay 
   await page.getByRole('button', { name: 'Try again' }).click()
   await expect(page.getByRole('heading', { name: 'The Panda Tale' })).toBeVisible()
 
-  api.listFailure = { status: 401, code: 'unauthorized', message: 'unlock required' }
+  api.listFailure = { status: 401, code: 'unauthorized', message: 'sign-in required' }
   await page.reload()
-  await expect(page).toHaveURL(/\/unlock\?next=\/admin\/stories$/)
+  await expect(page).toHaveURL(/\/account\/login\?next=\/admin\/stories$/)
 })
 
 test('stale detail response cannot replace a newer route', async ({ page }) => {

@@ -27,26 +27,26 @@ async function fulfillJson(
 
 async function installSessionRoutes(
   page: Page,
-  initiallyUnlocked = false,
+  initiallySignedIn = false,
 ): Promise<void> {
-  let unlocked = initiallyUnlocked
+  let signedIn = initiallySignedIn
   await page.route('**/api/v1/**', async (route) => {
     const request = route.request()
     const url = new URL(request.url())
 
     if (
       request.method() === 'GET' &&
-      url.pathname === '/api/v1/auth/status'
+      url.pathname === '/api/auth/me'
     ) {
-      await fulfillJson(route, { unlocked })
+      await fulfillJson(route, { signedIn })
       return
     }
 
     if (
       request.method() === 'POST' &&
-      url.pathname === '/api/v1/auth/unlock'
+      url.pathname === '/api/auth/onboard'
     ) {
-      unlocked = true
+      signedIn = true
       await fulfillJson(route, { ok: true })
       return
     }
@@ -180,7 +180,7 @@ test.describe('Public landing page', () => {
   }) => {
     const authStatusRequests: string[] = []
     page.on('request', (request) => {
-      if (new URL(request.url()).pathname === '/api/v1/auth/status') {
+      if (new URL(request.url()).pathname === '/api/auth/me') {
         authStatusRequests.push(request.url())
       }
     })
@@ -224,7 +224,7 @@ test.describe('Public landing page', () => {
     )
   })
 
-  test('primary CTA preserves the library destination through Unlock and returns after success', async ({
+  test('primary CTA preserves the library destination through Panda Pages sign-in', async ({
     page,
   }) => {
     await installSessionRoutes(page)
@@ -236,13 +236,12 @@ test.describe('Public landing page', () => {
     })
     await expect(startReading).toHaveAttribute('href', '/library')
     await startReading.click()
-    await expectRoute(page, '/unlock', '/library')
+    await expectRoute(page, '/account/login', '/library')
 
-    await page.locator('input[autocomplete="one-time-code"]').fill('123456')
-    await expectRoute(page, '/library')
+    await expect(page.getByRole('heading', { name: 'Sign in to Panda Pages' })).toBeVisible()
   })
 
-  test('featured story CTA preserves its intended Reader destination through Unlock', async ({
+  test('featured story CTA preserves its intended Reader destination through Panda Pages sign-in', async ({
     page,
   }) => {
     await installSessionRoutes(page)
@@ -256,10 +255,9 @@ test.describe('Public landing page', () => {
       '/read/' + FEATURED_SLUG,
     )
     await story.click()
-    await expectRoute(page, '/unlock', '/read/' + FEATURED_SLUG)
+    await expectRoute(page, '/account/login', '/read/' + FEATURED_SLUG)
 
-    await page.locator('input[autocomplete="one-time-code"]').fill('123456')
-    await expectRoute(page, '/read/' + FEATURED_SLUG)
+    await expect(page.getByRole('heading', { name: 'Sign in to Panda Pages' })).toBeVisible()
   })
 
   test('accepts the native install prompt when beforeinstallprompt is available', async ({

@@ -40,9 +40,6 @@ import {
   type ReaderMode,
   type ReaderPreferencesV2,
 } from '../lib/reader-preferences-v2'
-import { authState } from '../lib/session'
-import { safeNextPath } from '../lib/session-navigation'
-import { navigationDidFail } from '../lib/session-transitions'
 
 type ReaderView = {
   mode: ReaderMode
@@ -173,14 +170,10 @@ const readerPlacementQueue = createReaderPlacementQueue()
 const { preferences, fontStack } = useReaderPreferences()
 const settingsPreferences = ref<ReaderPreferencesV2>({ ...preferences.value })
 
-async function moveToUnlock(storySlug: string) {
-  authState.confirmLocked()
-  const next = safeNextPath('/read/' + encodeURIComponent(storySlug))
+async function moveToSignIn(storySlug: string) {
+  const next = '/read/' + encodeURIComponent(storySlug)
   try {
-    const result = await router.replace({ path: '/unlock', query: { next } })
-    if (navigationDidFail(result)) {
-      story.contentState.value = { status: 'unavailable' }
-    }
+    await router.replace({ path: '/account/login', query: { next } })
   } catch {
     story.contentState.value = { status: 'unavailable' }
   }
@@ -244,7 +237,7 @@ function captureCurrent(): ReaderCapturedPosition | null {
 
 const progress = useReaderProgress({
   capture: captureCurrent,
-  onSessionLoss: moveToUnlock,
+  onSessionLoss: moveToSignIn,
   navigateToLibrary: async () => {
     await router.push('/library')
   },
@@ -268,7 +261,7 @@ function invalidateReaderPlacementWork() {
 }
 
 const story = useReaderStory({
-  onSessionEnded: moveToUnlock,
+  onSessionEnded: moveToSignIn,
   onReady: async (loaded) => {
     const activeGeneration = readerGeneration
     await currentReaderView()?.whenReady()

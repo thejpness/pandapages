@@ -12,7 +12,6 @@ import {
   adminUnpublishStory,
   type AdminStoryDetail,
 } from '@/lib/api'
-import { authState } from '@/lib/session'
 import {
   draftOutcomeMessage,
   projectStoryStudioError,
@@ -53,10 +52,9 @@ function selectDefaultVersion(detail: AdminStoryDetail) {
     }) ?? null
 }
 
-async function moveToUnlock() {
-  authState.confirmLocked()
+async function moveToSignIn() {
   await router.replace({
-    path: '/unlock',
+    path: '/account/login',
     query: { next: `/admin/stories/${encodeURIComponent(slug.value)}` },
   })
 }
@@ -76,7 +74,7 @@ async function loadStory(preserve = false) {
     if (controller.signal.aborted || activeGeneration !== generation) return
     const projected = projectStoryStudioError(caught)
     error.value = projected
-    if (projected.kind === 'session') await moveToUnlock()
+    if (projected.kind === 'session') await moveToSignIn()
   } finally {
     if (activeGeneration === generation) loading.value = false
   }
@@ -119,7 +117,7 @@ async function publishSelected() {
     const projected = projectStoryStudioError(caught)
     error.value = projected
     publishDialogOpen.value = false
-    if (projected.kind === 'session') await moveToUnlock()
+    if (projected.kind === 'session') await moveToSignIn()
   } finally {
     publishing.value = false
   }
@@ -139,7 +137,7 @@ async function unpublish() {
     const projected = projectStoryStudioError(caught)
     error.value = projected
     unpublishDialogOpen.value = false
-    if (projected.kind === 'session') await moveToUnlock()
+    if (projected.kind === 'session') await moveToSignIn()
   } finally {
     unpublishing.value = false
   }

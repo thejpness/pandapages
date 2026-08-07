@@ -100,7 +100,7 @@ test('official PKCE callback onboards with bearer only, restores identity, and l
 
   await page.goto('/account/login')
   await expect(page.getByRole('heading', { name: 'Sign in to Panda Pages' })).toBeVisible()
-  await expect(page.getByText(/temporary shared-passcode flow/)).toBeVisible()
+  await expect(page.getByText('Use your adult account to continue to Panda Pages.')).toBeVisible()
   await page.getByRole('button', { name: 'Continue with Google' }).click()
 
   await expect.poll(() => authorizeURL?.pathname).toBe('/auth/v1/authorize')
@@ -110,9 +110,9 @@ test('official PKCE callback onboards with bearer only, restores identity, and l
 
   await page.goto('/auth/callback?code=auth-code-fixture')
   await expect(page).toHaveURL(/\/account$/)
-  await expect(page.getByRole('heading', { name: 'Your Panda Pages identity' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Choose an account' })).toBeVisible()
   await expect(page.getByText('My Panda Pages')).toBeVisible()
-  await expect(page.getByText('No account or reader profile is selected by this foundation.')).toBeVisible()
+  await expect(page.getByText('Your account choice is checked against current memberships on every request.')).toBeVisible()
   expect(tokenExchange).toBe(true)
   expect(authRequests).toHaveLength(2)
   expect(authRequests.map((request) => request.method)).toEqual(['POST', 'GET'])

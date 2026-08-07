@@ -439,9 +439,7 @@ probe_readiness() {
     printf 'DATABASE_URL=postgres://%s:%s@%s:5432/%s?sslmode=disable\n' \
       "$database_user" "$database_password" "$postgres_container" "$database"
     printf 'PGAPPNAME=pandapages-account-integrity-test\n'
-    printf 'PP_PASSCODE=123456\n'
     printf 'PP_ADMIN_KEY=generated-admin-key-not-for-production-00000000\n'
-    printf 'PP_SESSION_SECRET=generated-session-secret-not-for-production-00000000\n'
     printf 'PP_SUPABASE_ISSUER=https://auth.invalid/auth/v1\n'
     printf 'PP_SUPABASE_AUDIENCE=authenticated\n'
     printf 'PP_SUPABASE_JWKS_URL=https://auth.invalid/auth/v1/.well-known/jwks.json\n'

@@ -38,7 +38,7 @@ func TestObserveAcceptsSafeIncomingRequestIDAndLogsCompletion(t *testing.T) {
 	request.Header.Set(RequestIDHeader, requestID)
 	request.Header.Set("Authorization", "Bearer "+secret)
 	request.Header.Set("X-PP-Admin-Key", secret)
-	request.AddCookie(&http.Cookie{Name: "pp_session", Value: secret})
+	request.AddCookie(&http.Cookie{Name: "sensitive_cookie", Value: secret})
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 

@@ -1,11 +1,6 @@
 import { AxeBuilder } from '@axe-core/playwright'
-import {
-  expect,
-  test as base,
-  type Page,
-  type Route,
-} from '@playwright/test'
-
+import { expect, test as base } from './support/auth'
+import type { Page, Route } from '@playwright/test'
 type SettingsFixture = {
   child: {
     id?: string
@@ -37,7 +32,7 @@ const DEFAULT_SETTINGS: SettingsFixture = {
   },
   prompt: {
     id: 'prompt-test-id',
-    name: 'Default prompt v1',
+    name: 'Panda Pages prompt v1',
     schemaVersion: 1,
     rules: {
       tone: 'cosy',
@@ -93,9 +88,9 @@ class JourneyApiMock {
       status,
       body: {
         error: {
-          code: status === 401 ? 'unlock_required' : 'settings_unavailable',
+          code: status === 401 ? 'sign-in_required' : 'settings_unavailable',
           message:
-            status === 401 ? 'unlock required' : 'Reading profile unavailable.',
+            status === 401 ? 'sign-in required' : 'Reading profile unavailable.',
         },
       },
     }
@@ -140,9 +135,9 @@ class JourneyApiMock {
 
     if (
       request.method() === 'GET' &&
-      pathname === '/api/v1/auth/status'
+      pathname === '/api/auth/me'
     ) {
-      await fulfillJson(route, { unlocked: true })
+      await fulfillJson(route, { signedIn: true })
       return
     }
 
@@ -404,7 +399,7 @@ test.describe('Reading profile Journey', () => {
       },
       prompt: {
         id: 'prompt-test-id',
-        name: 'Default prompt v1',
+        name: 'Panda Pages prompt v1',
         schemaVersion: 1,
         rules: {
           tone: 'adventurous',
@@ -444,16 +439,16 @@ test.describe('Reading profile Journey', () => {
     await expect(page.getByRole('button', { name: 'Next' })).toBeDisabled()
   })
 
-  test('a settings 401 confirms session loss and opens unlock with a safe Journey return', async ({
+  test('a settings 401 confirms session loss and opens sign-in with a safe Journey return', async ({
     page,
     api,
   }) => {
     api.failNextLoad(401)
     await page.goto('/journey')
 
-    await expectRoute(page, '/unlock', '/journey')
+    await expectRoute(page, '/account/login', '/journey')
     await expect(
-      page.getByRole('heading', { level: 1, name: 'Unlock Panda Pages' }),
+      page.getByRole('heading', { level: 1, name: 'Sign in to Panda Pages' }),
     ).toBeVisible()
     await expect(page.getByLabel('Nickname')).toHaveCount(0)
   })
@@ -551,15 +546,15 @@ test.describe('Reading profile Journey', () => {
     )
   })
 
-  test('a save 401 confirms session loss and opens unlock', async ({ page, api }) => {
+  test('a save 401 confirms session loss and opens sign-in', async ({ page, api }) => {
     api.failNextSave(401)
     await gotoJourney(page)
     await page.getByRole('button', { name: 'Next' }).click()
     await page.getByRole('button', { name: 'Save' }).click()
 
-    await expectRoute(page, '/unlock', '/journey')
+    await expectRoute(page, '/account/login', '/journey')
     await expect(
-      page.getByRole('heading', { level: 1, name: 'Unlock Panda Pages' }),
+      page.getByRole('heading', { level: 1, name: 'Sign in to Panda Pages' }),
     ).toBeVisible()
   })
 

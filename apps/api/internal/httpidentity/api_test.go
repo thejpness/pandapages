@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"pandapages/api/internal/appidentity"
+	"pandapages/api/internal/httpbearer"
 	"pandapages/api/internal/supabaseauth"
 )
 
@@ -73,9 +74,13 @@ func request(t *testing.T, handler http.Handler, method, target string, bearer b
 	return response
 }
 
+func testAPI(verifier *verifierStub, store *storeStub) http.Handler {
+	return New(httpbearer.New(verifier, store), store)
+}
+
 func TestOnboardReturnsFiniteIdentityState(t *testing.T) {
 	verifier, store := validStubs()
-	response := request(t, New(verifier, store), http.MethodPost, "/api/auth/onboard", true)
+	response := request(t, testAPI(verifier, store), http.MethodPost, "/api/auth/onboard", true)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -94,7 +99,7 @@ func TestOnboardReturnsFiniteIdentityState(t *testing.T) {
 
 func TestMeDoesNotProvision(t *testing.T) {
 	verifier, store := validStubs()
-	response := request(t, New(verifier, store), http.MethodGet, "/api/auth/me", true)
+	response := request(t, testAPI(verifier, store), http.MethodGet, "/api/auth/me", true)
 	if response.Code != http.StatusOK || strings.Contains(response.Body.String(), `"created"`) {
 		t.Fatalf("status/body = %d %s", response.Code, response.Body.String())
 	}
@@ -106,9 +111,9 @@ func TestMeDoesNotProvision(t *testing.T) {
 func TestBearerRoutesRejectCookieOnlyAuthentication(t *testing.T) {
 	verifier, store := validStubs()
 	request := httptest.NewRequest(http.MethodPost, "/api/auth/onboard", nil)
-	request.AddCookie(&http.Cookie{Name: "pp_session", Value: "valid-looking-legacy-cookie"})
+	request.AddCookie(&http.Cookie{Name: "obsolete_cookie", Value: "valid-looking-legacy-cookie"})
 	response := httptest.NewRecorder()
-	New(verifier, store).ServeHTTP(response, request)
+	testAPI(verifier, store).ServeHTTP(response, request)
 	if response.Code != http.StatusUnauthorized || !strings.Contains(response.Body.String(), `"bearer_required"`) {
 		t.Fatalf("status/body = %d %s", response.Code, response.Body.String())
 	}
@@ -124,7 +129,7 @@ func TestBearerParsingFailsClosed(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
 			req.Header.Set("Authorization", header)
 			response := httptest.NewRecorder()
-			New(verifier, store).ServeHTTP(response, req)
+			testAPI(verifier, store).ServeHTTP(response, req)
 			if response.Code != http.StatusUnauthorized || !strings.Contains(response.Body.String(), `"invalid_bearer"`) {
 				t.Fatalf("status/body = %d %s", response.Code, response.Body.String())
 			}
@@ -149,7 +154,7 @@ func TestBearerVerificationErrorsAreFinite(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			verifier, store := validStubs()
 			verifier.err = test.err
-			response := request(t, New(verifier, store), http.MethodGet, "/api/auth/me", true)
+			response := request(t, testAPI(verifier, store), http.MethodGet, "/api/auth/me", true)
 			if response.Code != test.wantStatus || !strings.Contains(response.Body.String(), `"`+test.wantCode+`"`) {
 				t.Fatalf("status/body = %d %s", response.Code, response.Body.String())
 			}
@@ -178,7 +183,7 @@ func TestStoreErrorsAreFinite(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			verifier, store := validStubs()
 			store.identityErr = test.err
-			response := request(t, New(verifier, store), http.MethodGet, "/api/auth/me", true)
+			response := request(t, testAPI(verifier, store), http.MethodGet, "/api/auth/me", true)
 			if response.Code != test.wantStatus || !strings.Contains(response.Body.String(), `"`+test.wantCode+`"`) {
 				t.Fatalf("status/body = %d %s", response.Code, response.Body.String())
 			}
@@ -194,7 +199,7 @@ func TestOnboardRejectsAnyRequestBody(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/onboard", strings.NewReader(`{}`))
 	req.Header.Set("Authorization", "Bearer "+secretToken)
 	response := httptest.NewRecorder()
-	New(verifier, store).ServeHTTP(response, req)
+	testAPI(verifier, store).ServeHTTP(response, req)
 	if response.Code != http.StatusBadRequest || verifier.calls != 0 || store.ensureCalls != 0 {
 		t.Fatalf("status=%d verify=%d ensure=%d body=%s", response.Code, verifier.calls, store.ensureCalls, response.Body.String())
 	}

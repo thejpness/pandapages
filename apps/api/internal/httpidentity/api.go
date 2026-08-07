@@ -23,9 +23,12 @@ type API struct {
 	store IdentityStore
 }
 
-func New(verifier httpbearer.TokenVerifier, store IdentityStore) http.Handler {
+func New(authenticator *httpbearer.Authenticator, store IdentityStore) http.Handler {
+	if authenticator == nil {
+		panic("bearer authenticator is required")
+	}
 	api := &API{
-		auth:  httpbearer.New(verifier, store),
+		auth:  authenticator,
 		store: store,
 	}
 	mux := http.NewServeMux()

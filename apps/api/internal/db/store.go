@@ -110,130 +110,7 @@ func clamp01(p float64) float64 {
 	return p
 }
 
-/* ----------------------------- Accounts (Phase A) ----------------------------- */
-
-// Stable application-scoped key for serializing default-account creation.
-const ensureDefaultAccountLockID int64 = 0x50504143434f554e
-
 var accountIDRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-
-// EnsureDefaultAccount returns the deterministically oldest account id, creating
-// one when the table is empty. The transaction-level advisory lock coordinates
-// initialization across processes and replicas.
-func (s *Store) EnsureDefaultAccount() (string, error) {
-	ctx, cancel := s.ctx()
-	defer cancel()
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, ensureDefaultAccountLockID); err != nil {
-		return "", err
-	}
-
-	selectOldest := func() (string, error) {
-		var id string
-		err := tx.QueryRowContext(ctx, `
-			SELECT id
-			FROM accounts
-			ORDER BY created_at ASC, id ASC
-			LIMIT 1
-		`).Scan(&id)
-		return id, err
-	}
-
-	id, err := selectOldest()
-	if err == sql.ErrNoRows {
-		if _, err = tx.ExecContext(ctx, `
-				INSERT INTO accounts (name)
-				VALUES ('Default')
-			`); err != nil {
-			return "", err
-		}
-		id, err = selectOldest()
-	}
-	if err != nil {
-		return "", err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return "", err
-	}
-
-	return id, nil
-}
-
-// AccountExists reports whether accountID identifies an existing account.
-// Malformed identifiers are treated as absent instead of being sent to
-// PostgreSQL as invalid UUID input.
-func (s *Store) AccountExists(accountID string) (bool, error) {
-	accountID = strings.TrimSpace(accountID)
-	if !accountIDRe.MatchString(accountID) {
-		return false, nil
-	}
-
-	ctx, cancel := s.ctx()
-	defer cancel()
-
-	var exists bool
-	err := s.db.QueryRowContext(ctx, `
-		SELECT EXISTS (
-			SELECT 1
-			FROM accounts
-			WHERE id = $1
-		)
-	`, accountID).Scan(&exists)
-	return exists, err
-}
-
-/* ----------------------------- Profiles ----------------------------- */
-
-func (s *Store) getDefaultProfileID(ctx context.Context, accountID string) (string, error) {
-	accountID = strings.TrimSpace(accountID)
-	if !accountIDRe.MatchString(accountID) {
-		return "", sql.ErrNoRows
-	}
-
-	var id string
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id
-		FROM profiles
-		WHERE account_id = $1
-		  AND name = 'Default'
-		ORDER BY created_at ASC, id ASC
-		LIMIT 1
-	`, accountID).Scan(&id)
-	if err == nil {
-		return id, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return "", err
-	}
-
-	// The existing (account_id, name) uniqueness rule serializes concurrent
-	// exact-name creation without turning this temporary resolver into profile
-	// selection state or repurposing an existing differently named profile.
-	if _, err := s.db.ExecContext(ctx, `
-		INSERT INTO profiles (account_id, name)
-		VALUES ($1, 'Default')
-		ON CONFLICT (account_id, name) DO NOTHING
-	`, accountID); err != nil {
-		return "", err
-	}
-
-	err = s.db.QueryRowContext(ctx, `
-		SELECT id
-		FROM profiles
-		WHERE account_id = $1
-		  AND name = 'Default'
-		ORDER BY created_at ASC, id ASC
-		LIMIT 1
-	`, accountID).Scan(&id)
-	return id, err
-}
 
 /* ----------------------------- Library ----------------------------- */
 
@@ -318,11 +195,6 @@ func (s *Store) Library(accountID string) (model.LibraryReadModel, error) {
 	ctx, cancel := s.ctx()
 	defer cancel()
 
-	profileID, err := s.getDefaultProfileID(ctx, accountID)
-	if err != nil {
-		return model.LibraryReadModel{}, err
-	}
-
 	// Segment rows are kept in this single statement so metadata, progress, and
 	// Reader 2 identities all come from one PostgreSQL snapshot. The ordered
 	// identities are validated by the shared Reader contract in Go rather than
@@ -367,8 +239,7 @@ func (s *Store) Library(accountID string) (model.LibraryReadModel, error) {
 			segment.word_count
 		FROM candidates
 		LEFT JOIN reading_progress AS progress
-		  ON progress.profile_id = $2
-		 AND progress.story_id = candidates.story_id
+		  ON progress.story_id = candidates.story_id
 		 AND progress.account_id = $1
 		LEFT JOIN story_versions AS progress_version
 		  ON progress_version.id = progress.story_version_id
@@ -381,7 +252,7 @@ func (s *Store) Library(accountID string) (model.LibraryReadModel, error) {
 			candidates.slug ASC,
 			candidates.story_id ASC,
 			segment.ordinal ASC NULLS FIRST
-	`, accountID, profileID)
+	`, accountID)
 	if err != nil {
 		return model.LibraryReadModel{}, err
 	}
@@ -761,18 +632,13 @@ func (s *Store) ProgressGet(accountID, slug string) (model.ProgressResponse, err
 	ctx, cancel := s.ctx()
 	defer cancel()
 
-	profileID, err := s.getDefaultProfileID(ctx, accountID)
-	if err != nil {
-		return model.ProgressResponse{}, err
-	}
-
 	var (
 		hasProgress bool
 		version     sql.NullInt64
 		locatorJSON []byte
 		percent     sql.NullFloat64
 	)
-	err = s.db.QueryRowContext(ctx, `
+	err := s.db.QueryRowContext(ctx, `
 		SELECT
 			rp.story_version_id IS NOT NULL,
 			sv.version,
@@ -781,7 +647,6 @@ func (s *Store) ProgressGet(accountID, slug string) (model.ProgressResponse, err
 		FROM stories st
 		LEFT JOIN reading_progress rp
 		  ON rp.story_id = st.id
-		 AND rp.profile_id = $3
 		 AND rp.account_id = $1
 		LEFT JOIN story_versions sv
 		  ON sv.id = rp.story_version_id
@@ -790,7 +655,7 @@ func (s *Store) ProgressGet(accountID, slug string) (model.ProgressResponse, err
 		  AND st.slug = $2
 		  AND st.is_published = true
 		  AND st.published_version_id IS NOT NULL
-	`, accountID, slug, profileID).Scan(&hasProgress, &version, &locatorJSON, &percent)
+	`, accountID, slug).Scan(&hasProgress, &version, &locatorJSON, &percent)
 	if err != nil {
 		return model.ProgressResponse{}, err
 	}
@@ -824,11 +689,6 @@ func (s *Store) ProgressPut(accountID, slug string, version int, locator readerc
 	}
 	if math.IsNaN(percent) || math.IsInf(percent, 0) || percent < 0 || percent > 1 {
 		return fmt.Errorf("progress percent must be between 0 and 1")
-	}
-
-	profileID, err := s.getDefaultProfileID(ctx, accountID)
-	if err != nil {
-		return err
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -900,16 +760,16 @@ func (s *Store) ProgressPut(accountID, slug string, version int, locator readerc
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `
-		INSERT INTO reading_progress (account_id, profile_id, story_id, story_version_id, locator, percent, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,now())
-		ON CONFLICT (profile_id, story_id)
+		INSERT INTO reading_progress (account_id, story_id, story_version_id, locator, percent, updated_at)
+		VALUES ($1,$2,$3,$4,$5,now())
+		ON CONFLICT (account_id, story_id)
 		DO UPDATE SET
 			account_id=EXCLUDED.account_id,
 			story_version_id=EXCLUDED.story_version_id,
 			locator=EXCLUDED.locator,
 			percent=EXCLUDED.percent,
 			updated_at=now()
-	`, accountID, profileID, storyID, versionID, locatorJSON, percent); err != nil {
+	`, accountID, storyID, versionID, locatorJSON, percent); err != nil {
 		return err
 	}
 
@@ -929,11 +789,6 @@ func (s *Store) ContinueRecent(accountID string, limit int) ([]model.ContinueIte
 	ctx, cancel := s.ctx()
 	defer cancel()
 
-	profileID, err := s.getDefaultProfileID(ctx, accountID)
-	if err != nil {
-		return nil, err
-	}
-
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT st.slug, rp.percent, rp.updated_at
 		FROM reading_progress rp
@@ -943,10 +798,9 @@ func (s *Store) ContinueRecent(accountID string, limit int) ([]model.ContinueIte
 		WHERE rp.account_id = $2
 		  AND st.account_id = $2
 		  AND st.published_version_id IS NOT NULL
-		  AND rp.profile_id = $3
 		ORDER BY rp.updated_at DESC
 		LIMIT $1
-	`, limit, accountID, profileID)
+	`, limit, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -974,12 +828,12 @@ type settingsExecer interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
 
-func ensureProfileSettingsRow(ctx context.Context, execer settingsExecer, accountID, profileID string) error {
+func ensureAccountSettingsRow(ctx context.Context, execer settingsExecer, accountID string) error {
 	_, err := execer.ExecContext(ctx, `
-		INSERT INTO profile_settings (account_id, profile_id)
-		VALUES ($1, $2)
-		ON CONFLICT (profile_id) DO NOTHING
-	`, accountID, profileID)
+		INSERT INTO account_settings (account_id)
+		VALUES ($1)
+		ON CONFLICT (account_id) DO NOTHING
+	`, accountID)
 	return err
 }
 
@@ -987,11 +841,7 @@ func (s *Store) SettingsGet(accountID string) (model.SettingsPayload, error) {
 	ctx, cancel := s.ctx()
 	defer cancel()
 
-	profileID, err := s.getDefaultProfileID(ctx, accountID)
-	if err != nil {
-		return model.SettingsPayload{}, err
-	}
-	if err := ensureProfileSettingsRow(ctx, s.db, accountID, profileID); err != nil {
+	if err := ensureAccountSettingsRow(ctx, s.db, accountID); err != nil {
 		return model.SettingsPayload{}, err
 	}
 
@@ -1009,7 +859,7 @@ func (s *Store) SettingsGet(accountID string) (model.SettingsPayload, error) {
 	)
 
 	// Scope child/prompt via JOIN conditions to avoid cross-account leakage.
-	err = s.db.QueryRowContext(ctx, `
+	err := s.db.QueryRowContext(ctx, `
 		SELECT
 			cp.id::text,
 			cp.name,
@@ -1020,16 +870,15 @@ func (s *Store) SettingsGet(accountID string) (model.SettingsPayload, error) {
 			pp.name,
 			COALESCE(pp.rules, '{}'::jsonb),
 			pp.schema_version
-		FROM profile_settings ps
+		FROM account_settings ps
 		LEFT JOIN child_profiles cp
 			ON cp.id = ps.active_child_profile_id
 		   AND cp.account_id = ps.account_id
 		LEFT JOIN prompt_profiles pp
 			ON pp.id = ps.active_prompt_profile_id
 		   AND pp.account_id = ps.account_id
-		WHERE ps.profile_id = $1
-		  AND ps.account_id = $2
-	`, profileID, accountID).Scan(
+		WHERE ps.account_id = $1
+	`, accountID).Scan(
 		&childID, &childName, &ageMonths, &interests, &sens,
 		&promptID, &promptName, &promptRules, &schemaVer,
 	)
@@ -1092,12 +941,7 @@ func (s *Store) SettingsPut(accountID string, payload model.SettingsUpsert) (mod
 	}
 	// prompt_profiles.name is NOT NULL
 	if payload.Prompt.Name == "" {
-		payload.Prompt.Name = "Default prompt v1"
-	}
-
-	profileID, err := s.getDefaultProfileID(ctx, accountID)
-	if err != nil {
-		return model.SettingsPayload{}, err
+		payload.Prompt.Name = "Panda Pages prompt v1"
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -1105,7 +949,7 @@ func (s *Store) SettingsPut(accountID string, payload model.SettingsUpsert) (mod
 		return model.SettingsPayload{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := ensureProfileSettingsRow(ctx, tx, accountID, profileID); err != nil {
+	if err := ensureAccountSettingsRow(ctx, tx, accountID); err != nil {
 		return model.SettingsPayload{}, err
 	}
 
@@ -1180,13 +1024,12 @@ func (s *Store) SettingsPut(accountID string, payload model.SettingsUpsert) (mod
 
 	if childID != "" || promptID != "" {
 		_, err = tx.ExecContext(ctx, `
-			UPDATE profile_settings
+			UPDATE account_settings
 			SET active_child_profile_id = COALESCE(NULLIF($2,'' )::uuid, active_child_profile_id),
 			    active_prompt_profile_id = COALESCE(NULLIF($3,'' )::uuid, active_prompt_profile_id),
 			    updated_at = now()
-			WHERE profile_id = $1
-			  AND account_id = $4
-		`, profileID, childID, promptID, accountID)
+			WHERE account_id = $1
+		`, accountID, childID, promptID)
 		if err != nil {
 			return model.SettingsPayload{}, err
 		}

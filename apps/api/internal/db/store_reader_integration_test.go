@@ -15,11 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"pandapages/api/internal/httpadmin"
-	"pandapages/api/internal/httpapi"
 	"pandapages/api/internal/model"
 	"pandapages/api/internal/readercontract"
-	"pandapages/api/internal/session"
 )
 
 const (
@@ -472,34 +469,6 @@ func TestReaderStoreIntegration(t *testing.T) {
 			if strings.Contains(string(encodedCatalogue), forbidden) {
 				t.Fatalf("mixed-health catalogue leaked %q: %s", forbidden, encodedCatalogue)
 			}
-		}
-
-		sessions, err := session.New("reader-store-integration-admin-session-secret", false)
-		if err != nil {
-			t.Fatalf("create admin catalogue session: %v", err)
-		}
-		token, err := sessions.Issue(readerAccountC)
-		if err != nil {
-			t.Fatalf("issue admin catalogue session: %v", err)
-		}
-		request := httptest.NewRequest(http.MethodGet, "/api/v1/admin/stories", nil)
-		request.AddCookie(&http.Cookie{Name: session.CookieName, Value: token})
-		request.Header.Set("X-PP-Admin-Key", adminKey)
-		response := httptest.NewRecorder()
-		httpadmin.New(httpadmin.Config{AdminKey: adminKey, Sessions: sessions}, store).ServeHTTP(response, request)
-		if response.Code != http.StatusOK {
-			t.Fatalf("mixed-health catalogue HTTP response = %d %s", response.Code, response.Body.String())
-		}
-		if response.Header().Get("Cache-Control") != "no-store" ||
-			!strings.Contains(response.Header().Get("Content-Type"), "application/json") {
-			t.Fatalf("mixed-health catalogue HTTP headers = %#v", response.Header())
-		}
-		var httpCatalogue model.AdminStoriesListResponse
-		if err := json.Unmarshal(response.Body.Bytes(), &httpCatalogue); err != nil {
-			t.Fatalf("decode mixed-health catalogue HTTP response: %v", err)
-		}
-		if !reflect.DeepEqual(httpCatalogue, catalogue) {
-			t.Fatalf("mixed-health HTTP catalogue differs from Store result:\nHTTP: %#v\nStore: %#v", httpCatalogue, catalogue)
 		}
 
 		library, err := store.Library(readerAccountC)
@@ -1853,146 +1822,6 @@ func TestReaderStoreIntegration(t *testing.T) {
 		}
 	})
 
-	t.Run("real HTTP exposes clean Reader and strict progress contracts", func(t *testing.T) {
-		sessions, err := session.New("reader-store-integration-session-secret", false)
-		if err != nil {
-			t.Fatalf("create sessions: %v", err)
-		}
-		token, err := sessions.Issue(readerAccountA)
-		if err != nil {
-			t.Fatalf("issue session: %v", err)
-		}
-		cookie := &http.Cookie{Name: session.CookieName, Value: token}
-		handler := httpapi.New(httpapi.Config{Passcode: "123456", Sessions: sessions}, store)
-
-		readerResponse := serveReaderRequest(t, handler, cookie, http.MethodGet, "/api/v1/reader/"+readerSlug, "")
-		if readerResponse.Code != http.StatusOK || !strings.Contains(readerResponse.Body.String(), "café 世界") {
-			t.Fatalf("Reader HTTP response = %d %s", readerResponse.Code, readerResponse.Body.String())
-		}
-		var payload map[string]any
-		if err := json.Unmarshal(readerResponse.Body.Bytes(), &payload); err != nil {
-			t.Fatalf("decode Reader response: %v", err)
-		}
-		if _, exists := payload["markdown"]; exists {
-			t.Fatal("Reader response exposed Markdown")
-		}
-		for _, raw := range payload["segments"].([]any) {
-			segment := raw.(map[string]any)
-			for _, forbidden := range []string{"id", "storyVersionId", "markdown", "locator"} {
-				if _, exists := segment[forbidden]; exists {
-					t.Fatalf("Reader segment exposed %s: %#v", forbidden, segment)
-				}
-			}
-		}
-
-		for _, path := range []string{"/api/v1/story/" + readerSlug, "/api/v1/story/" + readerSlug + "/segments"} {
-			response := serveReaderRequest(t, handler, cookie, http.MethodGet, path, "")
-			if response.Code != http.StatusNotFound {
-				t.Fatalf("removed path %s = %d", path, response.Code)
-			}
-		}
-		if response := serveReaderRequest(t, handler, nil, http.MethodGet, "/api/v1/reader/"+readerSlug, ""); response.Code != http.StatusUnauthorized {
-			t.Fatalf("unsigned Reader status = %d", response.Code)
-		}
-		for _, slug := range []string{"unpublished-reader-story", "missing-reader-story"} {
-			response := serveReaderRequest(t, handler, cookie, http.MethodGet, "/api/v1/reader/"+slug, "")
-			if response.Code != http.StatusNotFound {
-				t.Fatalf("Reader %s status = %d", slug, response.Code)
-			}
-		}
-
-		validBody := progressBody(t, story.Version, locator, 0.73)
-		validResponse := serveReaderRequest(t, handler, cookie, http.MethodPut, "/api/v1/progress/"+readerSlug, validBody)
-		if validResponse.Code != http.StatusOK || strings.TrimSpace(validResponse.Body.String()) != `{"ok":true}` {
-			t.Fatalf("valid progress response = %d %s", validResponse.Code, validResponse.Body.String())
-		}
-		getResponse := serveReaderRequest(t, handler, cookie, http.MethodGet, "/api/v1/progress/"+readerSlug, "")
-		assertHTTPProgressState(t, getResponse, firstDraft.Version, locator, 0.73)
-
-		draftResponse := serveReaderRequest(
-			t,
-			handler,
-			cookie,
-			http.MethodPut,
-			"/api/v1/progress/"+readerSlug,
-			progressBody(t, secondDraft.Version, draftLocator, 0.81),
-		)
-		assertHTTPProgressNotFound(t, draftResponse)
-		assertHTTPProgressState(
-			t,
-			serveReaderRequest(t, handler, cookie, http.MethodGet, "/api/v1/progress/"+readerSlug, ""),
-			firstDraft.Version,
-			locator,
-			0.73,
-		)
-
-		if err := store.AdminPublish(readerAccountA, readerSlug, secondDraft.StoryVersionID); err != nil {
-			t.Fatalf("publish second version for HTTP progress: %v", err)
-		}
-		staleResponse := serveReaderRequest(t, handler, cookie, http.MethodPut, "/api/v1/progress/"+readerSlug, progressBody(t, firstDraft.Version, locator, 0.82))
-		assertHTTPProgressNotFound(t, staleResponse)
-		assertHTTPProgressState(
-			t,
-			serveReaderRequest(t, handler, cookie, http.MethodGet, "/api/v1/progress/"+readerSlug, ""),
-			firstDraft.Version,
-			locator,
-			0.73,
-		)
-
-		currentSecondBody := progressBody(t, secondDraft.Version, draftLocator, 0.83)
-		currentSecondResponse := serveReaderRequest(t, handler, cookie, http.MethodPut, "/api/v1/progress/"+readerSlug, currentSecondBody)
-		if currentSecondResponse.Code != http.StatusOK || strings.TrimSpace(currentSecondResponse.Body.String()) != `{"ok":true}` {
-			t.Fatalf("current second-version progress = %d %s", currentSecondResponse.Code, currentSecondResponse.Body.String())
-		}
-		assertHTTPProgressState(
-			t,
-			serveReaderRequest(t, handler, cookie, http.MethodGet, "/api/v1/progress/"+readerSlug, ""),
-			secondDraft.Version,
-			draftLocator,
-			0.83,
-		)
-
-		invalidBodies := []string{
-			`{"version":1,"locator":{"mode":"scroll","scrollY":10},"percent":0.1}`,
-			`{"version":1,"locator":{"schema":2,"segment":{"key":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","occurrence":1,"ordinal":1,"offset":0,"extra":true}},"percent":0.1}`,
-		}
-		for _, body := range invalidBodies {
-			response := serveReaderRequest(t, handler, cookie, http.MethodPut, "/api/v1/progress/"+readerSlug, body)
-			if response.Code != http.StatusBadRequest {
-				t.Fatalf("malformed progress status = %d; body = %s", response.Code, response.Body.String())
-			}
-		}
-		mismatch := draftLocator
-		mismatch.Segment.Key = strings.Repeat("e", 64)
-		response := serveReaderRequest(t, handler, cookie, http.MethodPut, "/api/v1/progress/"+readerSlug, progressBody(t, secondDraft.Version, mismatch, 0.9))
-		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"code":"locator_mismatch"`) {
-			t.Fatalf("locator mismatch = %d %s", response.Code, response.Body.String())
-		}
-		assertHTTPProgressNotFound(t, serveReaderRequest(
-			t, handler, cookie, http.MethodPut, "/api/v1/progress/"+readerSlug, progressBody(t, 99, draftLocator, 0.9),
-		))
-
-		if _, err := adminDB.Exec(`ALTER TABLE reading_progress RENAME TO reading_progress_unavailable`); err != nil {
-			t.Fatalf("make progress storage unavailable: %v", err)
-		}
-		restored := false
-		defer func() {
-			if !restored {
-				_, _ = adminDB.Exec(`ALTER TABLE reading_progress_unavailable RENAME TO reading_progress`)
-			}
-		}()
-		failureResponse := serveReaderRequest(t, handler, cookie, http.MethodPut, "/api/v1/progress/"+readerSlug, currentSecondBody)
-		if failureResponse.Code != http.StatusInternalServerError || strings.Contains(failureResponse.Body.String(), `"ok":true`) {
-			t.Fatalf("database failure returned false success: %d %s", failureResponse.Code, failureResponse.Body.String())
-		}
-		if strings.Contains(strings.ToLower(failureResponse.Body.String()), "relation") {
-			t.Fatal("database detail leaked in progress failure")
-		}
-		if _, err := adminDB.Exec(`ALTER TABLE reading_progress_unavailable RENAME TO reading_progress`); err != nil {
-			t.Fatalf("restore progress storage: %v", err)
-		}
-		restored = true
-	})
 }
 
 func newReaderIntegrationStore(t *testing.T, databaseURL string) *Store {
@@ -2114,20 +1943,6 @@ func assertHTTPProgressNotFound(t *testing.T, response *httptest.ResponseRecorde
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || body.Error.Code != "not_found" {
 		t.Fatalf("progress not-found body = %s", response.Body.String())
 	}
-}
-
-func serveReaderRequest(t *testing.T, handler http.Handler, cookie *http.Cookie, method, path, body string) *httptest.ResponseRecorder {
-	t.Helper()
-	request := httptest.NewRequest(method, path, strings.NewReader(body))
-	if body != "" {
-		request.Header.Set("Content-Type", "application/json")
-	}
-	if cookie != nil {
-		request.AddCookie(cookie)
-	}
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-	return response
 }
 
 func progressBody(t *testing.T, version int, locator readercontract.Locator, percent float64) string {

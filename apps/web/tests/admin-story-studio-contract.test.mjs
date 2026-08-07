@@ -384,7 +384,7 @@ test('detail, source, publish, and unpublish wrappers use fixed credentialed rou
       '/api/v1/admin/stories/contract-story/unpublish',
     ],
   )
-  assert.ok(requests.every(({ init }) => init.credentials === 'include'))
+  assert.ok(requests.every(({ init }) => init.credentials === 'omit'))
   assert.deepEqual(JSON.parse(String(requests[2].init.body)), {
     versionId: versionOne,
   })

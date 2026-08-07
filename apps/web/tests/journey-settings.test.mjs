@@ -188,8 +188,8 @@ test('settings requests use the fixed credentialed endpoint and validate both su
   assert.deepEqual(
     requests.map(({ url, init }) => [url, init.method ?? 'GET', init.credentials]),
     [
-      ['/api/v1/settings', 'GET', 'include'],
-      ['/api/v1/settings', 'PUT', 'include'],
+      ['/api/v1/settings', 'GET', 'omit'],
+      ['/api/v1/settings', 'PUT', 'omit'],
     ],
   )
 

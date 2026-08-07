@@ -191,11 +191,11 @@ defineExpose({ focusSearch })
             class="header-button header-button--ink"
             type="button"
             :disabled="locking"
-            aria-label="Lock Panda Pages"
+            aria-label="Sign out of Panda Pages"
             @click="emit('lock')"
           >
             <span aria-hidden="true">▣</span>
-            {{ locking ? 'Locking…' : 'Lock' }}
+            {{ locking ? 'Signing out…' : 'Sign out' }}
           </button>
         </div>
       </div>

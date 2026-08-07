@@ -19,7 +19,7 @@ function jsonResponse(body) {
   })
 }
 
-test('admin list uses the fixed same-origin path and browser credentials', async (t) => {
+test('admin list carries the selected bearer/account context', async (t) => {
   const originalFetch = globalThis.fetch
   t.after(() => {
     globalThis.fetch = originalFetch
@@ -35,10 +35,11 @@ test('admin list uses the fixed same-origin path and browser credentials', async
   assert.doesNotMatch(source, /VITE_ADMIN_KEY|X-PP-Admin-Key/)
   assert.deepEqual(await api.adminListStories(), { items: [] })
   assert.equal(request.url, '/api/v1/admin/stories')
-  assert.equal(request.init.credentials, 'include')
+  assert.equal(request.init.credentials, 'omit')
 
   const headers = new Headers(request.init.headers)
-  assert.equal(headers.has('Authorization'), false)
+  assert.equal(headers.get('Authorization'), 'Bearer test-access-token')
+  assert.equal(headers.get('X-PP-Account-ID'), '11111111-1111-4111-8111-111111111111')
   assert.equal(headers.has('X-PP-Admin-Key'), false)
 })
 
@@ -74,7 +75,7 @@ test('UTF-8 imported text is sent unchanged to the fixed draft path', async (t) 
 
   assert.equal(request.url, '/api/v1/admin/stories/draft')
   assert.equal(request.init.method, 'POST')
-  assert.equal(request.init.credentials, 'include')
+  assert.equal(request.init.credentials, 'omit')
   assert.deepEqual(JSON.parse(String(request.init.body)), {
     slug: 'cafe-panda',
     title: 'Café Panda 🐼',
@@ -101,7 +102,7 @@ test('Compose keeps browser credentials out and proxy credentials server-side', 
     /pandapages-api-admin\.middlewares=pandapages-admin-ips@docker,pandapages-admin-key@docker/
   )
   assert.ok(productionCompose.includes(requiredAllowlist))
-  assert.match(productionCompose, /PP_COOKIE_SECURE: "true"/)
+  assert.doesNotMatch(productionCompose, /PP_COOKIE_SECURE|PP_PASSCODE|PP_SESSION_SECRET/)
   assert.doesNotMatch(productionCompose, /VITE_ADMIN_KEY/)
 
   assert.match(
@@ -141,6 +142,6 @@ test('PWA caches static assets only and protected routes are split', async () =>
     './views/admin/StoryStudioEditor.vue',
     './views/admin/AdminAI.vue',
   ]) {
-    assert.ok(routerSource.includes(`import('${modulePath}')`))
+    assert.match(routerSource, new RegExp(`import\\(["']${modulePath.replaceAll('.', '\\.')}["']\\)`))
   }
 })

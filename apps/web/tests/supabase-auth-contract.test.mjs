@@ -26,14 +26,14 @@ test('bearer client is limited to the new auth family and omits cookies', () => 
   assert.doesNotMatch(source, /pp_session|pp_unlocked|pp_aid/)
 })
 
-test('identity routes remain separate from legacy unlock guards', () => {
+test('identity routes and protected routes use explicit account context', () => {
   for (const path of ['/account/login', '/auth/callback', '/account']) {
-    assert.match(router, new RegExp(`path: '${path.replace('/', '\\/')}'`))
+    assert.match(router, new RegExp(`path: ["']${path.replace('/', '\\/')}["']`))
   }
-  const identityRouteSlice = router.slice(router.indexOf("path: '/account/login'"), router.indexOf("path: '/unlock'"))
-  assert.doesNotMatch(identityRouteSlice, /requiresUnlock/)
-  assert.match(router, /path: '\/library'.*requiresUnlock/)
-  assert.match(router, /path: '\/journey'.*requiresUnlock/)
+  assert.doesNotMatch(router, /unlock|auth\/status|auth\/logout|requiresUnlock/)
+  assert.match(router, /path: ["']\/library["'][\s\S]*requiresAccount/)
+  assert.match(router, /path: ["']\/journey["'][\s\S]*requiresAccount/)
+  assert.match(router, /currentAccountContext\(\)/)
 })
 
 test('CSP and browser configuration share one exact project origin', () => {
