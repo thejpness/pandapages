@@ -1502,7 +1502,6 @@ done
   printf 'Fixture API did not become healthy\n' >&2
   exit 1
 }
-fi
 printf 'ok 14 - the signed-session coherent Reader endpoint returns six UTF-8 segments without internal content\n'
 
 docker rm --force "$api_container" >/dev/null
