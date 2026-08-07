@@ -395,6 +395,7 @@ function navigateFromLibrary(path: string) {
       @update:sort="setSort"
       @clear="clearSearch"
       @surprise="goSurprise"
+      @profiles="navigateFromLibrary('/profiles')"
       @journey="navigateFromLibrary('/journey')"
       @admin="navigateFromLibrary('/admin/stories')"
       @lock="lockLibrary"

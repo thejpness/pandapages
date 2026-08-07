@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"pandapages/api/internal/httpbearer"
 	"pandapages/api/internal/model"
@@ -32,16 +34,20 @@ type Store interface {
 
 	ContinueRecent(accountID string, limit int) ([]model.ContinueItem, error)
 	Profiles(accountID string) ([]model.ReaderProfile, error)
+	CreateProfile(accountID, name string) (model.ReaderProfile, error)
+	UpdateProfile(accountID, profileID, name string) (model.ReaderProfile, error)
+	DeleteProfile(accountID, profileID string) error
 
 	SettingsGet(accountID string) (model.SettingsPayload, error)
 	SettingsPut(accountID string, payload model.SettingsUpsert) (model.SettingsPayload, error)
 }
 
 const (
-	maxJSONBodyBytes   = 1 << 20 // 1MB
-	defaultContinueLim = 3
-	maxContinueLim     = 10
-	readinessTimeout   = 2 * time.Second
+	maxJSONBodyBytes    = 1 << 20 // 1MB
+	defaultContinueLim  = 3
+	maxContinueLim      = 10
+	readinessTimeout    = 2 * time.Second
+	maxProfileNameRunes = 80
 )
 
 func New(cfg Config, store Store) http.Handler {
@@ -260,21 +266,83 @@ func New(cfg Config, store Store) http.Handler {
 		writeJSON(w, http.StatusOK, map[string]any{"items": items})
 	}))
 
-	// Profiles are discovered only within an already-authorized explicit
-	// account. A reader profile is never inferred or provisioned here.
+	// Profiles are managed only within an already-authorized explicit account.
+	// A reader profile is never inferred or provisioned outside an explicit
+	// create request.
 	mux.HandleFunc("/api/v1/profiles", withBearerAccount(func(w http.ResponseWriter, r *http.Request, accountID string) {
-		if r.Method != http.MethodGet {
-			methodNotAllowed(w, []string{http.MethodGet})
+		switch r.Method {
+		case http.MethodGet:
+			profiles, err := store.Profiles(accountID)
+			if err != nil {
+				writeErr(w, http.StatusServiceUnavailable, "profile_unavailable", "profiles are temporarily unavailable")
+				return
+			}
+			noStore(w)
+			writeJSON(w, http.StatusOK, map[string]any{"profiles": profiles})
+		case http.MethodPost:
+			name, ok := decodeProfileName(w, r)
+			if !ok {
+				return
+			}
+			profile, err := store.CreateProfile(accountID, name)
+			if errors.Is(err, model.ErrProfileNameConflict) {
+				writeErr(w, http.StatusBadRequest, "invalid_profile_name", "a profile with that name already exists")
+				return
+			}
+			if err != nil {
+				writeErr(w, http.StatusServiceUnavailable, "profile_unavailable", "profiles are temporarily unavailable")
+				return
+			}
+			noStore(w)
+			writeJSON(w, http.StatusCreated, profile)
+		default:
+			methodNotAllowed(w, []string{http.MethodGet, http.MethodPost})
+		}
+	}))
+
+	mux.HandleFunc("/api/v1/profiles/", withBearerAccount(func(w http.ResponseWriter, r *http.Request, accountID string) {
+		profileID, ok := profileIDFromPath(r.URL.Path)
+		if !ok {
+			writeErr(w, http.StatusBadRequest, "invalid_profile", "profile id is invalid")
 			return
 		}
 
-		profiles, err := store.Profiles(accountID)
-		if err != nil {
-			writeErr(w, http.StatusInternalServerError, "db", "profiles query failed")
-			return
+		switch r.Method {
+		case http.MethodPatch:
+			name, ok := decodeProfileName(w, r)
+			if !ok {
+				return
+			}
+			profile, err := store.UpdateProfile(accountID, profileID, name)
+			if errors.Is(err, sql.ErrNoRows) {
+				writeErr(w, http.StatusForbidden, "profile_forbidden", "profile is not available in this account")
+				return
+			}
+			if errors.Is(err, model.ErrProfileNameConflict) {
+				writeErr(w, http.StatusBadRequest, "invalid_profile_name", "a profile with that name already exists")
+				return
+			}
+			if err != nil {
+				writeErr(w, http.StatusServiceUnavailable, "profile_unavailable", "profiles are temporarily unavailable")
+				return
+			}
+			noStore(w)
+			writeJSON(w, http.StatusOK, profile)
+		case http.MethodDelete:
+			err := store.DeleteProfile(accountID, profileID)
+			if errors.Is(err, sql.ErrNoRows) {
+				writeErr(w, http.StatusForbidden, "profile_forbidden", "profile is not available in this account")
+				return
+			}
+			if err != nil {
+				writeErr(w, http.StatusServiceUnavailable, "profile_unavailable", "profiles are temporarily unavailable")
+				return
+			}
+			noStore(w)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			methodNotAllowed(w, []string{http.MethodPatch, http.MethodDelete})
 		}
-		noStore(w)
-		writeJSON(w, http.StatusOK, map[string]any{"profiles": profiles})
 	}))
 
 	// Settings / Journey
@@ -357,6 +425,34 @@ func writeDecodeError(w http.ResponseWriter, err error) {
 		return
 	}
 	writeErr(w, http.StatusBadRequest, "bad_json", err.Error())
+}
+
+func decodeProfileName(w http.ResponseWriter, r *http.Request) (string, bool) {
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		writeDecodeError(w, err)
+		return "", false
+	}
+	name := strings.TrimSpace(body.Name)
+	if name == "" || utf8.RuneCountInString(name) > maxProfileNameRunes {
+		writeErr(w, http.StatusBadRequest, "invalid_profile_name", "profile name must be between 1 and 80 characters")
+		return "", false
+	}
+	if strings.IndexFunc(name, unicode.IsControl) >= 0 {
+		writeErr(w, http.StatusBadRequest, "invalid_profile_name", "profile name contains unsupported characters")
+		return "", false
+	}
+	return name, true
+}
+
+func profileIDFromPath(path string) (string, bool) {
+	raw := strings.TrimPrefix(path, "/api/v1/profiles/")
+	if raw == "" || strings.Contains(raw, "/") {
+		return "", false
+	}
+	return httpbearer.CanonicalUUID(raw)
 }
 
 func writeErr(w http.ResponseWriter, status int, code string, msg string) {

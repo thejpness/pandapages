@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"pandapages/api/internal/appidentity"
+	"pandapages/api/internal/model"
 )
 
 const (
@@ -148,6 +149,44 @@ func TestIdentityStoreIntegration(t *testing.T) {
 	}
 	if exists, err := stores[0].ProfileExists(legacyAccount, profileOne); err != nil || exists {
 		t.Fatalf("cross-account profile lookup = %t, %v", exists, err)
+	}
+
+	createdProfile, err := stores[0].CreateProfile(wantAccount, "Milo")
+	if err != nil || createdProfile.ID == "" || createdProfile.Name != "Milo" {
+		t.Fatalf("create account-scoped profile = %#v, %v", createdProfile, err)
+	}
+	renamedProfile, err := stores[0].UpdateProfile(wantAccount, profileOne, "Mira")
+	if err != nil || renamedProfile.ID != profileOne || renamedProfile.Name != "Mira" {
+		t.Fatalf("rename account-scoped profile = %#v, %v", renamedProfile, err)
+	}
+	if _, err := stores[0].UpdateProfile(wantAccount, profileOne, "Ada"); !errors.Is(err, model.ErrProfileNameConflict) {
+		t.Fatalf("duplicate profile name error = %v", err)
+	}
+	if _, err := stores[0].UpdateProfile(legacyAccount, profileOne, "Elsewhere"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("cross-account profile update error = %v", err)
+	}
+	if err := stores[0].DeleteProfile(legacyAccount, profileOne); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("cross-account profile delete error = %v", err)
+	}
+	for _, id := range []string{profileOne, profileTwo, createdProfile.ID} {
+		if err := stores[0].DeleteProfile(wantAccount, id); err != nil {
+			t.Fatalf("delete account-scoped profile %s: %v", id, err)
+		}
+	}
+	profilesForAccount, err = stores[0].Profiles(wantAccount)
+	if err != nil || len(profilesForAccount) != 0 {
+		t.Fatalf("final profile deletion/list = %#v, %v", profilesForAccount, err)
+	}
+	var remainingAccounts, remainingMemberships int
+	if err := admin.QueryRow(`
+		SELECT
+		  (SELECT count(*) FROM accounts WHERE id = $1),
+		  (SELECT count(*) FROM account_memberships WHERE principal_id = $2 AND account_id = $1)
+	`, wantAccount, wantPrincipal).Scan(&remainingAccounts, &remainingMemberships); err != nil {
+		t.Fatal(err)
+	}
+	if remainingAccounts != 1 || remainingMemberships != 1 {
+		t.Fatalf("profile delete removed unrelated account data: accounts/memberships = %d/%d", remainingAccounts, remainingMemberships)
 	}
 
 	t.Run("database constraints fail closed", func(t *testing.T) {

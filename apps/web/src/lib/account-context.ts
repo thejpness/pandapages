@@ -5,6 +5,7 @@ import {
   type AuthenticatedIdentity,
   type IdentityMembership,
 } from "./supabase-auth";
+import { clearSelectedReaderProfile } from "./reader-profile-selection";
 
 const selectedAccountStorageKey = "pandapages.selected-account-id";
 export type AccountContext = Readonly<{
@@ -24,10 +25,12 @@ function selectedAccountID(): string | null {
   return value && value.trim() === value ? value : null;
 }
 export function selectAccount(accountID: string): void {
+  if (selectedAccountID() !== accountID) clearSelectedReaderProfile();
   window.localStorage.setItem(selectedAccountStorageKey, accountID);
 }
 export function clearSelectedAccount(): void {
   window.localStorage.removeItem(selectedAccountStorageKey);
+  clearSelectedReaderProfile();
 }
 export async function currentAccountContext(): Promise<AccountContext> {
   let session;
@@ -59,5 +62,12 @@ export async function currentAccountContext(): Promise<AccountContext> {
       ? identity.memberships[0]
       : undefined;
   if (!membership) throw new AccountContextError("account_selection_required");
+  // An explicit account change goes through selectAccount and clears the
+  // reader choice immediately. With a sole membership there may be no stored
+  // account ID at all; keep the profile preference until the server profile
+  // list reconciles it for that account.
+  if (saved !== null && saved !== membership.accountId) {
+    clearSelectedReaderProfile();
+  }
   return { accessToken: session.access_token, identity, membership };
 }

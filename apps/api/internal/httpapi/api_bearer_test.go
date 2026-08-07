@@ -19,48 +19,63 @@ const alternateAccountID = "22222222-2222-4222-8222-222222222222"
 const testBearer = "header.payload.signature"
 
 type authTestStore struct {
-	readinessErr        error
-	readinessCheck      func(context.Context) error
-	readinessCalls      int
-	identityErr         error
-	memberships         []appidentity.Membership
-	libraryCalls        int
-	libraryAccount      string
-	libraryResponse     model.LibraryReadModel
-	libraryErr          error
-	readerCalls         int
-	readerAccount       string
-	readerSlug          string
-	readerResponse      model.ReaderStory
-	readerErr           error
-	progressGetCalls    int
-	progressAccount     string
-	progressGetState    model.ProgressResponse
-	progressGetErr      error
-	progressPutCalls    int
-	progressSlug        string
-	progressVersion     int
-	progressLocator     readercontract.Locator
-	progressPercent     float64
-	progressPutErr      error
-	continueCalls       int
-	continueAccount     string
-	continueLimit       int
-	continueItems       []model.ContinueItem
-	continueErr         error
-	profilesCalls       int
-	profilesAccount     string
-	profiles            []model.ReaderProfile
-	profilesErr         error
-	settingsGetCalls    int
-	settingsGetAccount  string
-	settingsGet         model.SettingsPayload
-	settingsGetErr      error
-	settingsPutCalls    int
-	settingsPutAccount  string
-	settingsPutPayload  model.SettingsUpsert
-	settingsPutResponse model.SettingsPayload
-	settingsPutErr      error
+	readinessErr         error
+	readinessCheck       func(context.Context) error
+	readinessCalls       int
+	identityErr          error
+	memberships          []appidentity.Membership
+	libraryCalls         int
+	libraryAccount       string
+	libraryResponse      model.LibraryReadModel
+	libraryErr           error
+	readerCalls          int
+	readerAccount        string
+	readerSlug           string
+	readerResponse       model.ReaderStory
+	readerErr            error
+	progressGetCalls     int
+	progressAccount      string
+	progressGetState     model.ProgressResponse
+	progressGetErr       error
+	progressPutCalls     int
+	progressSlug         string
+	progressVersion      int
+	progressLocator      readercontract.Locator
+	progressPercent      float64
+	progressPutErr       error
+	continueCalls        int
+	continueAccount      string
+	continueLimit        int
+	continueItems        []model.ContinueItem
+	continueErr          error
+	profilesCalls        int
+	profilesAccount      string
+	profiles             []model.ReaderProfile
+	profilesErr          error
+	profileCreateCalls   int
+	profileCreateAccount string
+	profileCreateName    string
+	profileCreate        model.ReaderProfile
+	profileCreateErr     error
+	profileUpdateCalls   int
+	profileUpdateAccount string
+	profileUpdateID      string
+	profileUpdateName    string
+	profileUpdate        model.ReaderProfile
+	profileUpdateErr     error
+	profileDeleteCalls   int
+	profileDeleteAccount string
+	profileDeleteID      string
+	profileDeleteErr     error
+	settingsGetCalls     int
+	settingsGetAccount   string
+	settingsGet          model.SettingsPayload
+	settingsGetErr       error
+	settingsPutCalls     int
+	settingsPutAccount   string
+	settingsPutPayload   model.SettingsUpsert
+	settingsPutResponse  model.SettingsPayload
+	settingsPutErr       error
 }
 
 func (s *authTestStore) Identity(context.Context, appidentity.ExternalIdentity) (appidentity.Snapshot, error) {
@@ -122,6 +137,25 @@ func (s *authTestStore) Profiles(accountID string) ([]model.ReaderProfile, error
 	}
 	return s.profiles, s.profilesErr
 }
+func (s *authTestStore) CreateProfile(accountID, name string) (model.ReaderProfile, error) {
+	s.profileCreateCalls++
+	s.profileCreateAccount = accountID
+	s.profileCreateName = name
+	return s.profileCreate, s.profileCreateErr
+}
+func (s *authTestStore) UpdateProfile(accountID, profileID, name string) (model.ReaderProfile, error) {
+	s.profileUpdateCalls++
+	s.profileUpdateAccount = accountID
+	s.profileUpdateID = profileID
+	s.profileUpdateName = name
+	return s.profileUpdate, s.profileUpdateErr
+}
+func (s *authTestStore) DeleteProfile(accountID, profileID string) error {
+	s.profileDeleteCalls++
+	s.profileDeleteAccount = accountID
+	s.profileDeleteID = profileID
+	return s.profileDeleteErr
+}
 func (s *authTestStore) SettingsGet(accountID string) (model.SettingsPayload, error) {
 	s.settingsGetCalls++
 	s.settingsGetAccount = accountID
@@ -159,7 +193,7 @@ func bearerRequest(method, path string) *http.Request {
 
 func TestProtectedRoutesRequireBearerAccountContext(t *testing.T) {
 	tests := []struct{ name, method, path, body string }{
-		{"library", http.MethodGet, "/api/v1/library", ""}, {"reader", http.MethodGet, "/api/v1/reader/story", ""}, {"progress get", http.MethodGet, "/api/v1/progress/story", ""}, {"progress put", http.MethodPut, "/api/v1/progress/story", `{"version":1,"locator":{"schema":2,"segment":{"key":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","occurrence":1,"ordinal":1,"offset":0},"chapter":null},"percent":0}`}, {"continue", http.MethodGet, "/api/v1/continue", ""}, {"profiles", http.MethodGet, "/api/v1/profiles", ""}, {"settings get", http.MethodGet, "/api/v1/settings", ""}, {"settings put", http.MethodPut, "/api/v1/settings", `{}`},
+		{"library", http.MethodGet, "/api/v1/library", ""}, {"reader", http.MethodGet, "/api/v1/reader/story", ""}, {"progress get", http.MethodGet, "/api/v1/progress/story", ""}, {"progress put", http.MethodPut, "/api/v1/progress/story", `{"version":1,"locator":{"schema":2,"segment":{"key":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","occurrence":1,"ordinal":1,"offset":0},"chapter":null},"percent":0}`}, {"continue", http.MethodGet, "/api/v1/continue", ""}, {"profiles list", http.MethodGet, "/api/v1/profiles", ""}, {"profiles create", http.MethodPost, "/api/v1/profiles", `{"name":"Ted"}`}, {"profiles update", http.MethodPatch, "/api/v1/profiles/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", `{"name":"Ted"}`}, {"profiles delete", http.MethodDelete, "/api/v1/profiles/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", ""}, {"settings get", http.MethodGet, "/api/v1/settings", ""}, {"settings put", http.MethodPut, "/api/v1/settings", `{}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

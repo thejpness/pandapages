@@ -22,6 +22,7 @@ const emit = defineEmits<{
   'update:sort': [value: LibrarySort]
   clear: []
   surprise: []
+  profiles: []
   journey: []
   admin: []
   lock: []
@@ -58,9 +59,10 @@ function focusSearch() {
   searchInput.value?.focus()
 }
 
-function chooseParentAction(action: 'journey' | 'admin') {
+function chooseParentAction(action: 'profiles' | 'journey' | 'admin') {
   parentMenuOpen.value = false
-  if (action === 'journey') emit('journey')
+  if (action === 'profiles') emit('profiles')
+  else if (action === 'journey') emit('journey')
   else emit('admin')
 }
 
@@ -165,6 +167,14 @@ defineExpose({ focusSearch })
                 >
                   <button
                     ref="parentFirstAction"
+                    class="parent-menu__item"
+                    type="button"
+                    @click="chooseParentAction('profiles')"
+                  >
+                    <span aria-hidden="true">◉</span>
+                    Who’s reading?
+                  </button>
+                  <button
                     class="parent-menu__item"
                     type="button"
                     @click="chooseParentAction('journey')"

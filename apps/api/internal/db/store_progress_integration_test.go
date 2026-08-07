@@ -281,18 +281,14 @@ func TestProgressStoreIntegration(t *testing.T) {
 		assertProgressState(t, gotA, 1, locatorA, 0.91)
 		assertProgressState(t, gotB, 1, locatorB, 0.4)
 
-		var profileA string
-		if err := adminDB.QueryRow(`SELECT id FROM profiles WHERE account_id = $1 AND name = 'Default'`, accountA).Scan(&profileA); err != nil {
-			t.Fatalf("read account A default profile: %v", err)
-		}
 		if _, err := adminDB.Exec(`
 			INSERT INTO reading_progress (
-				account_id, profile_id, story_id, story_version_id, locator, percent
+				account_id, story_id, story_version_id, locator, percent
 			)
-			SELECT $1, $2, $3, $4, locator, percent
+			SELECT $1, $2, $3, locator, percent
 			FROM reading_progress
-			WHERE account_id = $1 AND story_id = $5
-		`, accountA, profileA, storyB, versionB, storyA); err == nil {
+			WHERE account_id = $1 AND story_id = $4
+		`, accountA, storyB, versionB, storyA); err == nil {
 			t.Fatal("direct cross-account progress insert succeeded")
 		}
 		if _, err := adminDB.Exec(`

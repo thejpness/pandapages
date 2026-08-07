@@ -2,9 +2,12 @@ import {
   parseSafeRenderedStoryHTML,
   type SafeRenderedStoryHTML,
 } from "./reader-locator-v2";
-import { currentAccountContext } from "./account-context";
-import { clearSelectedAccount } from './account-context'
-import { signOutSupabaseSession } from './supabase-auth'
+import {
+  clearSelectedAccount,
+  currentAccountContext,
+  type AccountContext,
+} from "./account-context";
+import { signOutSupabaseSession } from "./supabase-auth";
 import {
   isReaderContentKey,
   parseReaderLocatorV2,
@@ -104,11 +107,23 @@ function buildUrl(path: string): string {
   return `${BASE}${p}`;
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const account = await currentAccountContext();
+type RequestContext = Readonly<{
+  account?: AccountContext;
+  profileID?: string;
+}>;
+
+async function request<T>(
+  path: string,
+  init: RequestInit = {},
+  context: RequestContext = {},
+): Promise<T> {
+  const account = context.account ?? (await currentAccountContext());
   const headers = buildHeaders(init);
   headers.set("Authorization", `Bearer ${account.accessToken}`);
   headers.set("X-PP-Account-ID", account.membership.accountId);
+  if (context.profileID !== undefined) {
+    headers.set("X-PP-Profile-ID", context.profileID);
+  }
   const res = await fetch(buildUrl(path), {
     credentials: "omit",
     ...init,
@@ -149,6 +164,89 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 export async function logout(): Promise<void> {
   await signOutSupabaseSession()
   clearSelectedAccount()
+}
+
+/* ------------------------ Reader profiles ----------------------- */
+
+export type ReaderProfile = Readonly<{
+  id: string;
+  name: string;
+}>;
+
+const canonicalUUIDPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+function parseReaderProfile(value: unknown): ReaderProfile {
+  if (!isRecord(value)) throw new Error("Invalid reader profile response");
+  const id = value.id;
+  const name = value.name;
+  if (
+    typeof id !== "string" ||
+    !canonicalUUIDPattern.test(id) ||
+    typeof name !== "string" ||
+    name.length === 0 ||
+    name.length > 80 ||
+    name.trim() !== name
+  ) {
+    throw new Error("Invalid reader profile response");
+  }
+  return Object.freeze({ id, name });
+}
+
+function parseReaderProfiles(value: unknown): readonly ReaderProfile[] {
+  if (!isRecord(value) || !Array.isArray(value.profiles)) {
+    throw new Error("Invalid reader profile response");
+  }
+  return Object.freeze(value.profiles.map(parseReaderProfile));
+}
+
+function profilePayload(name: string): string {
+  return JSON.stringify({ name });
+}
+
+export async function listReaderProfiles(
+  account?: AccountContext,
+): Promise<readonly ReaderProfile[]> {
+  return parseReaderProfiles(
+    await request<unknown>("/api/v1/profiles", {}, { account }),
+  );
+}
+
+export async function createReaderProfile(name: string): Promise<ReaderProfile> {
+  return parseReaderProfile(
+    await request<unknown>("/api/v1/profiles", {
+      method: "POST",
+      body: profilePayload(name),
+    }),
+  );
+}
+
+export async function renameReaderProfile(
+  profileID: string,
+  name: string,
+): Promise<ReaderProfile> {
+  return parseReaderProfile(
+    await request<unknown>(`/api/v1/profiles/${encodeURIComponent(profileID)}`, {
+      method: "PATCH",
+      body: profilePayload(name),
+    }),
+  );
+}
+
+export async function deleteReaderProfile(profileID: string): Promise<void> {
+  await request<unknown>(`/api/v1/profiles/${encodeURIComponent(profileID)}`, {
+    method: "DELETE",
+  });
+}
+
+// profileScopedRequest deliberately requires a profile ID at the call site.
+// Account-scoped APIs above never send this header.
+export async function profileScopedRequest<T>(
+  path: string,
+  profileID: string,
+  init: RequestInit = {},
+): Promise<T> {
+  return request<T>(path, init, { profileID });
 }
 
 /* ---------------------------- Library --------------------------- */
