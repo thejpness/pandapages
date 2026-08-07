@@ -185,7 +185,7 @@ run_goose() {
   fi
 }
 
-printf '1..12\n'
+printf '1..13\n'
 
 "$role_script" audit \
   --container "$source_container" \
@@ -204,7 +204,7 @@ ALTER ROLE $application_role PASSWORD '$application_password';
 CREATE ROLE $legacy_role LOGIN SUPERUSER PASSWORD '$legacy_password';
 SQL
 
-run_goose goose-up up
+run_goose goose-up up-to 16
 grep -q 'OK.*00015_account_ownership_integrity.sql' \
   "$test_root/goose-up.out" "$test_root/goose-up.err"
 grep -q 'OK.*00016_identity_foundation.sql' \
@@ -376,7 +376,27 @@ expect_denied 'migration create database' "$migration_role" "$database" 'CREATE 
 expect_denied 'migration create role' "$migration_role" "$database" 'CREATE ROLE migration_forbidden;'
 printf 'ok 11 - trusted pgcrypto and DDL need no migration-role superuser capability\n'
 
+run_goose goose-account-scope-up up
+account_scope_shape=$(psql_as "$migration_role" --tuples-only --no-align \
+  --command="SELECT (SELECT max(version_id) FROM goose_db_version WHERE is_applied) || '|' || (to_regclass('public.account_settings') IS NOT NULL)::int || '|' || (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='reading_progress' AND column_name='profile_id');")
+[[ "$account_scope_shape" == '17|1|0' ]]
+if docker run --rm \
+  --network "$source_network" \
+  --read-only \
+  --security-opt no-new-privileges \
+  --tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m \
+  --env GOOSE_DRIVER=postgres \
+  --env "GOOSE_DBSTRING=postgres://$migration_role:$migration_password@$source_container:5432/$database?sslmode=disable" \
+  --env GOOSE_MIGRATION_DIR=/migrations \
+  --mount "type=bind,src=$repo_root/apps/api/migrations,dst=/migrations,readonly" \
+  "$migration_image" down-to 16 \
+  >"$test_root/goose-account-scope-down.out" 2>"$test_root/goose-account-scope-down.err"; then
+  printf 'Goose unexpectedly accepted an account-scoped rollback\n' >&2
+  exit 1
+fi
+grep -Fq 'account-scoped progress/settings migration is irreversible' "$test_root/goose-account-scope-down.err"
+printf 'ok 12 - account-scoped migration applies under the owner role and rejects an untruthful rollback\n'
 after_resources="$test_root/after-resources"
 docker ps -aq --filter label=com.pandapages.disposable=role-integration | sort >"$after_resources"
 [[ $(wc -l <"$after_resources") -eq 1 ]]
-printf 'ok 12 - generated test uses only isolated disposable resources\n'
+printf 'ok 13 - generated test uses only isolated disposable resources\n'

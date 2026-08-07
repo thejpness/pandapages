@@ -68,6 +68,8 @@ COMMIT;
 -- +goose Down
 -- This conversion intentionally discards profile scope. A truthful rollback
 -- cannot recreate profile ownership without inventing profile data.
+-- +goose StatementBegin
 DO $$ BEGIN
   RAISE EXCEPTION 'account-scoped progress/settings migration is irreversible';
 END $$;
+-- +goose StatementEnd
