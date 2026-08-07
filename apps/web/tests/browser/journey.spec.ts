@@ -202,6 +202,15 @@ class JourneyApiMock {
       return
     }
 
+    if (request.method() === 'GET' && pathname === '/api/v1/profiles') {
+      await fulfillJson(route, {
+        profiles: [
+          { id: '123e4567-e89b-42d3-a456-426614174300', name: 'Mina' },
+        ],
+      })
+      return
+    }
+
     if (request.method() === 'GET' && pathname === '/api/v1/continue') {
       await fulfillJson(route, { items: [] })
       return

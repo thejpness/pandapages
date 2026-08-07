@@ -20,6 +20,9 @@ var (
 	// ErrAdminStoryNotFound intentionally covers missing, cross-account, and
 	// cross-story admin targets so ownership boundaries are not disclosed.
 	ErrAdminStoryNotFound = errors.New("admin story resource was not found")
+	// ErrProfileNameConflict is returned when the account-local unique profile
+	// name constraint rejects a create or rename request.
+	ErrProfileNameConflict = errors.New("reader profile name already exists")
 )
 
 type StoryItem struct {

@@ -1,4 +1,10 @@
-import { expect, fixtureAccessToken, fixtureAccountID, test as base } from './auth'
+import {
+  expect,
+  fixtureAccessToken,
+  fixtureAccountID,
+  fixtureProfileID,
+  test as base,
+} from './auth'
 import type { Page, Request, Route } from '@playwright/test'
 
 export const READER_SLUG = 'test-only-moonlit-cafe'
@@ -540,6 +546,12 @@ export class ReaderApiMock {
     if (request.method() === 'GET' && url.pathname === '/api/v1/library') {
       await this.respond(route, captured, undefined, {
         items: this.libraryReadModelItems(),
+      })
+      return
+    }
+    if (request.method() === 'GET' && url.pathname === '/api/v1/profiles') {
+      await this.respond(route, captured, undefined, {
+        profiles: [{ id: fixtureProfileID, name: 'Mina' }],
       })
       return
     }

@@ -74,7 +74,7 @@ func TestProfilesEndpointAllowsAdultMembershipAndEmptyProfiles(t *testing.T) {
 func TestProfilesEndpointRejectsMethodsAfterAuthorization(t *testing.T) {
 	store := &authTestStore{}
 	rec := httptest.NewRecorder()
-	testHandler(t, store).ServeHTTP(rec, bearerRequest(http.MethodPost, "/api/v1/profiles"))
+	testHandler(t, store).ServeHTTP(rec, bearerRequest(http.MethodPut, "/api/v1/profiles"))
 	if rec.Code != http.StatusMethodNotAllowed || store.profilesCalls != 0 {
 		t.Fatalf("status/calls = %d/%d: %s", rec.Code, store.profilesCalls, rec.Body.String())
 	}

@@ -4,6 +4,10 @@ import {
   AccountContextError,
   currentAccountContext,
 } from "./lib/account-context";
+import {
+  ProfileContextError,
+  currentReaderProfileContext,
+} from "./lib/profile-context";
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -29,17 +33,22 @@ export const router = createRouter({
       path: "/account",
       component: () => import("./views/SupabaseIdentity.vue"),
     },
+    {
+      path: "/profiles",
+      component: () => import("./views/Profiles.vue"),
+      meta: { requiresAccount: true },
+    },
 
     {
       path: "/library",
       component: () => import("./views/Library.vue"),
-      meta: { requiresAccount: true },
+      meta: { requiresAccount: true, requiresProfile: true },
     },
     {
       path: "/read/:slug",
       component: () => import("./views/Reader.vue"),
       props: true,
-      meta: { requiresAccount: true },
+      meta: { requiresAccount: true, requiresProfile: true },
     },
     {
       path: "/journey",
@@ -84,13 +93,29 @@ router.beforeEach(async (to) => {
   if (!to.matched.some((route) => route.meta.requiresAccount)) return true;
   try {
     await currentAccountContext();
-    return true;
   } catch (error) {
     if (
       error instanceof AccountContextError &&
       error.kind === "account_selection_required"
     )
       return "/account";
+    return { path: "/account/login", query: { next: to.fullPath } };
+  }
+
+  if (!to.matched.some((route) => route.meta.requiresProfile)) return true;
+  try {
+    await currentReaderProfileContext();
+    return true;
+  } catch (error) {
+    if (error instanceof ProfileContextError) {
+      return {
+        path: "/profiles",
+        query: {
+          next: to.fullPath,
+          ...(error.kind === "unavailable" ? { unavailable: "1" } : {}),
+        },
+      };
+    }
     return { path: "/account/login", query: { next: to.fullPath } };
   }
 });

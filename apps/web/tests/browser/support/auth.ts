@@ -3,8 +3,10 @@ import { expect, test as base, type Page, type Route } from '@playwright/test'
 export const fixtureAccessToken = 'browser-fixture-access-token'
 export const fixtureAccountID = '123e4567-e89b-12d3-a456-426614174200'
 export const fixturePrincipalID = '123e4567-e89b-12d3-a456-426614174100'
+export const fixtureProfileID = '123e4567-e89b-42d3-a456-426614174300'
 
 type Role = 'owner' | 'adult'
+export type BrowserProfile = { id: string; name: string }
 
 export type BrowserAuth = {
   accountID: string
@@ -12,6 +14,7 @@ export type BrowserAuth = {
   setRole: (role: Role) => void
   setMemberships: (memberships: Array<{ accountId: string; accountName: string; role: Role }>) => void
   requireOnboarding: () => void
+  setProfiles: (profiles: BrowserProfile[]) => void
   assertApplicationRequest: (route: Route) => void
 }
 
@@ -51,6 +54,7 @@ export const test = base.extend<{ auth: BrowserAuth }>({
   auth: [async ({ page }, use) => {
     let memberships = [{ accountId: fixtureAccountID, accountName: 'My Panda Pages', role: 'owner' as Role }]
     let onboardingRequired = false
+    let profiles: BrowserProfile[] = [{ id: fixtureProfileID, name: 'Mina' }]
     await installOfficialSession(page)
     await page.route('**/api/auth/**', async (route) => {
       const request = route.request()
@@ -64,12 +68,28 @@ export const test = base.extend<{ auth: BrowserAuth }>({
       if (url.pathname === '/api/auth/onboard') onboardingRequired = false
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ authenticated: true, principal: { id: fixturePrincipalID, displayName: 'Panda Pages Adult' }, memberships }) })
     })
+    await page.route('**/api/v1/profiles**', async (route) => {
+      const request = route.request()
+      const url = new URL(request.url())
+      const headers = request.headers()
+      expect(headers.authorization).toBe('Bearer ' + fixtureAccessToken)
+      expect(headers['x-pp-account-id']).toBe(fixtureAccountID)
+      expect(headers['x-pp-profile-id']).toBeFalsy()
+      expect(headers.cookie).toBeFalsy()
+
+      if (request.method() === 'GET' && url.pathname === '/api/v1/profiles') {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ profiles }) })
+        return
+      }
+      await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: { code: 'not_found' } }) })
+    })
     await use({
       accountID: fixtureAccountID,
       accessToken: fixtureAccessToken,
       setRole: (role) => { memberships = [{ ...memberships[0], role }] },
       setMemberships: (value) => { memberships = value },
       requireOnboarding: () => { onboardingRequired = true },
+      setProfiles: (value) => { profiles = value },
       assertApplicationRequest: (route) => {
         const headers = route.request().headers()
         expect(headers.authorization).toBe(`Bearer ${fixtureAccessToken}`)

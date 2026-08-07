@@ -311,6 +311,20 @@ class LibraryApiMock {
 
     if (
       request.method() === 'GET' &&
+      url.pathname === '/api/v1/profiles'
+    ) {
+      await fulfillJson(route, {
+        body: {
+          profiles: [
+            { id: '123e4567-e89b-42d3-a456-426614174300', name: 'Mina' },
+          ],
+        },
+      })
+      return
+    }
+
+    if (
+      request.method() === 'GET' &&
       url.pathname === '/api/v1/continue'
     ) {
       await fulfillJson(route, { body: { items: [] } })
@@ -1529,23 +1543,29 @@ test.describe('Library 2 bookshelf', () => {
     const menu = page.getByRole('dialog', { name: 'Parent options' })
     await expect(menu).toBeVisible()
     await expectParentMenuPresented(page)
+    await expect(menu.getByRole('button', { name: 'Who’s reading?' })).toBeVisible()
     await expect(
       menu.getByRole('button', { name: 'Reading profile' }),
     ).toBeVisible()
     await expect(menu.getByRole('button', { name: 'Admin' })).toBeVisible()
-    await expect(menu.getByRole('button')).toHaveCount(2)
+    await expect(menu.getByRole('button')).toHaveCount(3)
     await expect(page.locator('.surprise-button')).toBeVisible()
 
+    const readers = menu.getByRole('button', { name: 'Who’s reading?' })
     const profile = menu.getByRole('button', { name: 'Reading profile' })
     const admin = menu.getByRole('button', { name: 'Admin' })
     const lock = page.getByRole('button', { name: 'Sign out of Panda Pages' })
 
+    await page.keyboard.press('Tab')
+    await expect(readers).toBeFocused()
     await page.keyboard.press('Tab')
     await expect(profile).toBeFocused()
     await page.keyboard.press('Tab')
     await expect(admin).toBeFocused()
     await page.keyboard.press('Shift+Tab')
     await expect(profile).toBeFocused()
+    await page.keyboard.press('Shift+Tab')
+    await expect(readers).toBeFocused()
     await page.keyboard.press('Shift+Tab')
     await expect(menu).toBeHidden()
     await expect(trigger).toBeFocused()
@@ -1565,6 +1585,7 @@ test.describe('Library 2 bookshelf', () => {
     await expect(trigger).toBeFocused()
 
     await trigger.click()
+    await page.keyboard.press('Tab')
     await page.keyboard.press('Tab')
     await page.keyboard.press('Tab')
     await page.keyboard.press('Tab')
