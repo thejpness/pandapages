@@ -44,6 +44,7 @@ docker image inspect "$migration_image" >/dev/null 2>&1 || {
 
 container_created=false
 network_created=false
+rollback_test_root=''
 cleanup() {
   set +e
   if $container_created; then
@@ -51,6 +52,9 @@ cleanup() {
   fi
   if $network_created; then
     docker network rm "$network_name" >/dev/null 2>&1
+  fi
+  if [[ -n "$rollback_test_root" ]]; then
+    rm -rf -- "$rollback_test_root"
   fi
 }
 trap cleanup EXIT HUP INT TERM
@@ -290,7 +294,67 @@ assert_query '0|1|0' "
     (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'story_segments' AND column_name = 'locator');
 " 'Reader 2 Down and Up rerun'
 
-run_goose up >/dev/null
+# Migration 00017 keeps account-scoped rows, but their reader ownership is
+# unknowable. Seed one valid account-scoped-beta predecessor through the real
+# chain, then prove migration 00018 discards only that ambiguous progress.
+psql_query "
+  INSERT INTO reading_progress (profile_id, story_id, story_version_id, locator, percent)
+  SELECT
+    profile.id,
+    story.id,
+    version.id,
+    jsonb_build_object(
+      'schema', 2,
+      'segment', jsonb_build_object(
+        'key', '5e92e2acdcf286b6d82be228f32aa1743e3a2912d4b5ee6d268a2d460d104942',
+        'occurrence', 1, 'ordinal', 5, 'offset', 0.35
+      ),
+      'chapter', jsonb_build_object(
+        'key', '85ec640a768ec54ad57c68d8e9e561a278f426c8f3c7ca7c71cafc9acb489787',
+        'occurrence', 1
+      )
+    ),
+    0.5
+  FROM stories AS story
+  JOIN story_versions AS version ON version.story_id = story.id AND version.version = 1
+  JOIN LATERAL (
+    SELECT id FROM profiles WHERE account_id = story.account_id ORDER BY id LIMIT 1
+  ) AS profile ON true
+  WHERE story.slug = 'reader-2-migration-vector';
+" >/dev/null
+run_goose up-to 17 >/dev/null
+assert_query '1|0|1' "
+  SELECT
+    (SELECT count(*) FROM reading_progress),
+    (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='reading_progress' AND column_name='profile_id'),
+    (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='reading_progress' AND column_name='account_id');
+" 'account-scoped predecessor progress'
+pre_profile_scope_roots=$(psql_query "
+  SELECT
+    (SELECT count(*) FROM accounts) || '|' ||
+    (SELECT count(*) FROM profiles) || '|' ||
+    (SELECT count(*) FROM stories) || '|' ||
+    (SELECT count(*) FROM account_settings);
+")
+run_goose up-to 18 >/dev/null
+assert_query "${pre_profile_scope_roots}|0|1|1" "
+  SELECT
+    (SELECT count(*) FROM accounts) || '|' ||
+    (SELECT count(*) FROM profiles) || '|' ||
+    (SELECT count(*) FROM stories) || '|' ||
+    (SELECT count(*) FROM account_settings) || '|' ||
+    (SELECT count(*) FROM reading_progress) || '|' ||
+    (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='reading_progress' AND column_name='profile_id' AND is_nullable='NO') || '|' ||
+    (SELECT count(*) FROM pg_constraint WHERE conname='reading_progress_profile_account_fkey' AND convalidated);
+" 'profile-scoped progress reset preserves account roots and settings'
+rollback_test_root=$(mktemp -d "${TMPDIR:-/tmp}/pandapages-reader-progress.XXXXXX")
+if run_goose down-to 17 >"$rollback_test_root/down.out" 2>"$rollback_test_root/down.err"; then
+  printf 'Goose unexpectedly accepted profile-scoped progress rollback\n' >&2
+  exit 1
+fi
+grep -Fq 'profile-scoped reading progress migration is irreversible' "$rollback_test_root/down.err"
+rm -rf -- "$rollback_test_root"
+rollback_test_root=''
 
 published_address=$(docker port "$container_name" 5432/tcp)
 published_port=${published_address##*:}

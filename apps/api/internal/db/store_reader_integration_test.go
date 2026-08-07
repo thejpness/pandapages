@@ -26,6 +26,8 @@ const (
 	readerAccountA            = "a2140000-0000-4000-8000-000000000001"
 	readerAccountB            = "b2140000-0000-4000-8000-000000000001"
 	readerAccountC            = "c2140000-0000-4000-8000-000000000001"
+	readerProfileA            = "a2140000-0000-4000-8000-000000000011"
+	readerProfileC            = "c2140000-0000-4000-8000-000000000011"
 	readerSlug                = "reader-store-story"
 )
 
@@ -59,6 +61,13 @@ func TestReaderStoreIntegration(t *testing.T) {
 		ON CONFLICT (id) DO NOTHING
 	`, readerAccountA, readerAccountB, readerAccountC); err != nil {
 		t.Fatalf("insert Reader accounts: %v", err)
+	}
+	if _, err := adminDB.Exec(`
+		INSERT INTO profiles (id, account_id, name) VALUES
+			($1, $2, 'Reader A'), ($3, $4, 'Reader C')
+		ON CONFLICT (id) DO NOTHING
+	`, readerProfileA, readerAccountA, readerProfileC, readerAccountC); err != nil {
+		t.Fatalf("insert Reader profiles: %v", err)
 	}
 
 	store := newReaderIntegrationStore(t, databaseURL)
@@ -268,7 +277,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 			t.Fatalf("read unpublish fixture before unpublish: %v", err)
 		}
 		locator := locatorForReaderSegment(publishedReader.Segments[0], 0.4)
-		if err := store.ProgressPut(readerAccountA, unpublishSlug, publishedReader.Version, locator, 0.4); err != nil {
+		if err := store.ProgressPut(readerAccountA, readerProfileA, unpublishSlug, publishedReader.Version, locator, 0.4); err != nil {
 			t.Fatalf("store progress before unpublish: %v", err)
 		}
 		var progressBefore int
@@ -1653,17 +1662,17 @@ func TestReaderStoreIntegration(t *testing.T) {
 	draftLocator := locatorForStoredReaderSegment(t, adminDB, secondDraft.StoryVersionID, 2, 0.6)
 
 	t.Run("progress validates the exact selected version identity", func(t *testing.T) {
-		empty, err := store.ProgressGet(readerAccountA, readerSlug)
+		empty, err := store.ProgressGet(readerAccountA, readerProfileA, readerSlug)
 		if err != nil {
 			t.Fatalf("ProgressGet empty: %v", err)
 		}
 		if empty.Progress != nil {
 			t.Fatalf("empty progress = %#v", empty.Progress)
 		}
-		if err := store.ProgressPut(readerAccountA, readerSlug, story.Version, locator, 0.42); err != nil {
+		if err := store.ProgressPut(readerAccountA, readerProfileA, readerSlug, story.Version, locator, 0.42); err != nil {
 			t.Fatalf("ProgressPut valid: %v", err)
 		}
-		got, err := store.ProgressGet(readerAccountA, readerSlug)
+		got, err := store.ProgressGet(readerAccountA, readerProfileA, readerSlug)
 		if err != nil {
 			t.Fatalf("ProgressGet saved: %v", err)
 		}
@@ -1678,23 +1687,23 @@ func TestReaderStoreIntegration(t *testing.T) {
 		mismatches[2].Segment.Ordinal++
 		mismatches[3].Chapter = nil
 		for index, mismatch := range mismatches {
-			if err := store.ProgressPut(readerAccountA, readerSlug, story.Version, mismatch, 0.9); !errors.Is(err, readercontract.ErrLocatorMismatch) {
+			if err := store.ProgressPut(readerAccountA, readerProfileA, readerSlug, story.Version, mismatch, 0.9); !errors.Is(err, readercontract.ErrLocatorMismatch) {
 				t.Fatalf("mismatch %d error = %v", index, err)
 			}
 		}
-		if err := store.ProgressPut(readerAccountA, readerSlug, 99, locator, 0.2); !errors.Is(err, sql.ErrNoRows) {
+		if err := store.ProgressPut(readerAccountA, readerProfileA, readerSlug, 99, locator, 0.2); !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("wrong version error = %v, want sql.ErrNoRows", err)
 		}
-		if err := store.ProgressPut(readerAccountC, readerSlug, story.Version, locator, 0.2); !errors.Is(err, sql.ErrNoRows) {
+		if err := store.ProgressPut(readerAccountC, readerProfileC, readerSlug, story.Version, locator, 0.2); !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("cross-account error = %v, want sql.ErrNoRows", err)
 		}
 	})
 
 	t.Run("draft and previously published versions cannot replace current progress", func(t *testing.T) {
-		if err := store.ProgressPut(readerAccountA, readerSlug, secondDraft.Version, draftLocator, 0.81); !errors.Is(err, sql.ErrNoRows) {
+		if err := store.ProgressPut(readerAccountA, readerProfileA, readerSlug, secondDraft.Version, draftLocator, 0.81); !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("draft version ProgressPut error = %v, want sql.ErrNoRows", err)
 		}
-		got, err := store.ProgressGet(readerAccountA, readerSlug)
+		got, err := store.ProgressGet(readerAccountA, readerProfileA, readerSlug)
 		if err != nil {
 			t.Fatalf("ProgressGet after draft rejection: %v", err)
 		}
@@ -1703,19 +1712,19 @@ func TestReaderStoreIntegration(t *testing.T) {
 		if err := store.AdminPublish(readerAccountA, readerSlug, secondDraft.StoryVersionID); err != nil {
 			t.Fatalf("publish second Reader version: %v", err)
 		}
-		if err := store.ProgressPut(readerAccountA, readerSlug, firstDraft.Version, locator, 0.82); !errors.Is(err, sql.ErrNoRows) {
+		if err := store.ProgressPut(readerAccountA, readerProfileA, readerSlug, firstDraft.Version, locator, 0.82); !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("previous version ProgressPut error = %v, want sql.ErrNoRows", err)
 		}
-		got, err = store.ProgressGet(readerAccountA, readerSlug)
+		got, err = store.ProgressGet(readerAccountA, readerProfileA, readerSlug)
 		if err != nil {
 			t.Fatalf("ProgressGet after previous-version rejection: %v", err)
 		}
 		assertProgressState(t, got, firstDraft.Version, locator, 0.42)
 
-		if err := store.ProgressPut(readerAccountA, readerSlug, secondDraft.Version, draftLocator, 0.83); err != nil {
+		if err := store.ProgressPut(readerAccountA, readerProfileA, readerSlug, secondDraft.Version, draftLocator, 0.83); err != nil {
 			t.Fatalf("current second-version ProgressPut: %v", err)
 		}
-		got, err = store.ProgressGet(readerAccountA, readerSlug)
+		got, err = store.ProgressGet(readerAccountA, readerProfileA, readerSlug)
 		if err != nil {
 			t.Fatalf("ProgressGet second version: %v", err)
 		}
@@ -1761,7 +1770,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 		lockingStore := newReaderIntegrationStoreWithApplicationName(t, databaseURL, progressApplicationName)
 		progressResult := make(chan error, 1)
 		go func() {
-			progressResult <- lockingStore.ProgressPut(readerAccountA, readerSlug, firstDraft.Version, locator, 0.91)
+			progressResult <- lockingStore.ProgressPut(readerAccountA, readerProfileA, readerSlug, firstDraft.Version, locator, 0.91)
 		}()
 
 		lockDeadline := time.Now().Add(5 * time.Second)

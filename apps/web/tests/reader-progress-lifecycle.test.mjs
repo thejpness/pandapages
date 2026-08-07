@@ -83,6 +83,7 @@ async function readerProgressHarness(t) {
     navigations: 0,
     current: position(1, 0, 0),
     writes: [],
+    selectedProfileID: '123e4567-e89b-42d3-a456-426614174300',
   }
   globalThis[harnessKey] = state
 
@@ -98,15 +99,19 @@ async function readerProgressHarness(t) {
   const apiURL = moduleURL(`
     const state = globalThis[${JSON.stringify(harnessKey)}]
     export const getAPIErrorStatus = (error) => error?.status ?? null
-    export const getProgress = async () => ({ progress: state.baseline })
+    export const getProgress = async (_slug, profileID) => {
+      state.profileLoads = [...(state.profileLoads ?? []), profileID]
+      return { progress: state.baseline }
+    }
     export const saveProgress = async (
       slug,
+      profileID,
       version,
       locator,
       percent,
       options,
     ) => {
-      state.writes.push({ slug, version, locator, percent, options })
+      state.writes.push({ slug, profileID, version, locator, percent, options })
     }
   `)
   const mappingURL = moduleURL(`
@@ -214,12 +219,16 @@ async function readerProgressHarness(t) {
       state.navigations += 1
     },
     onNavigationError() {},
+    selectedProfileID() {
+      return state.selectedProfileID
+    },
   })
 
   progress.prepare('test-story')
   progress.begin('test-story', 1, [])
   await settle()
   assert.equal(progress.baselineState.value.status, 'ready')
+	assert.deepEqual(state.profileLoads, ['123e4567-e89b-42d3-a456-426614174300'])
   state.captures = 0
 
   t.after(() => {
@@ -231,6 +240,19 @@ async function readerProgressHarness(t) {
 
   return { progress, state, timers }
 }
+
+test('changing selected profile reloads the progress baseline', async (t) => {
+  const { progress, state } = await readerProgressHarness(t)
+
+  state.selectedProfileID = '123e4567-e89b-42d3-a456-426614174301'
+  progress.begin('test-story', 1, [])
+  await settle()
+
+  assert.deepEqual(state.profileLoads, [
+    '123e4567-e89b-42d3-a456-426614174300',
+    '123e4567-e89b-42d3-a456-426614174301',
+  ])
+})
 
 for (const lifecycle of [
   'pagehide',

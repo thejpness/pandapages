@@ -10,12 +10,14 @@ import (
 
 	"pandapages/api/internal/appidentity"
 	"pandapages/api/internal/httpbearer"
+	"pandapages/api/internal/httpprofile"
 	"pandapages/api/internal/model"
 	"pandapages/api/internal/readercontract"
 )
 
 const testAccountID = "11111111-1111-4111-8111-111111111111"
 const alternateAccountID = "22222222-2222-4222-8222-222222222222"
+const testProfileID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 const testBearer = "header.payload.signature"
 
 type authTestStore struct {
@@ -35,6 +37,7 @@ type authTestStore struct {
 	readerErr            error
 	progressGetCalls     int
 	progressAccount      string
+	progressProfile      string
 	progressGetState     model.ProgressResponse
 	progressGetErr       error
 	progressPutCalls     int
@@ -45,6 +48,7 @@ type authTestStore struct {
 	progressPutErr       error
 	continueCalls        int
 	continueAccount      string
+	continueProfile      string
 	continueLimit        int
 	continueItems        []model.ContinueItem
 	continueErr          error
@@ -52,6 +56,11 @@ type authTestStore struct {
 	profilesAccount      string
 	profiles             []model.ReaderProfile
 	profilesErr          error
+	profileExistsCalls   int
+	profileExistsAccount string
+	profileExistsID      string
+	profileForbidden     bool
+	profileExistsErr     error
 	profileCreateCalls   int
 	profileCreateAccount string
 	profileCreateName    string
@@ -109,25 +118,34 @@ func (s *authTestStore) ReaderStory(accountID, slug string) (model.ReaderStory, 
 	s.readerSlug = slug
 	return s.readerResponse, s.readerErr
 }
-func (s *authTestStore) ProgressGet(accountID, _ string) (model.ProgressResponse, error) {
+func (s *authTestStore) ProgressGet(accountID, profileID, _ string) (model.ProgressResponse, error) {
 	s.progressGetCalls++
 	s.progressAccount = accountID
+	s.progressProfile = profileID
 	return s.progressGetState, s.progressGetErr
 }
-func (s *authTestStore) ProgressPut(accountID, slug string, version int, locator readercontract.Locator, percent float64) error {
+func (s *authTestStore) ProgressPut(accountID, profileID, slug string, version int, locator readercontract.Locator, percent float64) error {
 	s.progressPutCalls++
 	s.progressAccount = accountID
+	s.progressProfile = profileID
 	s.progressSlug = slug
 	s.progressVersion = version
 	s.progressLocator = locator
 	s.progressPercent = percent
 	return s.progressPutErr
 }
-func (s *authTestStore) ContinueRecent(accountID string, limit int) ([]model.ContinueItem, error) {
+func (s *authTestStore) ContinueRecent(accountID, profileID string, limit int) ([]model.ContinueItem, error) {
 	s.continueCalls++
 	s.continueAccount = accountID
+	s.continueProfile = profileID
 	s.continueLimit = limit
 	return s.continueItems, s.continueErr
+}
+func (s *authTestStore) ProfileExists(accountID, profileID string) (bool, error) {
+	s.profileExistsCalls++
+	s.profileExistsAccount = accountID
+	s.profileExistsID = profileID
+	return !s.profileForbidden, s.profileExistsErr
 }
 func (s *authTestStore) Profiles(accountID string) ([]model.ReaderProfile, error) {
 	s.profilesCalls++
@@ -182,12 +200,21 @@ func (v bearerVerifier) Verify(_ context.Context, token string) (appidentity.Ext
 
 func testHandler(t *testing.T, store *authTestStore) http.Handler {
 	t.Helper()
-	return New(Config{BearerAuthenticator: httpbearer.New(bearerVerifier{}, store)}, store)
+	return New(Config{
+		BearerAuthenticator: httpbearer.New(bearerVerifier{}, store),
+		ProfileResolver:     httpprofile.New(store),
+	}, store)
 }
 func bearerRequest(method, path string) *http.Request {
 	request := httptest.NewRequest(method, path, nil)
 	request.Header.Set("Authorization", "Bearer "+testBearer)
 	request.Header.Set("X-PP-Account-ID", testAccountID)
+	return request
+}
+
+func profileBearerRequest(method, path string) *http.Request {
+	request := bearerRequest(method, path)
+	request.Header.Set("X-PP-Profile-ID", testProfileID)
 	return request
 }
 
@@ -253,6 +280,79 @@ func TestProtectedRoutesRejectNonMemberAccount(t *testing.T) {
 	testHandler(t, store).ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"account_forbidden"`) || store.libraryCalls != 0 {
 		t.Fatalf("status/calls/body = %d/%d/%s", rec.Code, store.libraryCalls, rec.Body.String())
+	}
+}
+
+func TestProfileScopedRoutesRequireValidatedProfileContext(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		method      string
+		path        string
+		profile     string
+		forbidden   bool
+		wantStatus  int
+		wantCode    string
+		wantLookups int
+	}{
+		{name: "missing profile", method: http.MethodGet, path: "/api/v1/progress/story", wantStatus: http.StatusBadRequest, wantCode: "profile_required"},
+		{name: "invalid profile", method: http.MethodGet, path: "/api/v1/progress/story", profile: "not-a-uuid", wantStatus: http.StatusBadRequest, wantCode: "invalid_profile"},
+		{name: "cross account or missing profile", method: http.MethodGet, path: "/api/v1/progress/story", profile: testProfileID, forbidden: true, wantStatus: http.StatusForbidden, wantCode: "profile_forbidden", wantLookups: 1},
+		{name: "continue missing profile", method: http.MethodGet, path: "/api/v1/continue", wantStatus: http.StatusBadRequest, wantCode: "profile_required"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := &authTestStore{profileForbidden: test.forbidden}
+			request := bearerRequest(test.method, test.path)
+			if test.profile != "" {
+				request.Header.Set("X-PP-Profile-ID", test.profile)
+			}
+			response := httptest.NewRecorder()
+			testHandler(t, store).ServeHTTP(response, request)
+			if response.Code != test.wantStatus || !strings.Contains(response.Body.String(), `"`+test.wantCode+`"`) {
+				t.Fatalf("status/body = %d/%s", response.Code, response.Body.String())
+			}
+			if store.profileExistsCalls != test.wantLookups || store.progressGetCalls != 0 || store.continueCalls != 0 {
+				t.Fatalf("profile/store calls = %d/%d/%d", store.profileExistsCalls, store.progressGetCalls, store.continueCalls)
+			}
+			if response.Header().Get("Cache-Control") != "no-store" {
+				t.Fatalf("Cache-Control = %q", response.Header().Get("Cache-Control"))
+			}
+		})
+	}
+}
+
+func TestProfileScopedRoutesPassAccountAndProfileUnchangedToStore(t *testing.T) {
+	store := &authTestStore{memberships: []appidentity.Membership{{AccountID: alternateAccountID, Role: appidentity.RoleAdult}}}
+	request := bearerRequest(http.MethodGet, "/api/v1/progress/story")
+	request.Header.Set("X-PP-Account-ID", alternateAccountID)
+	request.Header.Set("X-PP-Profile-ID", strings.ToUpper(testProfileID))
+	response := httptest.NewRecorder()
+	testHandler(t, store).ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", response.Code, response.Body.String())
+	}
+	if store.profileExistsAccount != alternateAccountID || store.profileExistsID != testProfileID ||
+		store.progressAccount != alternateAccountID || store.progressProfile != testProfileID {
+		t.Fatalf("profile lookup/store context = %q/%q %q/%q", store.profileExistsAccount, store.profileExistsID, store.progressAccount, store.progressProfile)
+	}
+
+	request = bearerRequest(http.MethodGet, "/api/v1/continue")
+	request.Header.Set("X-PP-Account-ID", alternateAccountID)
+	request.Header.Set("X-PP-Profile-ID", testProfileID)
+	response = httptest.NewRecorder()
+	testHandler(t, store).ServeHTTP(response, request)
+	if response.Code != http.StatusOK || store.continueAccount != alternateAccountID || store.continueProfile != testProfileID {
+		t.Fatalf("continue status/context = %d %q/%q", response.Code, store.continueAccount, store.continueProfile)
+	}
+}
+
+func TestAccountMembershipDenialPrecedesProfileLookup(t *testing.T) {
+	store := &authTestStore{}
+	request := profileBearerRequest(http.MethodGet, "/api/v1/progress/story")
+	request.Header.Set("X-PP-Account-ID", alternateAccountID)
+	response := httptest.NewRecorder()
+	testHandler(t, store).ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), `"account_forbidden"`) || store.profileExistsCalls != 0 {
+		t.Fatalf("status/body/lookups = %d/%s/%d", response.Code, response.Body.String(), store.profileExistsCalls)
 	}
 }
 

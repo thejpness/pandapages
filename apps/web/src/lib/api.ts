@@ -1286,22 +1286,28 @@ export function parseProgressResponse(value: unknown): ProgressResponse {
   };
 }
 
-export async function getProgress(slug: string): Promise<ProgressResponse> {
-  const data = await request<unknown>(
+export async function getProgress(
+  slug: string,
+  profileID: string,
+): Promise<ProgressResponse> {
+  const data = await profileScopedRequest<unknown>(
     `/api/v1/progress/${encodeURIComponent(slug)}`,
+    profileID,
   );
   return parseProgressResponse(data);
 }
 
 export async function saveProgress(
   slug: string,
+  profileID: string,
   version: number,
   locator: ReaderLocatorV2,
   percent: number,
   options: { keepalive?: boolean } = {},
 ): Promise<void> {
-  const result = await request<unknown>(
+  const result = await profileScopedRequest<unknown>(
     `/api/v1/progress/${encodeURIComponent(slug)}`,
+    profileID,
     {
       method: "PUT",
       body: JSON.stringify({ version, locator, percent }),
@@ -1322,10 +1328,12 @@ export type ContinueItem = {
 };
 
 export async function getContinue(
+  profileID: string,
   limit = 3,
 ): Promise<{ items: ContinueItem[] }> {
-  const data = await request<{ items?: ContinueItem[] }>(
+  const data = await profileScopedRequest<{ items?: ContinueItem[] }>(
     `/api/v1/continue?limit=${limit}`,
+    profileID,
   );
   return { items: Array.isArray(data.items) ? data.items : [] };
 }

@@ -20,6 +20,7 @@ import (
 	"pandapages/api/internal/httpbearer"
 	"pandapages/api/internal/httpidentity"
 	"pandapages/api/internal/httpmiddleware"
+	"pandapages/api/internal/httpprofile"
 	"pandapages/api/internal/supabaseauth"
 )
 
@@ -125,6 +126,7 @@ func run() error {
 
 	public := httpapi.New(httpapi.Config{
 		BearerAuthenticator: bearerAuthenticator,
+		ProfileResolver:     httpprofile.New(store),
 	}, store)
 	identity := httpidentity.New(bearerAuthenticator, store)
 

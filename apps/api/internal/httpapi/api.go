@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"pandapages/api/internal/httpbearer"
+	"pandapages/api/internal/httpprofile"
 	"pandapages/api/internal/model"
 	"pandapages/api/internal/readercontract"
 	"pandapages/api/internal/readiness"
@@ -21,6 +22,7 @@ import (
 
 type Config struct {
 	BearerAuthenticator *httpbearer.Authenticator
+	ProfileResolver     *httpprofile.Resolver
 }
 
 type Store interface {
@@ -29,10 +31,10 @@ type Store interface {
 	Library(accountID string) (model.LibraryReadModel, error)
 	ReaderStory(accountID, slug string) (model.ReaderStory, error)
 
-	ProgressGet(accountID, slug string) (model.ProgressResponse, error)
-	ProgressPut(accountID, slug string, version int, locator readercontract.Locator, percent float64) error
+	ProgressGet(accountID, profileID, slug string) (model.ProgressResponse, error)
+	ProgressPut(accountID, profileID, slug string, version int, locator readercontract.Locator, percent float64) error
 
-	ContinueRecent(accountID string, limit int) ([]model.ContinueItem, error)
+	ContinueRecent(accountID, profileID string, limit int) ([]model.ContinueItem, error)
 	Profiles(accountID string) ([]model.ReaderProfile, error)
 	CreateProfile(accountID, name string) (model.ReaderProfile, error)
 	UpdateProfile(accountID, profileID, name string) (model.ReaderProfile, error)
@@ -53,6 +55,9 @@ const (
 func New(cfg Config, store Store) http.Handler {
 	if cfg.BearerAuthenticator == nil {
 		panic("bearer account authenticator is required")
+	}
+	if cfg.ProfileResolver == nil {
+		panic("profile resolver is required")
 	}
 
 	mux := http.NewServeMux()
@@ -101,6 +106,22 @@ func New(cfg Config, store Store) http.Handler {
 				return
 			}
 			next(w, r, account.AccountID)
+		}
+	}
+
+	type profileHandler func(w http.ResponseWriter, r *http.Request, profile httpprofile.Context)
+
+	withBearerProfile := func(next profileHandler) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			account, ok := cfg.BearerAuthenticator.RequireAccount(w, r)
+			if !ok {
+				return
+			}
+			profile, ok := cfg.ProfileResolver.RequireProfile(w, r, account)
+			if !ok {
+				return
+			}
+			next(w, r, profile)
 		}
 	}
 
@@ -153,7 +174,7 @@ func New(cfg Config, store Store) http.Handler {
 	}))
 
 	// Progress
-	mux.HandleFunc("/api/v1/progress/", withBearerAccount(func(w http.ResponseWriter, r *http.Request, accountID string) {
+	mux.HandleFunc("/api/v1/progress/", withBearerProfile(func(w http.ResponseWriter, r *http.Request, profile httpprofile.Context) {
 		slug := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/progress/"), "/")
 		if slug == "" {
 			writeErr(w, http.StatusBadRequest, "slug", "missing slug")
@@ -162,7 +183,7 @@ func New(cfg Config, store Store) http.Handler {
 
 		switch r.Method {
 		case http.MethodGet:
-			st, err := store.ProgressGet(accountID, slug)
+			st, err := store.ProgressGet(profile.AccountID, profile.ProfileID, slug)
 			if errors.Is(err, sql.ErrNoRows) {
 				writeErr(w, http.StatusNotFound, "not_found", "story not found")
 				return
@@ -207,7 +228,7 @@ func New(cfg Config, store Store) http.Handler {
 				return
 			}
 
-			err := store.ProgressPut(accountID, slug, body.Version, *body.Locator, *body.Percent)
+			err := store.ProgressPut(profile.AccountID, profile.ProfileID, slug, body.Version, *body.Locator, *body.Percent)
 			if errors.Is(err, sql.ErrNoRows) {
 				writeErr(w, http.StatusNotFound, "not_found", "story/version not found")
 				return
@@ -232,7 +253,7 @@ func New(cfg Config, store Store) http.Handler {
 	}))
 
 	// Continue (top N recent)
-	mux.HandleFunc("/api/v1/continue", withBearerAccount(func(w http.ResponseWriter, r *http.Request, accountID string) {
+	mux.HandleFunc("/api/v1/continue", withBearerProfile(func(w http.ResponseWriter, r *http.Request, profile httpprofile.Context) {
 		if r.Method != http.MethodGet {
 			methodNotAllowed(w, []string{http.MethodGet})
 			return
@@ -251,7 +272,7 @@ func New(cfg Config, store Store) http.Handler {
 			limit = maxContinueLim
 		}
 
-		items, err := store.ContinueRecent(accountID, limit)
+		items, err := store.ContinueRecent(profile.AccountID, profile.ProfileID, limit)
 		if err != nil {
 			// For v1: treat "no rows" as empty list; anything else is 500.
 			if errors.Is(err, sql.ErrNoRows) {

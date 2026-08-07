@@ -3,6 +3,7 @@ import {
   fixtureAccessToken,
   fixtureAccountID,
   fixtureProfileID,
+  type BrowserProfile,
   test as base,
 } from './auth'
 import type { Page, Request, Route } from '@playwright/test'
@@ -54,6 +55,7 @@ export type CapturedRequest = {
   method: string
   pathname: string
   search: string
+  profileID: string | null
   body: unknown
 }
 
@@ -309,6 +311,7 @@ export class ReaderApiMock {
   readonly unhandledRequests: CapturedRequest[] = []
   readonly stories = new Map<string, ReaderStoryFixture>()
   readonly progress = new Map<string, ProgressFixture | null>()
+  profiles: BrowserProfile[] = [{ id: fixtureProfileID, name: 'Mina' }]
 
   authSignedIn = true
   libraryItems: ReaderLibraryItemFixture[] = []
@@ -316,6 +319,7 @@ export class ReaderApiMock {
   private readonly storyResponses = new Map<string, QueuedResponse[]>()
   private readonly progressGetResponses = new Map<string, QueuedResponse[]>()
   private readonly progressPutResponses = new Map<string, QueuedResponse[]>()
+  private readonly profileProgress = new Map<string, ProgressFixture | null>()
   private readonly page: Page
 
   constructor(page: Page) {
@@ -323,6 +327,7 @@ export class ReaderApiMock {
     const story = makeReaderStory()
     this.stories.set(story.slug, story)
     this.progress.set(story.slug, null)
+    this.profileProgress.set(this.progressKey(fixtureProfileID, story.slug), null)
     this.libraryItems = [
       { slug: story.slug, title: story.title, author: story.author },
     ]
@@ -337,10 +342,25 @@ export class ReaderApiMock {
   setStory(story: ReaderStoryFixture): void {
     this.stories.set(story.slug, story)
     if (!this.progress.has(story.slug)) this.progress.set(story.slug, null)
+    if (!this.profileProgress.has(this.progressKey(fixtureProfileID, story.slug))) {
+      this.profileProgress.set(this.progressKey(fixtureProfileID, story.slug), null)
+    }
   }
 
-  setProgress(slug: string, progress: ProgressFixture | null): void {
-    this.progress.set(slug, progress)
+  setProgress(
+    slug: string,
+    progress: ProgressFixture | null,
+    profileID = fixtureProfileID,
+  ): void {
+    this.profileProgress.set(this.progressKey(profileID, slug), progress)
+    if (profileID === fixtureProfileID) this.progress.set(slug, progress)
+  }
+
+  progressForProfile(
+    slug: string,
+    profileID: string,
+  ): ProgressFixture | null {
+    return this.profileProgress.get(this.progressKey(profileID, slug)) ?? null
   }
 
   enqueueStory(slug: string, response: MockResponse): void {
@@ -416,6 +436,10 @@ export class ReaderApiMock {
     return queues.get(slug)?.shift()
   }
 
+  private progressKey(profileID: string, slug: string): string {
+    return profileID + ':' + slug
+  }
+
   private async respond(
     route: Route,
     captured: CapturedRequest,
@@ -460,14 +484,26 @@ export class ReaderApiMock {
       method: request.method(),
       pathname: url.pathname,
       search: url.search,
+      profileID: request.headers()['x-pp-profile-id'] ?? null,
       body: bodyOf(request),
     }
     this.requests.push(captured)
 
-    if (url.pathname.startsWith('/api/v1/')) {
-      expect(request.headers().authorization).toBe(`Bearer ${fixtureAccessToken}`)
-      expect(request.headers()['x-pp-account-id']).toBe(fixtureAccountID)
-    }
+	if (url.pathname.startsWith('/api/v1/')) {
+		expect(request.headers().authorization).toBe(`Bearer ${fixtureAccessToken}`)
+		expect(request.headers()['x-pp-account-id']).toBe(fixtureAccountID)
+		expect(request.headers().cookie).toBeFalsy()
+	}
+	if (
+		url.pathname.startsWith('/api/v1/progress/') ||
+		url.pathname === '/api/v1/continue'
+	) {
+		const profileID = request.headers()['x-pp-profile-id']
+		expect(profileID).toBeTruthy()
+		expect(this.profiles.map((profile) => profile.id)).toContain(profileID)
+	} else {
+		expect(request.headers()['x-pp-profile-id']).toBeFalsy()
+	}
 
     if (
       url.pathname === '/api/v1/story' ||
@@ -505,12 +541,13 @@ export class ReaderApiMock {
     const progressPrefix = '/api/v1/progress/'
     if (url.pathname.startsWith(progressPrefix)) {
       const slug = safeDecode(url.pathname.slice(progressPrefix.length))
+      const profileID = request.headers()['x-pp-profile-id'] ?? ''
       if (request.method() === 'GET') {
         await this.respond(
           route,
           captured,
           this.take(this.progressGetResponses, slug),
-          { progress: this.progress.get(slug) ?? null },
+          { progress: this.progressForProfile(slug, profileID) },
         )
         return
       }
@@ -531,11 +568,11 @@ export class ReaderApiMock {
               typeof candidate.percent === 'number' &&
               candidate.locator !== undefined
             ) {
-              this.progress.set(slug, {
+              this.setProgress(slug, {
                 version: candidate.version,
                 locator: candidate.locator,
                 percent: candidate.percent,
-              })
+              }, profileID)
             }
           }
         }
@@ -551,7 +588,7 @@ export class ReaderApiMock {
     }
     if (request.method() === 'GET' && url.pathname === '/api/v1/profiles') {
       await this.respond(route, captured, undefined, {
-        profiles: [{ id: fixtureProfileID, name: 'Mina' }],
+        profiles: this.profiles,
       })
       return
     }

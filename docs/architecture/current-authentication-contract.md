@@ -42,6 +42,23 @@ selection, and clears it when it is stale or its account changes. It may choose
 the sole returned profile as a UI convenience; multiple profiles require a
 choice. The backend never selects or creates a Default profile.
 
+Account-scoped application data remains the library/catalogue, account
+settings, and reader-profile management. Reading progress and Continue/recent
+reading are profile-scoped: `GET` and `PUT /api/v1/progress/{slug}` and
+`GET /api/v1/continue` require all three request headers, including
+`X-PP-Profile-ID`. A profile switch changes only reader progress state; it
+does not change adult authorization or account settings. Catalogue responses
+do not infer a profile to embed progress.
+
+Migration 00018 makes `reading_progress` keyed by
+`(account_id, profile_id, story_id)` and enforces the profile/account tuple
+with a composite foreign key. Account-scoped beta progress from migration
+00017 has no truthful reader owner, so migration 00018 explicitly discards
+only those progress rows. It does not create or select a profile, and it does
+not alter accounts, profiles, stories, memberships, or settings. Its Down
+migration fails explicitly because multiple profile rows cannot truthfully be
+collapsed back to account scope.
+
 Admin routes require all of: a valid bearer, an explicit member account, an
 `owner` membership role, and the ingress-provided `X-PP-Admin-Key`.
 

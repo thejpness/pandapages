@@ -51,7 +51,7 @@ func TestProgressPutStrictlyValidatesLocatorV2BeforeStore(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			store := &authTestStore{}
-			request := bearerRequest(http.MethodPut, "/api/v1/progress/test-story")
+			request := profileBearerRequest(http.MethodPut, "/api/v1/progress/test-story")
 			request.Body = io.NopCloser(strings.NewReader(test.body))
 			request.ContentLength = int64(len(test.body))
 			request.Header.Set("Content-Type", "application/json")
@@ -96,7 +96,7 @@ func TestProgressPutResponseFollowsTypedStoreResult(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store := &authTestStore{progressPutErr: test.storeErr}
-			request := bearerRequest(http.MethodPut, "/api/v1/progress/test-story")
+			request := profileBearerRequest(http.MethodPut, "/api/v1/progress/test-story")
 			body := validProgressBody(0.5)
 			request.Body = io.NopCloser(strings.NewReader(body))
 			request.ContentLength = int64(len(body))
@@ -147,7 +147,7 @@ func TestProgressGetDistinguishesMissingStoryFromKnownEmptyProgress(t *testing.T
 		response := httptest.NewRecorder()
 		testHandler(t, store).ServeHTTP(
 			response,
-			bearerRequest(http.MethodGet, "/api/v1/progress/test-story"),
+			profileBearerRequest(http.MethodGet, "/api/v1/progress/test-story"),
 		)
 		if response.Code != http.StatusOK || strings.TrimSpace(response.Body.String()) != `{"progress":null}` {
 			t.Fatalf("response = %d %s", response.Code, response.Body.String())
@@ -162,7 +162,7 @@ func TestProgressGetDistinguishesMissingStoryFromKnownEmptyProgress(t *testing.T
 		response := httptest.NewRecorder()
 		testHandler(t, store).ServeHTTP(
 			response,
-			bearerRequest(http.MethodGet, "/api/v1/progress/missing"),
+			profileBearerRequest(http.MethodGet, "/api/v1/progress/missing"),
 		)
 		if response.Code != http.StatusNotFound {
 			t.Fatalf("status = %d, want 404; body = %s", response.Code, response.Body.String())
