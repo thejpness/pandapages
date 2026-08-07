@@ -85,3 +85,11 @@ type ContinueItem struct {
 	Percent   float64   `json:"percent"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }
+
+// ReaderProfile is the intentionally small, account-scoped profile selection
+// representation. Profile ownership is always checked against the selected
+// account by the caller's authorization boundary.
+type ReaderProfile struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}

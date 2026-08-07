@@ -168,14 +168,16 @@ func selectedAccount(headers []string) (string, accountState) {
 	if raw == "" || raw != strings.TrimSpace(raw) {
 		return "", accountMalformed
 	}
-	canonical, ok := canonicalUUID(raw)
+	canonical, ok := CanonicalUUID(raw)
 	if !ok {
 		return "", accountMalformed
 	}
 	return canonical, accountValid
 }
 
-func canonicalUUID(raw string) (string, bool) {
+// CanonicalUUID validates the UUID spelling used by explicit request context
+// headers and returns its lower-case canonical form.
+func CanonicalUUID(raw string) (string, bool) {
 	if len(raw) != 36 ||
 		raw[8] != '-' ||
 		raw[13] != '-' ||
@@ -215,7 +217,7 @@ func matchingMembership(snapshot appidentity.Snapshot, selectedAccountID string)
 	found := false
 
 	for _, membership := range snapshot.Memberships {
-		accountID, ok := canonicalUUID(membership.AccountID)
+		accountID, ok := CanonicalUUID(membership.AccountID)
 		if !ok || !appidentity.ValidRole(membership.Role) {
 			return appidentity.Membership{}, membershipInvalid
 		}

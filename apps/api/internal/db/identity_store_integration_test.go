@@ -117,12 +117,37 @@ func TestIdentityStoreIntegration(t *testing.T) {
 		t.Fatalf("principal/identity/membership/profile counts = %d/%d/%d/%d, want 1/1/1/0", principals, identities, memberships, profiles)
 	}
 
+	// Profiles remain an explicit, valid-empty reader context after onboarding.
+	// Insert fixture rows directly here to verify the account-scoped repository;
+	// EnsureIdentity itself must never provision a profile.
+	const profileOne = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	const profileTwo = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	if _, err := admin.Exec(`
+		INSERT INTO profiles (id, account_id, name)
+		VALUES ($1, $2, 'Zoe'), ($3, $2, 'Ada')
+	`, profileOne, wantAccount, profileTwo); err != nil {
+		t.Fatalf("insert explicit profile fixtures: %v", err)
+	}
+	profilesForAccount, err := stores[0].Profiles(wantAccount)
+	if err != nil {
+		t.Fatalf("list profiles: %v", err)
+	}
+	if len(profilesForAccount) != 2 || profilesForAccount[0].ID != profileTwo || profilesForAccount[0].Name != "Ada" || profilesForAccount[1].ID != profileOne || profilesForAccount[1].Name != "Zoe" {
+		t.Fatalf("account-scoped profiles = %#v", profilesForAccount)
+	}
+	if exists, err := stores[0].ProfileExists(wantAccount, profileOne); err != nil || !exists {
+		t.Fatalf("own profile lookup = %t, %v", exists, err)
+	}
+
 	var legacyAccount string
 	if err := admin.QueryRow(`SELECT id FROM accounts WHERE id <> $1 ORDER BY created_at, id LIMIT 1`, wantAccount).Scan(&legacyAccount); err != nil {
 		t.Fatalf("read pre-existing legacy account: %v", err)
 	}
 	if legacyAccount == wantAccount {
 		t.Fatal("onboarding reused the pre-existing account")
+	}
+	if exists, err := stores[0].ProfileExists(legacyAccount, profileOne); err != nil || exists {
+		t.Fatalf("cross-account profile lookup = %t, %v", exists, err)
 	}
 
 	t.Run("database constraints fail closed", func(t *testing.T) {
