@@ -48,6 +48,10 @@ type authTestStore struct {
 	continueLimit       int
 	continueItems       []model.ContinueItem
 	continueErr         error
+	profilesCalls       int
+	profilesAccount     string
+	profiles            []model.ReaderProfile
+	profilesErr         error
 	settingsGetCalls    int
 	settingsGetAccount  string
 	settingsGet         model.SettingsPayload
@@ -110,6 +114,14 @@ func (s *authTestStore) ContinueRecent(accountID string, limit int) ([]model.Con
 	s.continueLimit = limit
 	return s.continueItems, s.continueErr
 }
+func (s *authTestStore) Profiles(accountID string) ([]model.ReaderProfile, error) {
+	s.profilesCalls++
+	s.profilesAccount = accountID
+	if s.profiles == nil {
+		s.profiles = []model.ReaderProfile{}
+	}
+	return s.profiles, s.profilesErr
+}
 func (s *authTestStore) SettingsGet(accountID string) (model.SettingsPayload, error) {
 	s.settingsGetCalls++
 	s.settingsGetAccount = accountID
@@ -147,7 +159,7 @@ func bearerRequest(method, path string) *http.Request {
 
 func TestProtectedRoutesRequireBearerAccountContext(t *testing.T) {
 	tests := []struct{ name, method, path, body string }{
-		{"library", http.MethodGet, "/api/v1/library", ""}, {"reader", http.MethodGet, "/api/v1/reader/story", ""}, {"progress get", http.MethodGet, "/api/v1/progress/story", ""}, {"progress put", http.MethodPut, "/api/v1/progress/story", `{"version":1,"locator":{"schema":2,"segment":{"key":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","occurrence":1,"ordinal":1,"offset":0},"chapter":null},"percent":0}`}, {"continue", http.MethodGet, "/api/v1/continue", ""}, {"settings get", http.MethodGet, "/api/v1/settings", ""}, {"settings put", http.MethodPut, "/api/v1/settings", `{}`},
+		{"library", http.MethodGet, "/api/v1/library", ""}, {"reader", http.MethodGet, "/api/v1/reader/story", ""}, {"progress get", http.MethodGet, "/api/v1/progress/story", ""}, {"progress put", http.MethodPut, "/api/v1/progress/story", `{"version":1,"locator":{"schema":2,"segment":{"key":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","occurrence":1,"ordinal":1,"offset":0},"chapter":null},"percent":0}`}, {"continue", http.MethodGet, "/api/v1/continue", ""}, {"profiles", http.MethodGet, "/api/v1/profiles", ""}, {"settings get", http.MethodGet, "/api/v1/settings", ""}, {"settings put", http.MethodPut, "/api/v1/settings", `{}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

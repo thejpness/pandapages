@@ -31,6 +31,7 @@ type Store interface {
 	ProgressPut(accountID, slug string, version int, locator readercontract.Locator, percent float64) error
 
 	ContinueRecent(accountID string, limit int) ([]model.ContinueItem, error)
+	Profiles(accountID string) ([]model.ReaderProfile, error)
 
 	SettingsGet(accountID string) (model.SettingsPayload, error)
 	SettingsPut(accountID string, payload model.SettingsUpsert) (model.SettingsPayload, error)
@@ -257,6 +258,23 @@ func New(cfg Config, store Store) http.Handler {
 
 		noStore(w)
 		writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	}))
+
+	// Profiles are discovered only within an already-authorized explicit
+	// account. A reader profile is never inferred or provisioned here.
+	mux.HandleFunc("/api/v1/profiles", withBearerAccount(func(w http.ResponseWriter, r *http.Request, accountID string) {
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w, []string{http.MethodGet})
+			return
+		}
+
+		profiles, err := store.Profiles(accountID)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "db", "profiles query failed")
+			return
+		}
+		noStore(w)
+		writeJSON(w, http.StatusOK, map[string]any{"profiles": profiles})
 	}))
 
 	// Settings / Journey
