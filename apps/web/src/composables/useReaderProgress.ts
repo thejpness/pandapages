@@ -44,6 +44,7 @@ export type ReaderProgressDecision =
 
 export type UseReaderProgressOptions = {
   capture: () => ReaderCapturedPosition | null
+  selectedProfileID: () => string | null
   onSessionLoss: (slug: string) => Promise<void> | void
   navigateToLibrary: () => Promise<void>
   onNavigationError: (message: string) => void
@@ -51,6 +52,7 @@ export type UseReaderProgressOptions = {
 
 type StoryContext = {
   slug: string
+  profileID: string
   version: number
   segments: readonly ReaderStorySegment[]
   generation: number
@@ -97,6 +99,7 @@ export function useReaderProgress(options: UseReaderProgressOptions) {
 
   let context: StoryContext | null = null
   let preparedSlug: string | null = null
+  let preparedProfileID: string | null = null
   let generation = 0
   let baselineController: ProgressBaselineController<ProgressState | null> | null = null
   let unsubscribeBaseline: (() => void) | null = null
@@ -181,6 +184,7 @@ export function useReaderProgress(options: UseReaderProgressOptions) {
     disposeCoordinator()
     context = null
     preparedSlug = null
+    preparedProfileID = null
     baselineOrigin = null
     movedBeforeReady = false
     awaitingIntent = false
@@ -221,6 +225,7 @@ export function useReaderProgress(options: UseReaderProgressOptions) {
       persist: (progress, persistenceOptions) =>
         saveProgress(
           progress.slug,
+          active.profileID,
           progress.version,
           progress.locator,
           progress.percent,
@@ -331,9 +336,12 @@ export function useReaderProgress(options: UseReaderProgressOptions) {
   function prepare(slug: string) {
     dispose()
     preparedSlug = slug
+    const profileID = options.selectedProfileID()
+    if (profileID === null) return
+    preparedProfileID = profileID
     const activeGeneration = generation
     const created = createProgressBaselineController({
-      load: async () => (await getProgress(slug)).progress,
+      load: async () => (await getProgress(slug, profileID)).progress,
     })
     baselineController = created
     unsubscribeBaseline = created.subscribe((state) => {
@@ -363,10 +371,16 @@ export function useReaderProgress(options: UseReaderProgressOptions) {
     version: number,
     segments: readonly ReaderStorySegment[],
   ) {
-    if (preparedSlug !== slug || !baselineController) prepare(slug)
+    const profileID = options.selectedProfileID()
+    if (
+      preparedSlug !== slug ||
+      preparedProfileID !== profileID ||
+      !baselineController
+    ) prepare(slug)
     if (handlingSessionLoss) return
 
-    const active: StoryContext = { slug, version, segments, generation }
+    if (profileID === null) return
+    const active: StoryContext = { slug, profileID, version, segments, generation }
     context = active
     baselineOrigin = snapshot(options.capture(), active)
     if (baselineState.value.status === 'ready') {

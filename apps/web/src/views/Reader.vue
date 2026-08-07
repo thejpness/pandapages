@@ -33,6 +33,7 @@ import {
 import type { CrossVersionMapping } from '../lib/reader-cross-version-progress'
 import type { ReaderLocatorV2 } from '../lib/reader-locator-v2'
 import { applyReaderTheme } from '../lib/reader-theme-bootstrap'
+import { selectedReaderProfileID } from '../lib/reader-profile-selection'
 import { planReaderModeTransition } from '../lib/reader-mode-transition'
 import {
   READER_PREFERENCES_V2_DEFAULTS,
@@ -237,6 +238,7 @@ function captureCurrent(): ReaderCapturedPosition | null {
 
 const progress = useReaderProgress({
   capture: captureCurrent,
+  selectedProfileID: selectedReaderProfileID,
   onSessionLoss: moveToSignIn,
   navigateToLibrary: async () => {
     await router.push('/library')

@@ -29,7 +29,9 @@ func TestAccountScopedMigrationSchema(t *testing.T) {
 	if err := database.QueryRow(`SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'reading_progress'::regclass AND contype = 'p'`).Scan(&progressKey); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(progressKey, "account_id") || !strings.Contains(progressKey, "story_id") {
+	if !strings.Contains(progressKey, "account_id") ||
+		!strings.Contains(progressKey, "profile_id") ||
+		!strings.Contains(progressKey, "story_id") {
 		t.Fatalf("progress key = %s", progressKey)
 	}
 	if err := database.QueryRow(`SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'account_settings'::regclass AND contype = 'p'`).Scan(&settingsKey); err != nil {

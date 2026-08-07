@@ -122,11 +122,6 @@ func validLibrarySlug(slug string) bool {
 	return utf8.ValidString(slug) && librarySlugPattern.MatchString(slug)
 }
 
-func validLibraryProgressTime(value time.Time) bool {
-	year := value.Year()
-	return !value.IsZero() && year >= 1 && year <= 9999
-}
-
 func libraryVersionMetadata(
 	frontmatterJSON []byte,
 ) (string, *string, string, error) {
@@ -195,10 +190,10 @@ func (s *Store) Library(accountID string) (model.LibraryReadModel, error) {
 	ctx, cancel := s.ctx()
 	defer cancel()
 
-	// Segment rows are kept in this single statement so metadata, progress, and
-	// Reader 2 identities all come from one PostgreSQL snapshot. The ordered
-	// identities are validated by the shared Reader contract in Go rather than
-	// reimplementing its occurrence/chapter rules in SQL.
+	// Segment rows are kept in this single statement so catalogue metadata and
+	// Reader 2 identities all come from one PostgreSQL snapshot. Reading
+	// progress is intentionally absent: it is reader-profile scoped and never
+	// inferred for an account-scoped catalogue response.
 	rows, err := s.db.QueryContext(ctx, `
 		WITH candidates AS (
 			SELECT
@@ -224,10 +219,6 @@ func (s *Store) Library(accountID string) (model.LibraryReadModel, error) {
 			candidates.requested_published_version_id,
 			candidates.published_version_id,
 			candidates.published_version,
-			progress.story_version_id,
-			progress_version.version,
-			progress.percent,
-			progress.updated_at,
 			segment.id,
 			segment.ordinal,
 			segment.segment_kind,
@@ -238,12 +229,6 @@ func (s *Store) Library(accountID string) (model.LibraryReadModel, error) {
 			segment.chapter_occurrence,
 			segment.word_count
 		FROM candidates
-		LEFT JOIN reading_progress AS progress
-		  ON progress.story_id = candidates.story_id
-		 AND progress.account_id = $1
-		LEFT JOIN story_versions AS progress_version
-		  ON progress_version.id = progress.story_version_id
-		 AND progress_version.story_id = candidates.story_id
 		LEFT JOIN story_segments AS segment
 		  ON segment.story_version_id = candidates.published_version_id
 		ORDER BY
@@ -304,10 +289,6 @@ func (s *Store) Library(accountID string) (model.LibraryReadModel, error) {
 			requestedVersionID   sql.NullString
 			publishedVersionID   sql.NullString
 			publishedVersion     sql.NullInt64
-			progressVersionID    sql.NullString
-			progressVersion      sql.NullInt64
-			progressPercent      sql.NullFloat64
-			progressUpdatedAt    sql.NullTime
 			segmentID            sql.NullString
 			segmentOrdinal       sql.NullInt64
 			segmentKind          sql.NullString
@@ -325,10 +306,6 @@ func (s *Store) Library(accountID string) (model.LibraryReadModel, error) {
 			&requestedVersionID,
 			&publishedVersionID,
 			&publishedVersion,
-			&progressVersionID,
-			&progressVersion,
-			&progressPercent,
-			&progressUpdatedAt,
 			&segmentID,
 			&segmentOrdinal,
 			&segmentKind,
@@ -377,25 +354,6 @@ func (s *Store) Library(accountID string) (model.LibraryReadModel, error) {
 				current.item.Language = language
 			}
 
-			if progressVersionID.Valid {
-				version := int(progressVersion.Int64)
-				if strings.TrimSpace(progressVersionID.String) == "" ||
-					!progressVersion.Valid || progressVersion.Int64 <= 0 || int64(version) != progressVersion.Int64 ||
-					!progressPercent.Valid || math.IsNaN(progressPercent.Float64) || math.IsInf(progressPercent.Float64, 0) ||
-					progressPercent.Float64 < 0 || progressPercent.Float64 > 1 ||
-					!progressUpdatedAt.Valid || !validLibraryProgressTime(progressUpdatedAt.Time) {
-					current.invalid = true
-				} else {
-					current.item.Progress = &model.LibraryProgressSummary{
-						Version:          version,
-						Percent:          progressPercent.Float64,
-						UpdatedAt:        progressUpdatedAt.Time,
-						IsCurrentVersion: progressVersionID.String == current.publishedVersionID,
-					}
-				}
-			} else if progressVersion.Valid || progressPercent.Valid || progressUpdatedAt.Valid {
-				current.invalid = true
-			}
 		}
 
 		if !segmentID.Valid {
@@ -628,7 +586,7 @@ func (s *Store) ReaderStory(accountID, slug string) (model.ReaderStory, error) {
 
 /* ----------------------------- Progress ----------------------------- */
 
-func (s *Store) ProgressGet(accountID, slug string) (model.ProgressResponse, error) {
+func (s *Store) ProgressGet(accountID, profileID, slug string) (model.ProgressResponse, error) {
 	ctx, cancel := s.ctx()
 	defer cancel()
 
@@ -648,14 +606,15 @@ func (s *Store) ProgressGet(accountID, slug string) (model.ProgressResponse, err
 		LEFT JOIN reading_progress rp
 		  ON rp.story_id = st.id
 		 AND rp.account_id = $1
+		 AND rp.profile_id = $2
 		LEFT JOIN story_versions sv
 		  ON sv.id = rp.story_version_id
 		 AND sv.story_id = st.id
 		WHERE st.account_id = $1
-		  AND st.slug = $2
+		  AND st.slug = $3
 		  AND st.is_published = true
 		  AND st.published_version_id IS NOT NULL
-	`, accountID, slug).Scan(&hasProgress, &version, &locatorJSON, &percent)
+	`, accountID, profileID, slug).Scan(&hasProgress, &version, &locatorJSON, &percent)
 	if err != nil {
 		return model.ProgressResponse{}, err
 	}
@@ -680,7 +639,7 @@ func (s *Store) ProgressGet(accountID, slug string) (model.ProgressResponse, err
 	}}, nil
 }
 
-func (s *Store) ProgressPut(accountID, slug string, version int, locator readercontract.Locator, percent float64) error {
+func (s *Store) ProgressPut(accountID, profileID, slug string, version int, locator readercontract.Locator, percent float64) error {
 	ctx, cancel := s.ctx()
 	defer cancel()
 
@@ -760,16 +719,17 @@ func (s *Store) ProgressPut(accountID, slug string, version int, locator readerc
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `
-		INSERT INTO reading_progress (account_id, story_id, story_version_id, locator, percent, updated_at)
-		VALUES ($1,$2,$3,$4,$5,now())
-		ON CONFLICT (account_id, story_id)
+		INSERT INTO reading_progress (account_id, profile_id, story_id, story_version_id, locator, percent, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,now())
+		ON CONFLICT (account_id, profile_id, story_id)
 		DO UPDATE SET
 			account_id=EXCLUDED.account_id,
+			profile_id=EXCLUDED.profile_id,
 			story_version_id=EXCLUDED.story_version_id,
 			locator=EXCLUDED.locator,
 			percent=EXCLUDED.percent,
 			updated_at=now()
-	`, accountID, storyID, versionID, locatorJSON, percent); err != nil {
+	`, accountID, profileID, storyID, versionID, locatorJSON, percent); err != nil {
 		return err
 	}
 
@@ -778,7 +738,7 @@ func (s *Store) ProgressPut(accountID, slug string, version int, locator readerc
 
 /* ------------------------- Continue / Recent -------------------- */
 
-func (s *Store) ContinueRecent(accountID string, limit int) ([]model.ContinueItem, error) {
+func (s *Store) ContinueRecent(accountID, profileID string, limit int) ([]model.ContinueItem, error) {
 	if limit <= 0 {
 		limit = 3
 	}
@@ -796,11 +756,12 @@ func (s *Store) ContinueRecent(accountID string, limit int) ([]model.ContinueIte
 		  ON st.id = rp.story_id
 		 AND st.account_id = rp.account_id
 		WHERE rp.account_id = $2
+		  AND rp.profile_id = $3
 		  AND st.account_id = $2
 		  AND st.published_version_id IS NOT NULL
 		ORDER BY rp.updated_at DESC
 		LIMIT $1
-	`, limit, accountID)
+	`, limit, accountID, profileID)
 	if err != nil {
 		return nil, err
 	}

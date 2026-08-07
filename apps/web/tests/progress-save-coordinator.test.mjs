@@ -328,23 +328,28 @@ test('saveProgress rejects malformed success and preserves keepalive credentials
     })
   }
   await assert.rejects(
-    api.saveProgress('story', 1, scrollSnapshot(10).locator, 0.1, {
+    api.saveProgress('story', '123e4567-e89b-42d3-a456-426614174300', 1, scrollSnapshot(10).locator, 0.1, {
       keepalive: true,
     }),
     /Invalid progress-save response/
   )
-  assert.equal(captured.url, '/api/v1/progress/story')
-  assert.equal(captured.init.credentials, 'omit')
-  assert.equal(captured.init.keepalive, true)
+	assert.equal(captured.url, '/api/v1/progress/story')
+	assert.equal(captured.init.credentials, 'omit')
+	assert.equal(captured.init.keepalive, true)
+	assert.equal(
+		new Headers(captured.init.headers).get('x-pp-profile-id'),
+		'123e4567-e89b-42d3-a456-426614174300',
+	)
 
   globalThis.fetch = async () =>
     new Response(JSON.stringify({ ok: true }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     })
-  await api.saveProgress(
-    'story',
-    1,
+	await api.saveProgress(
+		'story',
+		'123e4567-e89b-42d3-a456-426614174300',
+		1,
     scrollSnapshot(10).locator,
     0.1
   )
@@ -364,7 +369,7 @@ test('saveProgress propagates transport and server failures', async (t) => {
     throw new TypeError('network unavailable')
   }
   await assert.rejects(
-    api.saveProgress('story', 1, scrollSnapshot(10).locator, 0.1),
+    api.saveProgress('story', '123e4567-e89b-42d3-a456-426614174300', 1, scrollSnapshot(10).locator, 0.1),
     /network unavailable/
   )
 
@@ -379,7 +384,7 @@ test('saveProgress propagates transport and server failures', async (t) => {
       }
     )
   await assert.rejects(
-    api.saveProgress('story', 1, scrollSnapshot(10).locator, 0.1),
+    api.saveProgress('story', '123e4567-e89b-42d3-a456-426614174300', 1, scrollSnapshot(10).locator, 0.1),
     (error) => error.status === 500
   )
 })

@@ -2,7 +2,6 @@ package db
 
 import (
 	"testing"
-	"time"
 )
 
 func TestLibraryVersionMetadataUsesOnlyTypedVersionValues(t *testing.T) {
@@ -77,26 +76,6 @@ func TestValidLibrarySlugUsesCanonicalLowercaseContract(t *testing.T) {
 	} {
 		if validLibrarySlug(invalid) {
 			t.Errorf("validLibrarySlug(%q) = true, want false", invalid)
-		}
-	}
-}
-
-func TestValidLibraryProgressTimeMatchesRFC3339YearRange(t *testing.T) {
-	for _, valid := range []time.Time{
-		time.Date(1, time.January, 2, 0, 0, 0, 0, time.UTC),
-		time.Date(9999, time.December, 31, 23, 59, 59, 0, time.UTC),
-	} {
-		if !validLibraryProgressTime(valid) {
-			t.Errorf("validLibraryProgressTime(%s) = false, want true", valid)
-		}
-	}
-	for _, invalid := range []time.Time{
-		{},
-		time.Date(0, time.December, 31, 23, 59, 59, 0, time.UTC),
-		time.Date(10000, time.January, 1, 0, 0, 0, 0, time.UTC),
-	} {
-		if validLibraryProgressTime(invalid) {
-			t.Errorf("validLibraryProgressTime(%s) = true, want false", invalid)
 		}
 	}
 }
