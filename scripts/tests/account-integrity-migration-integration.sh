@@ -519,7 +519,9 @@ grep -q 'OK.*00015_account_ownership_integrity.sql' \
   "$test_root/full-up.out" "$test_root/full-up.err"
 grep -q 'OK.*00016_identity_foundation.sql' \
   "$test_root/full-up.out" "$test_root/full-up.err"
-assert_query '16|1|1|0' "$full_database" "
+grep -q 'OK.*00017_account_scoped_progress_and_settings.sql' \
+  "$test_root/full-up.out" "$test_root/full-up.err"
+assert_query '17|1|1|0' "$full_database" "
   SELECT
     (WITH latest AS (
       SELECT DISTINCT ON (version_id) version_id, is_applied
@@ -529,7 +531,7 @@ assert_query '16|1|1|0' "$full_database" "
     (SELECT count(*) FROM profiles),
     (SELECT count(*) FROM pg_constraint WHERE contype = 'f' AND NOT convalidated);
 " 'fresh full migration chain'
-printf 'ok 1 - a fresh database migrates through the current chain including account-integrity version 15\n'
+printf 'ok 1 - a fresh database migrates through the current chain including account-scoped version 17\n'
 
 create_database "$v14_database"
 run_goose "$v14_database" up-to 14 >"$test_root/v14-up.out" 2>"$test_root/v14-up.err"
@@ -735,7 +737,7 @@ printf 'ok 13 - owned account deletion fails while a new empty account remains d
 probe_readiness "$v14_database" 503 '"reason":"schema_not_ready"'
 probe_readiness "$clean_database" 503 '"reason":"schema_not_ready"'
 probe_readiness "$full_database" 200 '"status":"ready"'
-printf 'ok 14 - the API reports v14 and v15 schema_not_ready and v16 ready while health stays live\n'
+printf 'ok 14 - the API reports v14 and v15 schema_not_ready and v17 ready while health stays live\n'
 
 run_goose "$clean_database" down-to 14 >"$test_root/clean-down.out" 2>"$test_root/clean-down.err"
 assert_query '14|0|6|3|4|2|2|2|2' "$clean_database" "
