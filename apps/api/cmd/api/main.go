@@ -17,9 +17,9 @@ import (
 	"pandapages/api/internal/db"
 	"pandapages/api/internal/httpadmin"
 	"pandapages/api/internal/httpapi"
+	"pandapages/api/internal/httpbearer"
 	"pandapages/api/internal/httpidentity"
 	"pandapages/api/internal/httpmiddleware"
-	"pandapages/api/internal/session"
 	"pandapages/api/internal/supabaseauth"
 )
 
@@ -34,30 +34,16 @@ const (
 )
 
 type runtimeConfig struct {
-	databaseURL   string
-	passcode      string
-	adminKey      string
-	cookieSecure  bool
-	logLevel      slog.Level
-	sessionSigner *session.Manager
-	supabaseAuth  supabaseauth.Config
+	databaseURL  string
+	adminKey     string
+	logLevel     slog.Level
+	supabaseAuth supabaseauth.Config
 }
 
 func loadRuntimeConfig(getenv func(string) string) (runtimeConfig, error) {
-	passcode := getenv("PP_PASSCODE")
-	if !validPasscode(passcode) {
-		return runtimeConfig{}, fmt.Errorf("PP_PASSCODE must be exactly six ASCII decimal digits")
-	}
-
 	logLevel, err := parseLogLevel(getenv("PP_LOG_LEVEL"))
 	if err != nil {
 		return runtimeConfig{}, err
-	}
-
-	cookieSecure := getenv("PP_COOKIE_SECURE") == "true"
-	sessionSigner, err := session.New(getenv("PP_SESSION_SECRET"), cookieSecure)
-	if err != nil {
-		return runtimeConfig{}, fmt.Errorf("PP_SESSION_SECRET is invalid: %w", err)
 	}
 
 	supabaseConfig := supabaseauth.Config{
@@ -71,13 +57,10 @@ func loadRuntimeConfig(getenv func(string) string) (runtimeConfig, error) {
 	}
 
 	return runtimeConfig{
-		databaseURL:   getenv("DATABASE_URL"),
-		passcode:      passcode,
-		adminKey:      strings.TrimSpace(getenv("PP_ADMIN_KEY")),
-		cookieSecure:  cookieSecure,
-		logLevel:      logLevel,
-		sessionSigner: sessionSigner,
-		supabaseAuth:  supabaseConfig,
+		databaseURL:  getenv("DATABASE_URL"),
+		adminKey:     strings.TrimSpace(getenv("PP_ADMIN_KEY")),
+		logLevel:     logLevel,
+		supabaseAuth: supabaseConfig,
 	}, nil
 }
 
@@ -98,18 +81,6 @@ func parseLogLevel(raw string) (slog.Level, error) {
 
 func newLogger(output io.Writer, level slog.Level) *slog.Logger {
 	return slog.New(slog.NewTextHandler(output, &slog.HandlerOptions{Level: level}))
-}
-
-func validPasscode(passcode string) bool {
-	if len(passcode) != 6 {
-		return false
-	}
-	for index := range passcode {
-		if passcode[index] < '0' || passcode[index] > '9' {
-			return false
-		}
-	}
-	return true
 }
 
 func newServer(handler http.Handler) *http.Server {
@@ -146,20 +117,20 @@ func run() error {
 	store := db.MustOpen(cfg.databaseURL)
 	defer store.Close()
 
-	public := httpapi.New(httpapi.Config{
-		Passcode: cfg.passcode,
-		Sessions: cfg.sessionSigner,
-	}, store)
-
 	verifier, err := supabaseauth.New(cfg.supabaseAuth)
 	if err != nil {
 		return fmt.Errorf("configure Supabase bearer verifier: %w", err)
 	}
-	identity := httpidentity.New(verifier, store)
+	bearerAuthenticator := httpbearer.New(verifier, store)
+
+	public := httpapi.New(httpapi.Config{
+		BearerAuthenticator: bearerAuthenticator,
+	}, store)
+	identity := httpidentity.New(bearerAuthenticator, store)
 
 	admin := httpadmin.New(httpadmin.Config{
-		AdminKey: cfg.adminKey,
-		Sessions: cfg.sessionSigner,
+		AdminKey:            cfg.adminKey,
+		BearerAuthenticator: bearerAuthenticator,
 	}, store)
 
 	server := newServer(newRootHandler(public, identity, admin))

@@ -162,6 +162,10 @@ export async function gotoReader(
     .poll(() => api.count('GET', `/api/v1/progress/${encodeURIComponent(slug)}`))
     .toBe(1)
   await settleReaderFrames(page)
+  const paged = pagedReader(page)
+  if (await paged.count()) {
+    await expect(paged).toHaveAttribute("data-reader-reflow-pending", "false")
+  }
 }
 
 export async function scrollToSegment(

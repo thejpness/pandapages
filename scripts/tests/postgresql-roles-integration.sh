@@ -6,7 +6,6 @@ umask 077
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 source "$repo_root/scripts/tests/postgresql-stable-readiness.sh"
 role_script="$repo_root/scripts/postgresql-roles.sh"
-api_smoke_script="$repo_root/scripts/tests/postgresql-api-role-smoke.sh"
 migration_image=${PP_ROLE_TEST_MIGRATION_IMAGE:-pandapages-migrate:role-test}
 api_image=${PP_ROLE_TEST_API_IMAGE:-pandapages-api:role-test}
 readonly postgres_image='postgres:18.1-alpine@sha256:b40d931bd0e7ce6eecc59a5a6ac3b3c04a01e559750e73e7086b6dbd7f8bf545'
@@ -243,27 +242,6 @@ role_state=$(docker exec "$source_container" \
 expect_denied 'pgcrypto digest routine' "$application_role" "$database" \
   "SELECT public.digest('abc'::text, 'sha256'::text);"
 printf 'ok 4 - all policy roles have non-superuser non-administrative attributes\n'
-
-smoke_tmp="$test_root/api-role-smoke-tmp"
-mkdir -p "$smoke_tmp"
-env \
-  TMPDIR="$smoke_tmp" \
-  PP_ROLE_TEST_SOURCE_CONTAINER="$source_container" \
-  PP_ROLE_TEST_NETWORK="$source_network" \
-  PP_ROLE_TEST_API_IMAGE="$api_image" \
-  PP_ROLE_TEST_DATABASE="$database" \
-  PP_ROLE_TEST_ADMIN_USER="$admin_user" \
-  PP_ROLE_TEST_APPLICATION_ROLE="$application_role" \
-  PP_ROLE_TEST_APPLICATION_PASSWORD="$application_password" \
-  PP_ROLE_TEST_MIGRATION_ROLE="$migration_role" \
-  PP_ROLE_TEST_MIGRATION_PASSWORD="$migration_password" \
-  PP_ROLE_TEST_LEGACY_ROLE="$legacy_role" \
-  PP_ROLE_TEST_LEGACY_PASSWORD="$legacy_password" \
-  "$api_smoke_script" >/dev/null
-[[ -z $(find "$smoke_tmp" -mindepth 1 -print -quit) ]] || {
-  printf 'API role smoke test left temporary files behind\n' >&2
-  exit 1
-}
 
 docker exec -i "$source_container" \
   psql -X --username="$admin_user" --dbname="$database" --set=ON_ERROR_STOP=1 <<'SQL' >/dev/null

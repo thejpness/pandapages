@@ -2,9 +2,10 @@
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import PandaAuthShell from '../components/app/PandaAuthShell.vue'
+import { clearSelectedAccount, selectAccount } from '../lib/account-context'
 import {
-  loadIdentity,
-  restoreSupabaseSession,
+	loadIdentity,
+	restoreSupabaseSession,
   signOutSupabaseSession,
   type AuthenticatedIdentity,
 } from '../lib/supabase-auth'
@@ -13,6 +14,11 @@ const router = useRouter()
 const identity = ref<AuthenticatedIdentity | null>(null)
 const errorMessage = ref('')
 const busy = ref(true)
+
+function chooseAccount(accountID: string) {
+	selectAccount(accountID)
+	void router.replace('/library')
+}
 
 onMounted(async () => {
   try {
@@ -34,6 +40,7 @@ async function signOut() {
   busy.value = true
   errorMessage.value = ''
   try {
+		clearSelectedAccount()
     await signOutSupabaseSession()
     await router.replace('/account/login')
   } catch {
@@ -45,9 +52,9 @@ async function signOut() {
 
 <template>
   <PandaAuthShell
-    eyebrow="Identity foundation"
-    title="Your Panda Pages identity"
-    description="This page exercises the new bearer-only account foundation without selecting an application account or reader profile."
+    eyebrow="Panda Pages"
+    title="Choose an account"
+    description="Choose the Panda Pages account you want to use."
   >
     <p v-if="busy" class="identity-status" role="status">Loading identity…</p>
     <p v-else-if="errorMessage" class="identity-error" role="alert">{{ errorMessage }}</p>
@@ -57,9 +64,10 @@ async function signOut() {
         <li v-for="membership in identity.memberships" :key="membership.accountId">
           <span>{{ membership.accountName }}</span>
           <small>{{ membership.role }}</small>
+          <button type="button" @click="chooseAccount(membership.accountId)">Choose</button>
         </li>
       </ul>
-      <p class="identity-note">No account or reader profile is selected by this foundation.</p>
+      <p class="identity-note">Your account choice is checked against current memberships on every request.</p>
       <button type="button" :disabled="busy" @click="signOut">Sign out</button>
     </div>
   </PandaAuthShell>

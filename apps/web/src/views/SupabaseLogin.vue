@@ -21,19 +21,15 @@ async function signIn() {
 
 <template>
   <PandaAuthShell
-    eyebrow="Identity foundation"
+    eyebrow="Panda Pages"
     title="Sign in to Panda Pages"
-    description="This new adult account flow is being prepared for the application authentication cutover."
+    description="Use your adult account to continue to Panda Pages."
   >
     <div class="identity-actions">
       <button type="button" class="identity-primary" :disabled="busy" @click="signIn">
         {{ busy ? 'Opening secure sign-in…' : 'Continue with Google' }}
       </button>
       <p v-if="errorMessage" class="identity-error" role="alert">{{ errorMessage }}</p>
-      <p class="identity-note">
-        Reader, Library, Journey and Story Studio still use the temporary shared-passcode flow in this development build.
-      </p>
-      <RouterLink to="/unlock">Use temporary passcode</RouterLink>
     </div>
   </PandaAuthShell>
 </template>

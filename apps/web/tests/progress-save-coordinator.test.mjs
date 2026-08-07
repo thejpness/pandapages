@@ -334,7 +334,7 @@ test('saveProgress rejects malformed success and preserves keepalive credentials
     /Invalid progress-save response/
   )
   assert.equal(captured.url, '/api/v1/progress/story')
-  assert.equal(captured.init.credentials, 'include')
+  assert.equal(captured.init.credentials, 'omit')
   assert.equal(captured.init.keepalive, true)
 
   globalThis.fetch = async () =>

@@ -79,7 +79,7 @@ const emit = defineEmits<{
 
     <template v-else>
       <p class="library-state__eyebrow">Session ended</p>
-      <h2>Returning to Unlock</h2>
+      <h2>Returning to sign in</h2>
       <p>Your library has been cleared from this screen.</p>
     </template>
   </section>

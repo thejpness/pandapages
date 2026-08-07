@@ -23,7 +23,6 @@ import {
   type AdminValidationIssue,
   type AdminVersionSource,
 } from '@/lib/api'
-import { authState } from '@/lib/session'
 import {
   convertImportedStoryFile,
   createBlankStoryForm,
@@ -101,10 +100,9 @@ watch(
   },
 )
 
-async function moveToUnlock() {
-  authState.confirmLocked()
+async function moveToSignIn() {
   await router.replace({
-    path: '/unlock',
+    path: '/account/login',
     query: { next: route.path },
   })
 }
@@ -112,7 +110,7 @@ async function moveToUnlock() {
 async function applyRequestError(caught: unknown) {
   const projected = projectStoryStudioError(caught)
   actionError.value = projected
-  if (projected.kind === 'session') await moveToUnlock()
+  if (projected.kind === 'session') await moveToSignIn()
 }
 
 function resetNewEditor() {
@@ -221,7 +219,7 @@ async function loadEditor() {
     if (controller.signal.aborted || generation !== loadGeneration) return
     const projected = projectStoryStudioError(caught)
     loadError.value = projected
-    if (projected.kind === 'session') await moveToUnlock()
+    if (projected.kind === 'session') await moveToSignIn()
   } finally {
     if (generation === loadGeneration) loading.value = false
   }

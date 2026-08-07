@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './support/auth'
 
 const hostileFragments = [
   { name: 'script', html: '<script src="https://story-xss.invalid/script.js"></script>' },
@@ -40,7 +40,7 @@ test('the browser validates the complete inert story fragment', async ({ page })
     await dialog.dismiss()
   })
 
-  await page.goto('/unlock')
+  await page.goto('/account/login')
   const results = await page.evaluate(
     async ({ hostile, valid }) => {
       const modulePath = '/src/lib/reader-locator-v2.ts'

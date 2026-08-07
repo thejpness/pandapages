@@ -42,7 +42,7 @@ documented() {
 # These are supported by direct process invocation or fixed by Compose rather
 # than imported from the root environment. They must remain documented without
 # pretending that root Compose consumes them.
-for direct_name in DATABASE_URL PP_COOKIE_SECURE VITE_API_BASE PP_SUPABASE_ISSUER PP_SUPABASE_AUDIENCE PP_SUPABASE_JWKS_URL VITE_SUPABASE_URL VITE_SUPABASE_PUBLISHABLE_KEY; do
+for direct_name in DATABASE_URL VITE_API_BASE PP_SUPABASE_ISSUER PP_SUPABASE_AUDIENCE PP_SUPABASE_JWKS_URL VITE_SUPABASE_URL VITE_SUPABASE_PUBLISHABLE_KEY; do
   documented "$direct_name" || die "$direct_name is not documented"
 done
 

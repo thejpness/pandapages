@@ -13,13 +13,11 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"pandapages/api/internal/httpauth"
+	"pandapages/api/internal/appidentity"
 	"pandapages/api/internal/model"
 )
 
 type Store interface {
-	AccountExists(accountID string) (bool, error)
-
 	AdminDraftUpsert(accountID string, req model.AdminDraftUpsertRequest) (model.AdminDraftUpsertResponse, error)
 	AdminPublishStory(accountID string, slug string, versionID string) (model.AdminStoryStatusResponse, error)
 	AdminUnpublish(accountID string, slug string) (model.AdminStoryStatusResponse, error)
@@ -52,32 +50,31 @@ func New(cfg Config, store Store) http.Handler {
 	if adminKey == "" {
 		panic("PP_ADMIN_KEY is required for admin routes")
 	}
-	authenticator := httpauth.New(cfg.Sessions, store)
+	if cfg.BearerAuthenticator == nil {
+		panic("bearer account authenticator is required")
+	}
 
 	mux := http.NewServeMux()
 
 	withAdmin := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			// 1) require the shared signed session and its existing account.
-			aid, err := authenticator.Authenticate(r)
-			if errors.Is(err, httpauth.ErrInvalidSession) {
-				cfg.Sessions.Clear(w)
-				writeErr(w, http.StatusUnauthorized, "unauthorized", "unlock required")
+			account, ok := cfg.BearerAuthenticator.RequireAccount(w, r)
+			if !ok {
 				return
 			}
-			if err != nil {
-				writeErr(w, http.StatusServiceUnavailable, "session_unavailable", "session validation unavailable")
+			if account.Role != appidentity.RoleOwner {
+				writeErr(w, http.StatusForbidden, "forbidden", "admin authorization required")
 				return
 			}
 
-			// 2) retain the proxy-injected admin key boundary.
+			// Retain the proxy-injected admin key as an additional capability boundary.
 			got := strings.TrimSpace(r.Header.Get("X-PP-Admin-Key"))
 			if !adminKeyOK(got, adminKey) {
-				writeErr(w, http.StatusForbidden, "forbidden", "admin key required")
+				writeErr(w, http.StatusForbidden, "forbidden", "admin authorization required")
 				return
 			}
 
-			ctx := context.WithValue(r.Context(), ctxAccountID, aid)
+			ctx := context.WithValue(r.Context(), ctxAccountID, account.AccountID)
 			next(w, r.WithContext(ctx))
 		}
 	}

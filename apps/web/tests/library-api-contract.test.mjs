@@ -243,7 +243,7 @@ test('Library boundary ignores harmless additive fields but rejects unsafe data 
   }
 })
 
-test('getLibrary uses the fixed credentialed route and rejects malformed success bodies', async (t) => {
+test('getLibrary uses the fixed bearer/account route and rejects malformed success bodies', async (t) => {
   const originalFetch = globalThis.fetch
   t.after(() => {
     globalThis.fetch = originalFetch
@@ -266,9 +266,9 @@ test('getLibrary uses the fixed credentialed route and rejects malformed success
   })
   assert.deepEqual(
     requests.map(({ url, init }) => [url, init.credentials]),
-    [['/api/v1/library', 'include']],
+    [['/api/v1/library', 'omit']],
   )
-  assert.match(source, /request<unknown>\('\/api\/v1\/library'\)/)
+  assert.match(source, /request<unknown>\(["']\/api\/v1\/library["']\)/)
   assert.match(source, /return parseLibraryResponse\(data\)/)
 
   globalThis.fetch = async () =>

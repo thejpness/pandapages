@@ -677,11 +677,11 @@ test.describe('Reader cross-version progress decisions', () => {
   }) => {
     api.enqueueProgressGet(READER_SLUG, {
       status: 401,
-      body: { error: { code: 'unauthorized', message: 'unlock required' } },
+      body: { error: { code: 'unauthorized', message: 'sign-in required' } },
     })
 
     await page.goto(`/read/${READER_SLUG}`)
-    await expect(page).toHaveURL(/\/unlock\?next=/)
+    await expect(page).toHaveURL(/\/account\/login\?next=/)
     await expect(page.getByRole('dialog', { name: 'Story updated' })).toBeHidden()
     expect(api.progressPuts()).toHaveLength(0)
   })

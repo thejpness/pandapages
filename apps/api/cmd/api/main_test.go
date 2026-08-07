@@ -95,10 +95,7 @@ func TestLoadRuntimeConfigAcceptsValidAuthenticationSettings(t *testing.T) {
 
 	values := map[string]string{
 		"DATABASE_URL":         "test-database-url",
-		"PP_PASSCODE":          "012345",
-		"PP_SESSION_SECRET":    strings.Repeat("s", 32),
 		"PP_ADMIN_KEY":         "  admin-key  ",
-		"PP_COOKIE_SECURE":     "true",
 		"PP_LOG_LEVEL":         "debug",
 		"PP_SUPABASE_ISSUER":   "https://project-ref.supabase.co/auth/v1",
 		"PP_SUPABASE_AUDIENCE": "authenticated",
@@ -111,90 +108,11 @@ func TestLoadRuntimeConfigAcceptsValidAuthenticationSettings(t *testing.T) {
 	if cfg.databaseURL != "test-database-url" {
 		t.Errorf("databaseURL = %q", cfg.databaseURL)
 	}
-	if cfg.passcode != "012345" {
-		t.Errorf("passcode = %q", cfg.passcode)
-	}
 	if cfg.adminKey != "admin-key" {
 		t.Errorf("adminKey = %q", cfg.adminKey)
 	}
-	if !cfg.cookieSecure {
-		t.Error("cookieSecure = false, want true")
-	}
 	if cfg.logLevel != slog.LevelDebug {
 		t.Errorf("logLevel = %v, want debug", cfg.logLevel)
-	}
-	if cfg.sessionSigner == nil {
-		t.Fatal("sessionSigner = nil")
-	}
-}
-
-func TestLoadRuntimeConfigRejectsInvalidPasscodes(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		passcode string
-	}{
-		{name: "empty", passcode: ""},
-		{name: "short", passcode: "12345"},
-		{name: "long", passcode: "1234567"},
-		{name: "alphabetic", passcode: "12345a"},
-		{name: "Unicode digits", passcode: "１２３４５６"},
-		{name: "leading whitespace", passcode: " 123456"},
-		{name: "trailing whitespace", passcode: "123456 "},
-		{name: "embedded whitespace", passcode: "123 56"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			values := map[string]string{
-				"PP_PASSCODE":       test.passcode,
-				"PP_SESSION_SECRET": strings.Repeat("s", 32),
-			}
-			_, err := loadRuntimeConfig(func(key string) string { return values[key] })
-			if err == nil {
-				t.Fatal("loadRuntimeConfig() error = nil, want passcode validation error")
-			}
-			if !strings.Contains(err.Error(), "PP_PASSCODE") {
-				t.Errorf("error = %q, want PP_PASSCODE context", err)
-			}
-			if test.passcode != "" && strings.Contains(err.Error(), test.passcode) {
-				t.Errorf("error leaks configured passcode: %q", err)
-			}
-		})
-	}
-}
-
-func TestLoadRuntimeConfigRejectsInvalidSessionSecrets(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name   string
-		secret string
-	}{
-		{name: "missing", secret: ""},
-		{name: "short", secret: strings.Repeat("s", 31)},
-		{name: "leading whitespace", secret: " " + strings.Repeat("s", 32)},
-		{name: "trailing whitespace", secret: strings.Repeat("s", 32) + "\t"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			values := map[string]string{
-				"PP_PASSCODE":       "123456",
-				"PP_SESSION_SECRET": test.secret,
-			}
-			_, err := loadRuntimeConfig(func(key string) string { return values[key] })
-			if err == nil {
-				t.Fatal("loadRuntimeConfig() error = nil, want session-secret validation error")
-			}
-			if !strings.Contains(err.Error(), "PP_SESSION_SECRET") {
-				t.Errorf("error = %q, want PP_SESSION_SECRET context", err)
-			}
-			if test.secret != "" && strings.Contains(err.Error(), test.secret) {
-				t.Errorf("error leaks configured session secret: %q", err)
-			}
-		})
 	}
 }
 
@@ -230,9 +148,7 @@ func TestLoadRuntimeConfigRejectsInvalidLogLevel(t *testing.T) {
 
 	const invalid = "verbose-private-value"
 	values := map[string]string{
-		"PP_PASSCODE":       "123456",
-		"PP_SESSION_SECRET": strings.Repeat("s", 32),
-		"PP_LOG_LEVEL":      invalid,
+		"PP_LOG_LEVEL": invalid,
 	}
 	_, err := loadRuntimeConfig(func(key string) string { return values[key] })
 	if err == nil {
@@ -286,8 +202,6 @@ func TestLoadRuntimeConfigRejectsInvalidSupabaseBearerSettings(t *testing.T) {
 	t.Parallel()
 
 	valid := map[string]string{
-		"PP_PASSCODE":          "123456",
-		"PP_SESSION_SECRET":    strings.Repeat("s", 32),
 		"PP_SUPABASE_ISSUER":   "https://project-ref.supabase.co/auth/v1",
 		"PP_SUPABASE_AUDIENCE": "authenticated",
 		"PP_SUPABASE_JWKS_URL": "https://project-ref.supabase.co/auth/v1/.well-known/jwks.json",

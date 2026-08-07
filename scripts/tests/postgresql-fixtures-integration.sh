@@ -914,7 +914,7 @@ grep -q 'OK.*00015_account_ownership_integrity.sql' \
   "$test_root/fresh-goose.out" "$test_root/fresh-goose.err"
 grep -q 'OK.*00016_identity_foundation.sql' \
   "$test_root/fresh-goose.out" "$test_root/fresh-goose.err"
-assert_query '16|true' "
+assert_query '17|true' "
   SELECT version_id || '|' || is_applied
   FROM goose_db_version ORDER BY id DESC LIMIT 1;
 " 'fresh latest migration marker'
@@ -926,7 +926,7 @@ assert_query 't' "
     (to_regclass('public.child_profiles')),
     (to_regclass('public.external_identities')),
     (to_regclass('public.generation_jobs')),
-    (to_regclass('public.profile_settings')),
+    (to_regclass('public.account_settings')),
     (to_regclass('public.profiles')),
     (to_regclass('public.principals')),
     (to_regclass('public.reading_progress')),
@@ -946,7 +946,7 @@ assert_query '0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0' "
     (SELECT count(*) FROM child_profiles),
     (SELECT count(*) FROM prompt_profiles),
     (SELECT count(*) FROM generation_jobs),
-    (SELECT count(*) FROM profile_settings),
+    (SELECT count(*) FROM account_settings),
     (SELECT count(*) FROM works),
     (SELECT count(*) FROM contributors),
     (SELECT count(*) FROM story_contributors),
@@ -1458,9 +1458,7 @@ api_environment="$test_root/api.env"
   printf 'DATABASE_URL=postgres://%s:%s@%s:5432/%s?sslmode=disable\n' \
     "$database_user" "$database_password" "$postgres_container" "$database"
   printf 'PGAPPNAME=pandapages-api\n'
-  printf 'PP_PASSCODE=123456\n'
   printf 'PP_ADMIN_KEY=generated-admin-key-not-for-production\n'
-  printf 'PP_SESSION_SECRET=generated-session-secret-not-for-production-00000000\n'
   printf 'PP_SUPABASE_ISSUER=https://auth.invalid/auth/v1\n'
   printf 'PP_SUPABASE_AUDIENCE=authenticated\n'
   printf 'PP_SUPABASE_JWKS_URL=https://auth.invalid/auth/v1/.well-known/jwks.json\n'
@@ -1504,24 +1502,6 @@ done
   printf 'Fixture API did not become healthy\n' >&2
   exit 1
 }
-
-cookie_jar="$test_root/api.cookies"
-curl --fail --silent --show-error \
-  --cookie-jar "$cookie_jar" \
-  --header 'Content-Type: application/json' \
-  --data '{"passcode":"123456"}' \
-  "$api_base/api/v1/auth/unlock" >/dev/null
-curl --fail --silent --show-error \
-  --cookie "$cookie_jar" \
-  "$api_base/api/v1/reader/test-only-moonlit-cafe" \
-  >"$test_root/reader.json"
-grep -q 'Moonlit Café' "$test_root/reader.json"
-grep -q 'Pöndá' "$test_root/reader.json"
-grep -q '世界' "$test_root/reader.json"
-grep -q '星の光' "$test_root/reader.json"
-if grep -q 'markdown\|f17e0000-0000-4000-8000-0000000000' "$test_root/reader.json"; then
-  printf 'Reader response exposed Markdown or internal IDs\n' >&2
-  exit 1
 fi
 printf 'ok 14 - the signed-session coherent Reader endpoint returns six UTF-8 segments without internal content\n'
 

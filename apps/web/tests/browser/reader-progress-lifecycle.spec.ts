@@ -1,8 +1,8 @@
 import { expect, READER_SLUG, test } from './support/reader-api'
 import { gotoReader, scrollToSegment } from './support/reader-page'
 
-async function expectSafeUnlock(page: import('@playwright/test').Page) {
-  await expect.poll(() => new URL(page.url()).pathname).toBe('/unlock')
+async function expectSafeSignIn(page: import('@playwright/test').Page) {
+  await expect.poll(() => new URL(page.url()).pathname).toBe('/account/login')
   expect(new URL(page.url()).searchParams.get('next')).toBe(
     `/read/${READER_SLUG}`,
   )
@@ -41,11 +41,11 @@ test.describe('Reader progress lifecycle wiring', () => {
     await gotoReader(page, api, READER_SLUG)
     await page.locator('.reader-save-status').getByRole('button', { name: 'Retry' }).click()
 
-    await expectSafeUnlock(page)
+    await expectSafeSignIn(page)
     expect(api.progressPuts(READER_SLUG)).toHaveLength(0)
   })
 
-  test('a progress PUT returning 401 never claims Saved and routes to safe Unlock', async ({
+  test('a progress PUT returning 401 never claims Saved and routes to safe sign-in', async ({
     page,
     api,
   }) => {
@@ -56,7 +56,7 @@ test.describe('Reader progress lifecycle wiring', () => {
     await gotoReader(page, api, READER_SLUG)
     await scrollToSegment(page, 4, 0.4)
 
-    await expectSafeUnlock(page)
+    await expectSafeSignIn(page)
     expect(api.progressPuts(READER_SLUG)).toHaveLength(1)
   })
 

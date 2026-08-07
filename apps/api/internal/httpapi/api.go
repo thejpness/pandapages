@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -12,22 +11,17 @@ import (
 	"strings"
 	"time"
 
-	"pandapages/api/internal/httpauth"
+	"pandapages/api/internal/httpbearer"
 	"pandapages/api/internal/model"
 	"pandapages/api/internal/readercontract"
 	"pandapages/api/internal/readiness"
-	"pandapages/api/internal/session"
 )
 
 type Config struct {
-	Passcode string
-	Sessions *session.Manager
+	BearerAuthenticator *httpbearer.Authenticator
 }
 
 type Store interface {
-	// Phase A: derive an account id from today's unlock mechanism.
-	EnsureDefaultAccount() (string, error)
-	AccountExists(accountID string) (bool, error)
 	CheckReadiness(context.Context) error
 
 	Library(accountID string) (model.LibraryReadModel, error)
@@ -50,11 +44,9 @@ const (
 )
 
 func New(cfg Config, store Store) http.Handler {
-	pass := cfg.Passcode
-	if !validPasscode(pass) {
-		panic("a six-digit ASCII passcode is required")
+	if cfg.BearerAuthenticator == nil {
+		panic("bearer account authenticator is required")
 	}
-	authenticator := httpauth.New(cfg.Sessions, store)
 
 	mux := http.NewServeMux()
 
@@ -93,96 +85,20 @@ func New(cfg Config, store Store) http.Handler {
 		}
 	})
 
-	// Unlock -> cookies
-	mux.HandleFunc("/api/v1/auth/unlock", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			methodNotAllowed(w, []string{http.MethodPost})
-			return
-		}
-
-		var body struct {
-			Passcode string `json:"passcode"`
-		}
-		if err := decodeJSON(w, r, &body); err != nil {
-			writeDecodeError(w, err)
-			return
-		}
-
-		if len(body.Passcode) != len(pass) || subtle.ConstantTimeCompare([]byte(body.Passcode), []byte(pass)) != 1 {
-			writeErr(w, http.StatusUnauthorized, "unauthorized", "invalid passcode")
-			return
-		}
-
-		accountID, err := store.EnsureDefaultAccount()
-		if err != nil {
-			writeErr(w, http.StatusInternalServerError, "db", "account init failed")
-			return
-		}
-
-		if err := cfg.Sessions.Set(w, accountID); err != nil {
-			writeErr(w, http.StatusInternalServerError, "session", "session creation failed")
-			return
-		}
-
-		noStore(w)
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-	})
-
-	// Status distinguishes a definitively invalid session from unavailable
-	// account storage. The frontend must not turn the latter into signed-out.
-	mux.HandleFunc("/api/v1/auth/status", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			methodNotAllowed(w, []string{http.MethodGet})
-			return
-		}
-		_, err := authenticator.Authenticate(r)
-		if errors.Is(err, httpauth.ErrInvalidSession) {
-			cfg.Sessions.Clear(w)
-			noStore(w)
-			writeJSON(w, http.StatusOK, map[string]any{"unlocked": false})
-			return
-		}
-		if err != nil {
-			writeErr(w, http.StatusServiceUnavailable, "session_unavailable", "session validation unavailable")
-			return
-		}
-
-		noStore(w)
-		writeJSON(w, http.StatusOK, map[string]any{"unlocked": true})
-	})
-
-	// Logout is deliberately browser-local and does not need a valid session or
-	// a working database in order to expire authentication cookies.
-	mux.HandleFunc("/api/v1/auth/logout", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			methodNotAllowed(w, []string{http.MethodPost})
-			return
-		}
-		cfg.Sessions.Clear(w)
-		noStore(w)
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-	})
-
 	type authedHandler func(w http.ResponseWriter, r *http.Request, accountID string)
 
-	withUnlock := func(next authedHandler) http.HandlerFunc {
+	withBearerAccount := func(next authedHandler) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			accountID, err := authenticator.Authenticate(r)
-			if errors.Is(err, httpauth.ErrInvalidSession) {
-				cfg.Sessions.Clear(w)
-				writeErr(w, http.StatusUnauthorized, "unauthorized", "unlock required")
+			account, ok := cfg.BearerAuthenticator.RequireAccount(w, r)
+			if !ok {
 				return
 			}
-			if err != nil {
-				writeErr(w, http.StatusServiceUnavailable, "session_unavailable", "session validation unavailable")
-				return
-			}
-			next(w, r, accountID)
+			next(w, r, account.AccountID)
 		}
 	}
 
 	// Library
-	mux.HandleFunc("/api/v1/library", withUnlock(func(w http.ResponseWriter, r *http.Request, accountID string) {
+	mux.HandleFunc("/api/v1/library", withBearerAccount(func(w http.ResponseWriter, r *http.Request, accountID string) {
 		if r.Method != http.MethodGet {
 			methodNotAllowed(w, []string{http.MethodGet})
 			return
@@ -199,7 +115,7 @@ func New(cfg Config, store Store) http.Handler {
 	}))
 
 	// Reader 2: one coherent published-version payload.
-	mux.HandleFunc("/api/v1/reader/", withUnlock(func(w http.ResponseWriter, r *http.Request, accountID string) {
+	mux.HandleFunc("/api/v1/reader/", withBearerAccount(func(w http.ResponseWriter, r *http.Request, accountID string) {
 		if r.Method != http.MethodGet {
 			methodNotAllowed(w, []string{http.MethodGet})
 			return
@@ -230,7 +146,7 @@ func New(cfg Config, store Store) http.Handler {
 	}))
 
 	// Progress
-	mux.HandleFunc("/api/v1/progress/", withUnlock(func(w http.ResponseWriter, r *http.Request, accountID string) {
+	mux.HandleFunc("/api/v1/progress/", withBearerAccount(func(w http.ResponseWriter, r *http.Request, accountID string) {
 		slug := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/progress/"), "/")
 		if slug == "" {
 			writeErr(w, http.StatusBadRequest, "slug", "missing slug")
@@ -309,7 +225,7 @@ func New(cfg Config, store Store) http.Handler {
 	}))
 
 	// Continue (top N recent)
-	mux.HandleFunc("/api/v1/continue", withUnlock(func(w http.ResponseWriter, r *http.Request, accountID string) {
+	mux.HandleFunc("/api/v1/continue", withBearerAccount(func(w http.ResponseWriter, r *http.Request, accountID string) {
 		if r.Method != http.MethodGet {
 			methodNotAllowed(w, []string{http.MethodGet})
 			return
@@ -344,7 +260,7 @@ func New(cfg Config, store Store) http.Handler {
 	}))
 
 	// Settings / Journey
-	mux.HandleFunc("/api/v1/settings", withUnlock(func(w http.ResponseWriter, r *http.Request, accountID string) {
+	mux.HandleFunc("/api/v1/settings", withBearerAccount(func(w http.ResponseWriter, r *http.Request, accountID string) {
 		switch r.Method {
 		case http.MethodGet:
 			out, err := store.SettingsGet(accountID)
@@ -388,18 +304,6 @@ func New(cfg Config, store Store) http.Handler {
 }
 
 /* -------------------- helpers & middleware -------------------- */
-
-func validPasscode(passcode string) bool {
-	if len(passcode) != 6 {
-		return false
-	}
-	for index := range passcode {
-		if passcode[index] < '0' || passcode[index] > '9' {
-			return false
-		}
-	}
-	return true
-}
 
 func noStore(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "no-store")

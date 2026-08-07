@@ -13,11 +13,9 @@ import (
 )
 
 func TestLibraryEndpointReturnsEnrichedSafeReadModel(t *testing.T) {
-	manager := testSessionManager(t, false, func() time.Time { return testSessionTime })
 	author := "Traditional"
 	updatedAt := time.Date(2026, time.July, 19, 12, 0, 0, 0, time.UTC)
 	store := &authTestStore{
-		accountExists: true,
 		libraryResponse: model.LibraryReadModel{
 			UnavailableItemCount: 1,
 			Items: []model.StoryItem{
@@ -50,9 +48,9 @@ func TestLibraryEndpointReturnsEnrichedSafeReadModel(t *testing.T) {
 	}
 	response := httptest.NewRecorder()
 
-	testHandler(t, store, manager).ServeHTTP(
+	testHandler(t, store).ServeHTTP(
 		response,
-		sessionRequest(t, manager, http.MethodGet, "/api/v1/library"),
+		bearerRequest(http.MethodGet, "/api/v1/library"),
 	)
 
 	if response.Code != http.StatusOK {
@@ -101,14 +99,13 @@ func TestLibraryEndpointReturnsEnrichedSafeReadModel(t *testing.T) {
 }
 
 func TestLibraryEndpointMethodAndSafeFailureContracts(t *testing.T) {
-	manager := testSessionManager(t, false, func() time.Time { return testSessionTime })
 
 	t.Run("method mismatch", func(t *testing.T) {
-		store := &authTestStore{accountExists: true}
+		store := &authTestStore{}
 		response := httptest.NewRecorder()
-		testHandler(t, store, manager).ServeHTTP(
+		testHandler(t, store).ServeHTTP(
 			response,
-			sessionRequest(t, manager, http.MethodPost, "/api/v1/library"),
+			bearerRequest(http.MethodPost, "/api/v1/library"),
 		)
 
 		if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != http.MethodGet {
@@ -121,13 +118,12 @@ func TestLibraryEndpointMethodAndSafeFailureContracts(t *testing.T) {
 
 	t.Run("database failure", func(t *testing.T) {
 		store := &authTestStore{
-			accountExists: true,
-			libraryErr:    errors.New("private relation and database detail"),
+			libraryErr: errors.New("private relation and database detail"),
 		}
 		response := httptest.NewRecorder()
-		testHandler(t, store, manager).ServeHTTP(
+		testHandler(t, store).ServeHTTP(
 			response,
-			sessionRequest(t, manager, http.MethodGet, "/api/v1/library"),
+			bearerRequest(http.MethodGet, "/api/v1/library"),
 		)
 
 		if response.Code != http.StatusInternalServerError || response.Header().Get("Cache-Control") != "no-store" {

@@ -266,7 +266,7 @@ test('a failed Retry remains unavailable and cannot enable PUT', async () => {
   assert.deepEqual(reader.writes, [])
 })
 
-test('Retry 401 invokes the signed-session-loss transition', async () => {
+test('Retry 401 remains a distinct authentication failure', async () => {
   const locked = []
   const error = Object.assign(new Error('session ended'), { status: 401 })
   const controller = await baselineController(async () => {
@@ -274,12 +274,12 @@ test('Retry 401 invokes the signed-session-loss transition', async () => {
   })
   controller.subscribe((state) => {
     if (state.status === 'unavailable' && state.error?.status === 401) {
-      locked.push('/unlock?next=/read/test-story')
+      locked.push('/account/login?next=/read/test-story')
     }
   })
 
   await controller.load()
-  assert.deepEqual(locked, ['/unlock?next=/read/test-story'])
+  assert.deepEqual(locked, ['/account/login?next=/read/test-story'])
 })
 
 test('successful Retry changes the baseline to ready', async () => {

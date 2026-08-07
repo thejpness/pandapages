@@ -44,7 +44,7 @@ test.describe('Reader content and route states', () => {
     expect(api.legacyRequests).toEqual([])
   })
 
-  test('scenario 13: a Reader 401 uses Unlock with the safe current story next path', async ({
+  test('scenario 13: a Reader 401 uses sign-in with the safe current story next path', async ({
     page,
     api,
   }) => {
@@ -54,12 +54,12 @@ test.describe('Reader content and route states', () => {
     })
 
     await page.goto(`/read/${READER_SLUG}`)
-    await expect(page).toHaveURL(/\/unlock(?:\?|$)/)
+    await expect(page).toHaveURL(/\/account\/login(?:\?|$)/)
     await expect(page.getByRole('heading', { name: 'Panda Pages' })).toBeVisible()
     expect(new URL(page.url()).searchParams.get('next')).toBe(`/read/${READER_SLUG}`)
   })
 
-  test('scenario 14: a 404 is Story not found and never Unlock', async ({ page, api }) => {
+  test('scenario 14: a 404 is Story not found and never sign-in', async ({ page, api }) => {
     api.enqueueStory(READER_SLUG, {
       status: 404,
       body: apiError('not_found', 'Story not found'),

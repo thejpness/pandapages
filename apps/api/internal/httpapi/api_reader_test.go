@@ -8,19 +8,16 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"pandapages/api/internal/model"
 )
 
 func TestReaderEndpointReturnsOneSafeCoherentPayload(t *testing.T) {
-	manager := testSessionManager(t, false, func() time.Time { return testSessionTime })
 	author := "Panda Pages Test Fixture"
 	level := 2
 	chapterKey := strings.Repeat("b", 64)
 	chapterOccurrence := 1
 	store := &authTestStore{
-		accountExists: true,
 		readerResponse: model.ReaderStory{
 			Slug:     "moonlit-cafe",
 			Title:    "Moonlit Café",
@@ -41,9 +38,9 @@ func TestReaderEndpointReturnsOneSafeCoherentPayload(t *testing.T) {
 		},
 	}
 	response := httptest.NewRecorder()
-	testHandler(t, store, manager).ServeHTTP(
+	testHandler(t, store).ServeHTTP(
 		response,
-		sessionRequest(t, manager, http.MethodGet, "/api/v1/reader/moonlit-cafe"),
+		bearerRequest(http.MethodGet, "/api/v1/reader/moonlit-cafe"),
 	)
 
 	if response.Code != http.StatusOK {
@@ -75,7 +72,6 @@ func TestReaderEndpointReturnsOneSafeCoherentPayload(t *testing.T) {
 }
 
 func TestReaderEndpointMethodAndFailureContracts(t *testing.T) {
-	manager := testSessionManager(t, false, func() time.Time { return testSessionTime })
 	tests := []struct {
 		name       string
 		method     string
@@ -83,16 +79,16 @@ func TestReaderEndpointMethodAndFailureContracts(t *testing.T) {
 		wantStatus int
 		wantAllow  string
 	}{
-		{name: "missing story", method: http.MethodGet, store: &authTestStore{accountExists: true, readerErr: sql.ErrNoRows}, wantStatus: http.StatusNotFound},
-		{name: "store failure", method: http.MethodGet, store: &authTestStore{accountExists: true, readerErr: errors.New("private SQL detail")}, wantStatus: http.StatusInternalServerError},
-		{name: "method mismatch", method: http.MethodPost, store: &authTestStore{accountExists: true}, wantStatus: http.StatusMethodNotAllowed, wantAllow: http.MethodGet},
+		{name: "missing story", method: http.MethodGet, store: &authTestStore{readerErr: sql.ErrNoRows}, wantStatus: http.StatusNotFound},
+		{name: "store failure", method: http.MethodGet, store: &authTestStore{readerErr: errors.New("private SQL detail")}, wantStatus: http.StatusInternalServerError},
+		{name: "method mismatch", method: http.MethodPost, store: &authTestStore{}, wantStatus: http.StatusMethodNotAllowed, wantAllow: http.MethodGet},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			response := httptest.NewRecorder()
-			testHandler(t, test.store, manager).ServeHTTP(
+			testHandler(t, test.store).ServeHTTP(
 				response,
-				sessionRequest(t, manager, test.method, "/api/v1/reader/test-story"),
+				bearerRequest(test.method, "/api/v1/reader/test-story"),
 			)
 			if response.Code != test.wantStatus {
 				t.Fatalf("status = %d, want %d; body = %s", response.Code, test.wantStatus, response.Body.String())
@@ -107,11 +103,10 @@ func TestReaderEndpointMethodAndFailureContracts(t *testing.T) {
 	}
 }
 
-func TestReaderEndpointAuthenticationAndSessionInfrastructureRemainDistinct(t *testing.T) {
-	manager := testSessionManager(t, false, func() time.Time { return testSessionTime })
+func TestReaderEndpointRequiresBearerIdentity(t *testing.T) {
 
 	unsigned := httptest.NewRecorder()
-	testHandler(t, &authTestStore{accountExists: true}, manager).ServeHTTP(
+	testHandler(t, &authTestStore{}).ServeHTTP(
 		unsigned,
 		httptest.NewRequest(http.MethodGet, "/api/v1/reader/test-story", nil),
 	)
@@ -119,27 +114,25 @@ func TestReaderEndpointAuthenticationAndSessionInfrastructureRemainDistinct(t *t
 		t.Fatalf("unsigned status = %d, want 401", unsigned.Code)
 	}
 
-	unavailable := httptest.NewRecorder()
-	testHandler(t, &authTestStore{accountExistsErr: errors.New("database unavailable")}, manager).ServeHTTP(
-		unavailable,
-		sessionRequest(t, manager, http.MethodGet, "/api/v1/reader/test-story"),
-	)
-	if unavailable.Code != http.StatusServiceUnavailable {
-		t.Fatalf("unavailable status = %d, want 503", unavailable.Code)
+	missingAccount := httptest.NewRecorder()
+	req := bearerRequest(http.MethodGet, "/api/v1/reader/test-story")
+	req.Header.Del("X-PP-Account-ID")
+	testHandler(t, &authTestStore{}).ServeHTTP(missingAccount, req)
+	if missingAccount.Code != http.StatusBadRequest {
+		t.Fatalf("missing account status = %d, want 400", missingAccount.Code)
 	}
 }
 
 func TestReaderOnePathsAreRemoved(t *testing.T) {
-	manager := testSessionManager(t, false, func() time.Time { return testSessionTime })
-	store := &authTestStore{accountExists: true}
+	store := &authTestStore{}
 	for _, path := range []string{
 		"/api/v1/story/test-story",
 		"/api/v1/story/test-story/segments",
 	} {
 		response := httptest.NewRecorder()
-		testHandler(t, store, manager).ServeHTTP(
+		testHandler(t, store).ServeHTTP(
 			response,
-			sessionRequest(t, manager, http.MethodGet, path),
+			bearerRequest(http.MethodGet, path),
 		)
 		if response.Code != http.StatusNotFound {
 			t.Fatalf("%s status = %d, want 404", path, response.Code)

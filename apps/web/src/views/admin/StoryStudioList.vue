@@ -8,7 +8,6 @@ import {
   type AdminStoryListItem,
   type AdminStoryStatus,
 } from '@/lib/api'
-import { authState } from '@/lib/session'
 import {
   filterStoryCatalogue,
   projectStoryStudioError,
@@ -31,9 +30,8 @@ const visibleStories = computed(() =>
 )
 
 async function handleSessionEnded() {
-  authState.confirmLocked()
   await router.replace({
-    path: '/unlock',
+    path: '/account/login',
     query: { next: '/admin/stories' },
   })
 }

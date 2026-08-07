@@ -8,7 +8,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   navigate: [path: string]
-  lock: []
+  signout: []
 }>()
 
 const menuOpen = ref(false)
@@ -76,10 +76,10 @@ function navigate(path: string) {
           type="button"
           class="studio-nav__lock"
           :disabled="locking"
-          aria-label="Lock Panda Pages"
-          @click="emit('lock')"
+          aria-label="Sign out of Panda Pages"
+          @click="emit('signout')"
         >
-          {{ locking ? 'Locking…' : 'Lock' }}
+          {{ locking ? 'Signing out…' : 'Sign out' }}
         </button>
       </nav>
     </div>

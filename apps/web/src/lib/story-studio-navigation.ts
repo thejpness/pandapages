@@ -123,7 +123,7 @@ export function projectStoryStudioError(error: unknown): StoryStudioError {
     return {
       kind: 'session',
       title: 'Session ended',
-      message: 'Unlock Panda Pages to continue in Story Studio.',
+      message: 'Sign in to Panda Pages to continue in Story Studio.',
       retryable: false,
     }
   }
