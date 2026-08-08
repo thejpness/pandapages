@@ -184,12 +184,12 @@ test('catalogue search and finite status filter preserve server order', async ()
   assert.deepEqual(navigation.filterStoryCatalogue(items, '', 'all'), items)
 })
 
-test('five edition keys have stable labels and only Classic is publishable', async () => {
+test('five edition keys have stable labels and every healthy edition can join a release', async () => {
   const navigation = await loadNavigation()
   assert.deepEqual(navigation.storyEditionOrder, ['classic','confident-readers','growing-readers','story-explorers','little-listeners'])
   assert.deepEqual(navigation.storyEditionOrder.map(navigation.storyEditionLabel), ['Classic','Confident Readers','Growing Readers','Story Explorers','Little Listeners'])
-  assert.equal(navigation.versionCanPublish(version({ editionKey: 'growing-readers' })), false)
-  assert.equal(navigation.versionCanPublish(version()), true)
+  assert.equal(navigation.versionCanIncludeInRelease(version({ editionKey: 'growing-readers' })), true)
+  assert.equal(navigation.versionCanIncludeInRelease(version({ health: 'repair_required' })), false)
 })
 
 test('story statuses and version health use human labels', async () => {
@@ -211,9 +211,9 @@ test('story statuses and version health use human labels', async () => {
 test('version action eligibility and unpublish availability follow finite state', async () => {
   const navigation = await loadNavigation()
   assert.equal(navigation.versionCanSeedDraft(version()), true)
-  assert.equal(navigation.versionCanPublish(version()), true)
-  assert.equal(navigation.versionCanPublish(version({ isPublished: true })), false)
-  assert.equal(navigation.versionCanPublish(version({ health: 'repair_required' })), false)
+  assert.equal(navigation.versionCanIncludeInRelease(version()), true)
+  assert.equal(navigation.versionCanIncludeInRelease(version({ isPublished: true })), true)
+  assert.equal(navigation.versionCanIncludeInRelease(version({ health: 'repair_required' })), false)
   assert.equal(navigation.versionCanSeedDraft(version({ health: 'unavailable' })), false)
   assert.equal(navigation.storyCanUnpublish(story()), true)
   assert.equal(navigation.storyCanUnpublish(story('unpublished')), false)

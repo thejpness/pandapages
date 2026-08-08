@@ -49,6 +49,16 @@ const editionKeys = [
   'little-listeners',
 ] as const
 
+type TestReleaseSummary = {
+  release: number
+  createdAt: string
+  editions: Array<{
+    editionKey: (typeof editionKeys)[number]
+    versionId: string
+    version: number
+  }>
+}
+
 function editionSlots(
   status:
     | 'draft_only'
@@ -83,6 +93,15 @@ function summary(
 ) {
   const published = status === 'published' || status === 'published_with_draft'
   const draft = status === 'draft_only' || status === 'published_with_draft'
+  const currentRelease: TestReleaseSummary | null = published
+    ? {
+        release: 1,
+        createdAt: timestamp,
+        editions: [
+          { editionKey: 'classic', versionId: versionOne, version: 1 },
+        ],
+      }
+    : null
   return {
     slug,
     title,
@@ -102,15 +121,18 @@ function summary(
       draft ? { versionId: versionTwo, version: 2 } : null,
       options.versionCount ?? (status === 'published_with_draft' ? 2 : 1),
     ),
+    currentRelease,
+    releaseCount: published ? 1 : 0,
   }
 }
 
 type TestStorySummary = ReturnType<typeof summary>
 type TestVersionSummary = ReturnType<typeof versionSummary>
-type TestStoryDetail = TestStorySummary & {
+type TestStoryDetail = Omit<TestStorySummary, 'editions'> & {
   createdAt: string
   versions: TestVersionSummary[]
   editions: Array<TestStorySummary['editions'][number] & { versions: TestVersionSummary[] }>
+  releases: Array<NonNullable<TestStorySummary['currentRelease']>>
 }
 
 function withDetail(item: TestStorySummary, versions: TestVersionSummary[]): TestStoryDetail {
@@ -122,6 +144,7 @@ function withDetail(item: TestStorySummary, versions: TestVersionSummary[]): Tes
       ...edition,
       versions: edition.editionKey === 'classic' ? versions : [],
     })),
+    releases: item.currentRelease ? [item.currentRelease] : [],
   }
 }
 
@@ -366,6 +389,10 @@ class StudioAPI {
         ? (existing.publishedVersion ?? null)
         : null
       if (existing?.publishedVersion) item.status = 'published_with_draft'
+      if (existing) {
+        item.currentRelease = existing.currentRelease
+        item.releaseCount = existing.releaseCount
+      }
       const versions = existing
         ? [
             versionSummary(resultId, resultVersion, { isDraft: true }),
@@ -421,40 +448,99 @@ class StudioAPI {
       return
     }
 
-    const publishMatch = /^\/api\/v1\/admin\/stories\/([^/]+)\/publish$/.exec(path)
-    if (publishMatch && method === 'POST') {
-      const slug = decodeURIComponent(publishMatch[1])
+    const releaseMatch = /^\/api\/v1\/admin\/stories\/([^/]+)\/releases$/.exec(path)
+    if (releaseMatch && method === 'POST') {
+      const slug = decodeURIComponent(releaseMatch[1])
       const detail = this.details.get(slug)
-      const rawVersionId = (body as Record<string, unknown>).versionId
-      const id = typeof rawVersionId === 'string' ? rawVersionId : ''
-      const versions = detail?.versions ?? []
-      const selected = versions.find((version) => version.versionId === id)
-      if (!detail || !selected || selected.health !== 'ready') {
+      const requested = (body as { editions?: Array<{ editionKey?: string; versionId?: string }> }).editions ?? []
+      if (!detail || requested.length < 1 || requested.length > editionKeys.length) {
         await this.fail(route, {
-          status: 409,
-          code: 'publish_repair_required',
-          message: 'story version is unavailable or unreadable',
+          status: 400,
+          code: 'release_invalid',
+          message: 'Story release is invalid',
         })
         return
       }
-      for (const version of versions) version.isPublished = version.versionId === id
-      detail.publishedVersion = { versionId: id, version: selected.version }
-      detail.status = detail.draftVersion?.versionId === id ? 'published' : 'published_with_draft'
-      const classic = detail.editions[0]
-      classic.publishedVersion = detail.publishedVersion
-      classic.draftVersion = detail.draftVersion
-      classic.status = detail.status
-      for (const version of classic.versions) version.isPublished = version.versionId === id
+
+      const members: Array<{ editionKey: typeof editionKeys[number]; versionId: string; version: number }> = []
+      for (const item of requested) {
+        if (!editionKeys.includes(item.editionKey as typeof editionKeys[number]) || typeof item.versionId !== 'string') {
+          await this.fail(route, {
+            status: 400,
+            code: 'release_invalid',
+            message: 'Story release is invalid',
+          })
+          return
+        }
+        const editionKey = item.editionKey as typeof editionKeys[number]
+        const edition = detail.editions.find((candidate) => candidate.editionKey === editionKey)
+        const selected = edition?.versions.find((version) => version.versionId === item.versionId)
+        if (!edition || !selected || selected.health !== 'ready') {
+          await this.fail(route, {
+            status: 409,
+            code: 'release_repair_required',
+            message: 'stored release state or edition version requires repair',
+          })
+          return
+        }
+        members.push({
+          editionKey,
+          versionId: selected.versionId,
+          version: selected.version,
+        })
+      }
+
+      members.sort((left, right) => editionKeys.indexOf(left.editionKey) - editionKeys.indexOf(right.editionKey))
+      detail.releaseCount += 1
+      const release = {
+        release: detail.releaseCount,
+        createdAt: timestamp,
+        editions: members,
+      }
+      detail.currentRelease = release
+      detail.releases = [release, ...detail.releases]
+
+      for (const edition of detail.editions) {
+        const live = members.find((member) => member.editionKey === edition.editionKey)
+        edition.publishedVersion = live
+          ? { versionId: live.versionId, version: live.version }
+          : null
+        for (const version of edition.versions) {
+          version.isPublished = version.versionId === live?.versionId
+        }
+        if (live) {
+          edition.status =
+            edition.draftVersion && edition.draftVersion.versionId !== live.versionId
+              ? 'published_with_draft'
+              : 'published'
+        } else if (edition.draftVersion) {
+          edition.status = 'draft_only'
+        } else if (edition.versionCount > 0) {
+          edition.status = 'unpublished'
+        } else {
+          edition.status = 'empty'
+        }
+      }
+
+      const compatibility = members[0]
+      detail.publishedVersion = {
+        versionId: compatibility.versionId,
+        version: compatibility.version,
+      }
+      detail.status = detail.editions.some(
+        (edition) =>
+          edition.draftVersion &&
+          edition.draftVersion.versionId !== edition.publishedVersion?.versionId,
+      )
+        ? 'published_with_draft'
+        : 'published'
+
       const item = this.stories.find((candidate) => candidate.slug === slug)
       if (item) Object.assign(item, detail)
       await this.fulfill(route, {
         slug,
-        editionKey: 'classic',
-        status: detail.status,
-        publishedVersion: detail.publishedVersion,
-        draftVersion: detail.draftVersion,
-        versionCount: detail.versionCount,
-        updatedAt: timestamp,
+        outcome: 'created',
+        release,
       })
       return
     }
@@ -467,24 +553,29 @@ class StudioAPI {
         await this.fail(route, { status: 404, code: 'unpublish_not_found', message: 'story was not found' })
         return
       }
-      for (const version of detail.versions) version.isPublished = false
+      for (const edition of detail.editions) {
+        edition.publishedVersion = null
+        for (const version of edition.versions) version.isPublished = false
+        if (edition.draftVersion) edition.status = 'draft_only'
+        else if (edition.versionCount > 0) edition.status = 'unpublished'
+        else edition.status = 'empty'
+      }
+      detail.currentRelease = null
       detail.publishedVersion = null
-      detail.status = detail.draftVersion ? 'draft_only' : 'unpublished'
-      const classic = detail.editions[0]
-      classic.publishedVersion = null
-      classic.draftVersion = detail.draftVersion
-      classic.status = detail.status
-      for (const version of classic.versions) version.isPublished = false
+      detail.status = detail.editions.some((edition) => edition.draftVersion)
+        ? 'draft_only'
+        : 'unpublished'
       const item = this.stories.find((candidate) => candidate.slug === slug)
       if (item) Object.assign(item, detail)
       await this.fulfill(route, {
         slug,
-        editionKey: 'classic',
         status: detail.status,
         publishedVersion: null,
         draftVersion: detail.draftVersion,
         versionCount: detail.versionCount,
         updatedAt: timestamp,
+        currentRelease: null,
+        releaseCount: detail.releaseCount,
       })
       return
     }
@@ -586,10 +677,10 @@ test('catalogue loads human statuses and supports deterministic search and filte
   await expectPandaVisualShell(page)
 
   const catalogue = page.getByLabel('Story catalogue')
-  await expect(catalogue.getByText('Published · New draft')).toBeVisible()
-  await expect(catalogue.getByText('Draft only')).toBeVisible()
-  await expect(catalogue.getByText('Unpublished')).toBeVisible()
-  await expect(catalogue.getByText('Needs attention')).toBeVisible()
+  await expect(catalogue.locator('.studio-status').filter({ hasText: /^Published · New draft$/ })).toBeVisible()
+  await expect(catalogue.locator('.studio-status').filter({ hasText: /^Draft only$/ })).toBeVisible()
+  await expect(catalogue.locator('.studio-status').filter({ hasText: /^Unpublished$/ })).toBeVisible()
+  await expect(catalogue.locator('.studio-status').filter({ hasText: /^Needs attention$/ })).toBeVisible()
 
   await page.getByLabel('Search stories').fill('moon')
   await expect(page.getByRole('heading', { name: 'The Quiet Moon' })).toBeVisible()
@@ -796,18 +887,18 @@ test('repair-required save conflict and repair summaries disable unsafe actions'
   await page.getByRole('button', { name: 'Stories', exact: true }).click()
   const leave = page.getByRole('dialog', { name: 'Leave with unsaved changes?' })
   await leave.getByRole('button', { name: 'Discard changes and leave' }).click()
-  await page.getByRole('heading', { name: 'The Tangled Story' }).locator('..').getByRole('button', { name: 'Review story' }).click()
+  await page.getByRole('heading', { name: 'The Tangled Story' }).locator('xpath=ancestor::article').getByRole('button', { name: 'Review story' }).click()
   await expect(page.getByRole('heading', { level: 2, name: 'Needs attention' })).toBeVisible()
   await expect(page.locator('.repair-banner')).toHaveCSS(
     'background-color',
     'rgb(255, 242, 216)',
   )
-  await expect(page.getByRole('button', { name: 'Publish selected Classic version' })).toBeDisabled()
-  await expect(page.getByText('This stored version cannot safely be reused or published.')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Review release' })).toBeDisabled()
+  await expect(page.getByText('This stored version cannot safely be reused or included in a release.')).toBeVisible()
   expect(await seriousOrCriticalViolations(page)).toEqual([])
 })
 
-test('publish is deliberate, retains history and exposes Reader only after success', async ({
+test('release publication is deliberate, immutable and exposes Reader only after success', async ({
   page,
 }) => {
   const api = new StudioAPI()
@@ -817,20 +908,25 @@ test('publish is deliberate, retains history and exposes Reader only after succe
   await expect(page.locator('.edition-card')).toHaveCount(5)
   await expect(page.getByRole('heading', { name: 'Five-edition workspace' })).toBeVisible()
   await expect(page.locator('.version-row')).toHaveCount(2)
+  await expect(page.getByLabel('Include Classic in release')).toBeChecked()
+  await expect(page.getByLabel('Classic release version')).toHaveValue(versionTwo)
   expect(await seriousOrCriticalViolations(page)).toEqual([])
-  await page.getByLabel('Select version 2 for publication').check()
-  await page.getByRole('button', { name: 'Publish selected Classic version' }).click()
-  const dialog = page.getByRole('dialog', { name: 'Publish this version?' })
-  await expect(dialog.getByText('Version 1 is currently published.')).toBeVisible()
-  await expect(dialog.getByText(/Existing historical versions and reading progress are retained/)).toBeVisible()
+
+  await page.getByRole('button', { name: 'Review release' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Publish release?' })
+  await expect(dialog.getByText(/Release 2 will replace the story's current live edition set atomically/)).toBeVisible()
+  await expect(dialog.getByText('Classic')).toBeVisible()
+  await expect(dialog.getByText('v2')).toBeVisible()
   expect(await seriousOrCriticalViolations(page)).toEqual([])
-  await dialog.getByRole('button', { name: 'Publish version' }).click()
-  await expect(page.getByText('Classic version 2 published. Readers can now open it.')).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Open published Classic' })).toBeVisible()
-  expect(api.count('POST', '/api/v1/admin/stories/panda-tale/publish')).toBe(1)
+
+  await dialog.getByRole('button', { name: 'Publish release' }).click()
+  await expect(page.getByText('Release 2 published with 1 edition.')).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Open published story' })).toBeVisible()
+  expect(api.count('POST', '/api/v1/admin/stories/panda-tale/releases')).toBe(1)
+  expect(api.count('POST', '/api/v1/admin/stories/panda-tale/publish')).toBe(0)
 })
 
-test('unpublish removes Reader availability while retaining drafts and version history', async ({
+test('unpublish withdraws the current release while retaining release and version history', async ({
   page,
 }) => {
   const api = new StudioAPI()
@@ -838,14 +934,15 @@ test('unpublish removes Reader availability while retaining drafts and version h
   await page.goto('/admin/stories/panda-tale')
   await expect(page.locator('.version-row')).toHaveCount(2)
   const initialRows = await page.locator('.version-row').count()
-  await page.getByRole('button', { name: 'Unpublish Classic' }).click()
+  await page.getByRole('button', { name: 'Unpublish story' }).click()
   const dialog = page.getByRole('dialog', { name: 'Unpublish this story?' })
   await expect(dialog.getByText(/Drafts, immutable versions and historical reading progress remain/)).toBeVisible()
   await expect(dialog).toHaveCSS('background-color', 'rgb(255, 254, 250)')
   expect(await seriousOrCriticalViolations(page)).toEqual([])
   await dialog.getByRole('button', { name: 'Unpublish story' }).click()
-  await expect(page.getByText(/Classic unpublished/)).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Open published Classic' })).toBeHidden()
+  await expect(page.getByText(/Story unpublished/)).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Open published story' })).toBeHidden()
+  await expect(page.getByText('Release history · 1')).toBeVisible()
   await expect(page.locator('.version-row__number').filter({ hasText: /^v2$/ })).toBeVisible()
   expect(await page.locator('.version-row').count()).toBe(initialRows)
   expect(api.count('POST', '/api/v1/admin/stories/panda-tale/unpublish')).toBe(1)
@@ -927,10 +1024,10 @@ test('stale detail response cannot replace a newer route', async ({ page }) => {
   const gate = deferred<void>()
   api.detailGates.set('panda-tale', gate)
   await openCatalogue(page, api)
-  await page.getByRole('heading', { name: 'The Panda Tale' }).locator('..').getByRole('button', { name: 'Manage story' }).click()
+  await page.getByRole('heading', { name: 'The Panda Tale' }).locator('xpath=ancestor::article').getByRole('button', { name: 'Review story' }).click()
   await expect(page.getByText('Opening story')).toBeVisible()
   await page.getByRole('button', { name: 'Stories', exact: true }).click()
-  await page.getByRole('heading', { name: 'The Tangled Story' }).locator('..').getByRole('button', { name: 'Review story' }).click()
+  await page.getByRole('heading', { name: 'The Tangled Story' }).locator('xpath=ancestor::article').getByRole('button', { name: 'Review story' }).click()
   await expect(page.getByRole('heading', { level: 1, name: 'The Tangled Story' })).toBeVisible()
   gate.resolve()
   await expect(page.getByRole('heading', { level: 1, name: 'The Tangled Story' })).toBeVisible()

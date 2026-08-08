@@ -29,7 +29,7 @@ const editionLabels: Record<AdminStoryEditionKey, string> = {
   'little-listeners': 'Little Listeners',
 }
 const editionDescriptions: Record<AdminStoryEditionKey, string> = {
-  classic: 'The fullest Panda Pages adaptation and current Reader publication edition.',
+  classic: 'The fullest Panda Pages adaptation. Include it in a story release when appropriate.',
   'confident-readers': 'A substantial independent reading edition with streamlined scope.',
   'growing-readers': 'A supported reading edition with reduced narrative complexity.',
   'story-explorers': 'A shorter exploratory edition built around the core story journey.',
@@ -140,8 +140,8 @@ export function versionCanSeedDraft(version: AdminVersionSummary): boolean {
   return version.health === 'ready'
 }
 
-export function versionCanPublish(version: AdminVersionSummary): boolean {
-  return version.editionKey === 'classic' && version.health === 'ready' && !version.isPublished
+export function versionCanIncludeInRelease(version: AdminVersionSummary): boolean {
+  return version.health === 'ready'
 }
 
 export function storyCanUnpublish(story: AdminStoryDetail): boolean {

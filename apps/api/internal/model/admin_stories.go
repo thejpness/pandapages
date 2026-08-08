@@ -104,6 +104,8 @@ type AdminStorySummary struct {
 	UpdatedAt        string                      `json:"updatedAt"`
 	Source           AdminStorySourceSummary     `json:"source"`
 	Editions         []AdminEditionSummary       `json:"editions"`
+	CurrentRelease   *AdminReleaseSummary        `json:"currentRelease"`
+	ReleaseCount     int                         `json:"releaseCount"`
 }
 
 type AdminStoriesListResponse struct {
@@ -139,6 +141,9 @@ type AdminStoryDetailResponse struct {
 	Source           AdminStorySourceSummary     `json:"source"`
 	Versions         []AdminVersionSummary       `json:"versions"`
 	Editions         []AdminEditionDetail        `json:"editions"`
+	CurrentRelease   *AdminReleaseSummary        `json:"currentRelease"`
+	ReleaseCount     int                         `json:"releaseCount"`
+	Releases         []AdminReleaseSummary       `json:"releases"`
 }
 
 type AdminVersionSourceResponse struct {
@@ -164,10 +169,11 @@ type AdminVersionSourceResponse struct {
 
 type AdminStoryStatusResponse struct {
 	Slug             string                      `json:"slug"`
-	EditionKey       AdminStoryEditionKey        `json:"editionKey"`
 	Status           AdminStoryStatus            `json:"status"`
 	PublishedVersion *AdminVersionPointerSummary `json:"publishedVersion"`
 	DraftVersion     *AdminVersionPointerSummary `json:"draftVersion"`
 	VersionCount     int                         `json:"versionCount"`
 	UpdatedAt        string                      `json:"updatedAt"`
+	CurrentRelease   *AdminReleaseSummary        `json:"currentRelease"`
+	ReleaseCount     int                         `json:"releaseCount"`
 }

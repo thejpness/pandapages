@@ -46,6 +46,9 @@ func (*adminStore) AdminEditionBundleUpsert(string, model.AdminEditionBundleUpse
 func (*adminStore) AdminPublishStory(string, string, string) (model.AdminStoryStatusResponse, error) {
 	return model.AdminStoryStatusResponse{}, nil
 }
+func (*adminStore) AdminCreateRelease(string, string, model.AdminCreateReleaseRequest) (model.AdminCreateReleaseResponse, error) {
+	return model.AdminCreateReleaseResponse{}, nil
+}
 func (*adminStore) AdminUnpublish(string, string) (model.AdminStoryStatusResponse, error) {
 	return model.AdminStoryStatusResponse{}, nil
 }

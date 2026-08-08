@@ -213,7 +213,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("get edition-aware story detail: %v", err)
 		}
-		if detail.Status != model.AdminStoryStatusPublished ||
+		if detail.Status != model.AdminStoryStatusPublishedWithDraft ||
 			detail.VersionCount != 1 ||
 			len(detail.Versions) != 1 ||
 			detail.Versions[0].VersionID != classicDraft.VersionID ||
@@ -2053,8 +2053,15 @@ func TestReaderStoreIntegration(t *testing.T) {
 			t.Fatalf("republish loop: %v", err)
 		default:
 		}
-		if err := store.AdminPublish(readerAccountA, readerSlug, firstDraft.StoryVersionID); err != nil {
-			t.Fatalf("restore publication after race: %v", err)
+		// This test deliberately races the temporary Reader compatibility pointer
+		// directly. Restore that same projection directly; release creation is
+		// intentionally fail-closed while a current-release projection is drifted.
+		if _, err := adminDB.Exec(
+			`UPDATE stories SET published_version_id = $1 WHERE id = $2`,
+			firstDraft.StoryVersionID,
+			firstDraft.StoryID,
+		); err != nil {
+			t.Fatalf("restore Reader compatibility publication after race: %v", err)
 		}
 	})
 
@@ -2253,8 +2260,15 @@ func TestReaderStoreIntegration(t *testing.T) {
 			t.Fatalf("stale progress rows = %d, want 0", staleProgressCount)
 		}
 
-		if err := store.AdminPublish(readerAccountA, readerSlug, firstDraft.StoryVersionID); err != nil {
-			t.Fatalf("restore first publication after lock test: %v", err)
+		// The lock test deliberately committed drift only in the temporary
+		// Reader compatibility projection. Restore that projection directly;
+		// current release membership remains authoritative and unchanged.
+		if _, err := adminDB.Exec(
+			`UPDATE stories SET published_version_id = $1 WHERE id = $2`,
+			firstDraft.StoryVersionID,
+			firstDraft.StoryID,
+		); err != nil {
+			t.Fatalf("restore Reader compatibility publication after lock test: %v", err)
 		}
 	})
 
