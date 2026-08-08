@@ -914,7 +914,7 @@ grep -q 'OK.*00015_account_ownership_integrity.sql' \
   "$test_root/fresh-goose.out" "$test_root/fresh-goose.err"
 grep -q 'OK.*00016_identity_foundation.sql' \
   "$test_root/fresh-goose.out" "$test_root/fresh-goose.err"
-assert_query '19|true' "
+assert_query '20|true' "
   SELECT version_id || '|' || is_applied
   FROM goose_db_version ORDER BY id DESC LIMIT 1;
 " 'fresh latest migration marker'
@@ -1404,6 +1404,16 @@ expect_seed_failure malformed-invocation \
     "$seed_script" --unknown
 printf 'ok 11 - seed command fails closed for acknowledgement, target, Docker, service, and invocation errors\n'
 
+# Current explicit seed data now includes required story-edition ownership. Keep
+# the historical migration/cleanup cases above at their original boundaries,
+# then move this disposable database to the current schema before exercising
+# the current seed and API tooling.
+run_goose up >"$test_root/current-seed-schema-upgrade.out" 2>"$test_root/current-seed-schema-upgrade.err"
+assert_query '20|true' "
+  SELECT version_id || '|' || is_applied
+  FROM goose_db_version ORDER BY id DESC LIMIT 1;
+" 'current seed schema marker'
+
 env \
   PP_ALLOW_TEST_SEED=1 \
   PP_TEST_SEED_DATABASE="$database" \
@@ -1452,7 +1462,6 @@ assert_query '6|3|3|2|2|2|6|3|3|t|## Chapter Two — 世界|t|星の光 shimmere
 " 'explicit fixture ingestion segment shape'
 printf 'ok 13 - canonical keys, kinds, chapter propagation, and six independent fixture segments match ingestion\n'
 
-run_goose up-to 16 >"$test_root/identity-foundation-upgrade.out" 2>"$test_root/identity-foundation-upgrade.err"
 api_environment="$test_root/api.env"
 {
   printf 'DATABASE_URL=postgres://%s:%s@%s:5432/%s?sslmode=disable\n' \
@@ -1552,7 +1561,9 @@ assert_query '0|0|0|0|0|0|0|0|0|0|0|1|1|0' "
     (SELECT count(*) FROM reading_progress WHERE story_id = 'f17e0000-0000-4000-8000-000000000010'),
     (SELECT count(*) FROM story_contributors WHERE story_id = 'f17e0000-0000-4000-8000-000000000010'),
     (SELECT count(*) FROM stories WHERE id = 'a11e0000-0000-4000-8000-000000000010'),
-    (SELECT count(*) FROM profile_settings WHERE profile_id = 'a11e0000-0000-4000-8000-000000000001'),
+    (SELECT count(*) FROM account_settings
+       WHERE active_child_profile_id = 'a11e0000-0000-4000-8000-000000000002'
+         AND active_prompt_profile_id = 'a11e0000-0000-4000-8000-000000000003'),
     (SELECT count(*) FROM reading_progress WHERE story_id = 'a11e0000-0000-4000-8000-000000000010');
 " 'explicit fixture removal preservation'
 env \

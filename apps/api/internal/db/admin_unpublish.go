@@ -29,6 +29,13 @@ func (s *Store) AdminUnpublish(accountID, slug string) (model.AdminStoryStatusRe
 	if err != nil {
 		return model.AdminStoryStatusResponse{}, err
 	}
+	classicEditionID, err := loadClassicEditionID(ctx, tx, story.ID, true)
+	if err != nil {
+		return model.AdminStoryStatusResponse{}, err
+	}
+	if err := clearEditionPublishedPointer(ctx, tx, classicEditionID); err != nil {
+		return model.AdminStoryStatusResponse{}, err
+	}
 	if err := tx.QueryRowContext(ctx, `
 		UPDATE stories
 		SET published_version_id = NULL,

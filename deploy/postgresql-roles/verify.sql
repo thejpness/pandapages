@@ -7,7 +7,7 @@ SELECT current_setting('server_version_num')::integer >= 180000 AS assertion
 \if :assertion
 \else
   \warn 'verification failed: PostgreSQL 18 or newer is required'
-  \quit 3
+  SELECT 1 / 0;
 \endif
 
 SELECT current_database() = :'database_name' AS assertion
@@ -15,7 +15,7 @@ SELECT current_database() = :'database_name' AS assertion
 \if :assertion
 \else
   \warn 'verification failed: connected database does not match database_name'
-  \quit 3
+  SELECT 1 / 0;
 \endif
 
 WITH expected(role_name, can_login, connection_limit) AS (
@@ -41,7 +41,7 @@ JOIN pg_roles role ON role.rolname = expected.role_name
 \if :assertion
 \else
   \warn 'verification failed: role attributes do not match policy'
-  \quit 3
+  SELECT 1 / 0;
 \endif
 
 SELECT
@@ -61,7 +61,7 @@ WHERE member.rolname IN (:'migration_role', :'application_role', :'backup_role')
 \if :assertion
 \else
   \warn 'verification failed: an unexpected role membership or escalation path exists'
-  \quit 3
+  SELECT 1 / 0;
 \endif
 
 SELECT pg_get_userbyid(database.datdba) = :'owner_role' AS assertion
@@ -71,7 +71,7 @@ WHERE database.datname = :'database_name'
 \if :assertion
 \else
   \warn 'verification failed: application database owner is incorrect'
-  \quit 3
+  SELECT 1 / 0;
 \endif
 
 SELECT
@@ -106,7 +106,7 @@ WHERE database.datallowconn
 \if :assertion
 \else
   \warn 'verification failed: database CONNECT/TEMP privileges are broader than policy'
-  \quit 3
+  SELECT 1 / 0;
 \endif
 
 SELECT
@@ -128,7 +128,7 @@ WHERE namespace.nspname = 'public'
 \if :assertion
 \else
   \warn 'verification failed: public schema ownership or privileges are incorrect'
-  \quit 3
+  SELECT 1 / 0;
 \endif
 
 SELECT count(*) = 0 AS assertion
@@ -148,12 +148,13 @@ WHERE namespace.nspname = 'public'
 \if :assertion
 \else
   \warn 'verification failed: a non-extension application relation has the wrong owner'
-  \quit 3
+  SELECT 1 / 0;
 \endif
 
 WITH runtime_table(name) AS (
   VALUES
     ('accounts'),
+    ('account_settings'),
     ('account_memberships'),
     ('child_profiles'),
     ('contributors'),
@@ -164,6 +165,7 @@ WITH runtime_table(name) AS (
     ('prompt_profiles'),
     ('reading_progress'),
     ('stories'),
+    ('story_editions'),
     ('story_contributors'),
     ('story_sections'),
     ('story_segments'),
@@ -181,11 +183,16 @@ WITH runtime_table(name) AS (
     has_table_privilege(:'application_role', class.oid, 'TRIGGER') AS can_trigger,
     has_table_privilege(:'application_role', class.oid, 'MAINTAIN') AS can_maintain
   FROM runtime_table
-  LEFT JOIN pg_class class ON class.relname = runtime_table.name
+  JOIN pg_class class ON class.relname = runtime_table.name
     AND class.relnamespace = 'public'::regnamespace
     AND class.relkind IN ('r', 'p')
 )
-SELECT count(*) = 15 AND bool_and(
+SELECT
+  count(*) = 15
+    + CASE WHEN to_regclass('public.story_editions') IS NULL THEN 0 ELSE 1 END
+  AND (to_regclass('public.profile_settings') IS NULL)
+      <> (to_regclass('public.account_settings') IS NULL)
+  AND bool_and(
   oid IS NOT NULL
   AND can_select
   AND can_insert
@@ -201,7 +208,7 @@ FROM checked
 \if :assertion
 \else
   \warn 'verification failed: application table privileges are incomplete or excessive'
-  \quit 3
+  SELECT 1 / 0;
 \endif
 
 SELECT count(*) = 1 AND bool_and(
@@ -223,12 +230,13 @@ WHERE namespace.nspname = 'public'
 \if :assertion
 \else
   \warn 'verification failed: application Goose metadata privilege is not SELECT-only'
-  \quit 3
+  SELECT 1 / 0;
 \endif
 
 WITH runtime_table(name) AS (
   VALUES
     ('accounts'),
+    ('account_settings'),
     ('account_memberships'),
     ('child_profiles'),
     ('contributors'),
@@ -239,6 +247,7 @@ WITH runtime_table(name) AS (
     ('prompt_profiles'),
     ('reading_progress'),
     ('stories'),
+    ('story_editions'),
     ('story_contributors'),
     ('story_sections'),
     ('goose_db_version'),
@@ -265,7 +274,7 @@ WHERE namespace.nspname = 'public'
 \if :assertion
 \else
   \warn 'verification failed: application can access an unapproved table'
-  \quit 3
+  SELECT 1 / 0;
 \endif
 
 SELECT count(*) = 0 AS assertion
@@ -287,7 +296,7 @@ WHERE namespace.nspname = 'public'
 \if :assertion
 \else
   \warn 'verification failed: backup table privileges are incomplete or writable'
-  \quit 3
+  SELECT 1 / 0;
 \endif
 
 SELECT
@@ -299,7 +308,7 @@ SELECT
 \if :assertion
 \else
   \warn 'verification failed: required runtime function privileges are incorrect'
-  \quit 3
+  SELECT 1 / 0;
 \endif
 
 SELECT count(*) = 0 AS assertion
@@ -317,7 +326,7 @@ WHERE namespace.nspname = 'public'
 \if :assertion
 \else
   \warn 'verification failed: a public routine has an excessive runtime or backup grant'
-  \quit 3
+  SELECT 1 / 0;
 \endif
 
 SELECT count(*) = 0 AS assertion
@@ -333,7 +342,7 @@ WHERE namespace.nspname = 'public'
 \if :assertion
 \else
   \warn 'verification failed: backup sequence privileges are incomplete or writable'
-  \quit 3
+  SELECT 1 / 0;
 \endif
 
 SELECT NOT EXISTS (
@@ -353,7 +362,7 @@ SELECT NOT EXISTS (
 \if :assertion
 \else
   \warn 'verification failed: application can use the Goose bookkeeping sequence'
-  \quit 3
+  SELECT 1 / 0;
 \endif
 
 SELECT
@@ -379,7 +388,7 @@ SELECT
 \if :assertion
 \else
   \warn 'verification failed: migrator owner assumption or backup read-only default is missing'
-  \quit 3
+  SELECT 1 / 0;
 \endif
 
 ROLLBACK;

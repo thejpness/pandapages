@@ -300,6 +300,7 @@ WHERE namespace.nspname = 'public'
 WITH runtime_table(name) AS (
   VALUES
     ('accounts'),
+    ('account_settings'),
     ('account_memberships'),
     ('child_profiles'),
     ('contributors'),
@@ -310,6 +311,7 @@ WITH runtime_table(name) AS (
     ('prompt_profiles'),
     ('reading_progress'),
     ('stories'),
+    ('story_editions'),
     ('story_contributors'),
     ('story_sections'),
     ('story_segments'),
