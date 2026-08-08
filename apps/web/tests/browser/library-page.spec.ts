@@ -1,5 +1,5 @@
 import { AxeBuilder } from '@axe-core/playwright'
-import { expect, fixtureAccessToken, test as base } from './support/auth'
+import { expect, test as base } from './support/auth'
 import type { Page, Route } from '@playwright/test'
 type LibraryProgressFixture = {
   version: number
@@ -36,10 +36,6 @@ type CapturedRequest = {
 type ResponseGate = {
   started: Promise<void>
   fulfill: (body?: unknown, status?: number) => void
-}
-
-type SupabaseLogoutGate = ResponseGate & {
-  calls: () => number
 }
 
 type InternalGate = {
@@ -159,31 +155,6 @@ function createGate(defaultBody: unknown): InternalGate {
     },
   }
   return internal
-}
-
-async function deferSupabaseLogout(page: Page): Promise<SupabaseLogoutGate> {
-  const gate = createGate(undefined)
-  let callCount = 0
-  await page.route("https://auth.invalid/auth/v1/logout**", async (route) => {
-    const request = route.request()
-    callCount += 1
-    expect(request.method()).toBe("POST")
-    expect(request.headers().authorization).toBe("Bearer " + fixtureAccessToken)
-    expect(request.headers().cookie).toBeFalsy()
-    gate.signalStarted()
-    const response = await gate.result
-    const status = response.status ?? 204
-    await route.fulfill(
-      status === 204
-        ? { status }
-        : {
-            status,
-            contentType: "application/json; charset=utf-8",
-            body: JSON.stringify(response.body),
-          },
-    )
-  })
-  return { ...gate.publicGate, calls: () => callCount }
 }
 
 async function fulfillJson(
@@ -537,70 +508,6 @@ function boxesOverlap(
     first.y + first.height <= second.y ||
     second.y + second.height <= first.y
   )
-}
-
-async function expectParentMenuPresented(page: Page): Promise<void> {
-  const menu = page.locator('.parent-menu')
-  await expect(menu).toBeVisible()
-
-  const presentation = await menu.evaluate((element) => {
-    const rect = element.getBoundingClientRect()
-    const wrapper = element.closest('[data-reka-popper-content-wrapper]')
-    const header = document.querySelector('.library-header')
-    const style = getComputedStyle(element)
-    const wrapperStyle = wrapper ? getComputedStyle(wrapper) : null
-    const headerStyle = header ? getComputedStyle(header) : null
-    const target = document.elementFromPoint(
-      rect.x + rect.width / 2,
-      rect.y + rect.height / 2,
-    )
-
-    const rgb = (value: string) => {
-      const channels = value.match(/[\d.]+/g)?.map(Number) ?? []
-      return channels.slice(0, 3)
-    }
-    const luminance = (channels: number[]) => {
-      const linear = channels.map((channel) => {
-        const value = channel / 255
-        return value <= 0.04045
-          ? value / 12.92
-          : ((value + 0.055) / 1.055) ** 2.4
-      })
-      return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
-    }
-    const foreground = luminance(rgb(style.color))
-    const background = luminance(rgb(style.backgroundColor))
-    const contrast =
-      (Math.max(foreground, background) + 0.05) /
-      (Math.min(foreground, background) + 0.05)
-
-    return {
-      box: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-      viewport: { width: window.innerWidth, height: window.innerHeight },
-      hit: Boolean(target?.closest('.parent-menu')),
-      wrapperPosition: wrapperStyle?.position ?? null,
-      wrapperZ: Number.parseInt(wrapperStyle?.zIndex ?? '', 10),
-      headerZ: Number.parseInt(headerStyle?.zIndex ?? '', 10),
-      backgroundAlpha: Number(style.backgroundColor.match(/[\d.]+/g)?.[3] ?? 1),
-      contrast,
-    }
-  })
-
-  expect(presentation.box.width).toBeGreaterThan(0)
-  expect(presentation.box.height).toBeGreaterThan(0)
-  expect(presentation.box.x).toBeGreaterThanOrEqual(0)
-  expect(presentation.box.y).toBeGreaterThanOrEqual(0)
-  expect(presentation.box.x + presentation.box.width).toBeLessThanOrEqual(
-    presentation.viewport.width,
-  )
-  expect(presentation.box.y + presentation.box.height).toBeLessThanOrEqual(
-    presentation.viewport.height,
-  )
-  expect(presentation.wrapperPosition).toBe('fixed')
-  expect(presentation.wrapperZ).toBeGreaterThan(presentation.headerZ)
-  expect(presentation.hit).toBe(true)
-  expect(presentation.backgroundAlpha).toBe(1)
-  expect(presentation.contrast).toBeGreaterThanOrEqual(7)
 }
 
 async function expectNoSeriousOrCriticalViolations(
@@ -1031,32 +938,20 @@ test.describe('Library 2 bookshelf', () => {
     await expectPath(page, `/read/${CURRENT_STORY.slug}`)
   })
 
-  for (const destination of [
-    { action: 'Reading profile', path: '/journey' },
-    { action: 'Admin', path: '/admin/stories' },
-  ]) {
-    test(`pending search ownership is released for ${destination.action} navigation`, async ({
-      page,
-      api,
-    }) => {
-      await page.clock.install()
-      await gotoReadyLibrary(page)
-      await page.clock.fastForward(6_000)
-      const auth = api.deferIdentity()
-      await page
-        .getByRole('searchbox', { name: 'Search the library' })
-        .fill('Moon')
-      await page.getByRole('button', { name: 'Parent options' }).click()
-      const action = page
-        .getByRole('dialog', { name: 'Parent options' })
-        .getByRole('button', { name: destination.action })
-      await action.focus()
-      await action.press('Enter')
-      await auth.started
-      auth.fulfill()
-      await expectPath(page, destination.path)
-    })
-  }
+  test('pending search ownership is released when leaving reader mode', async ({
+    page,
+  }) => {
+    await page.clock.install()
+    await gotoReadyLibrary(page)
+    await page.clock.fastForward(6_000)
+    await page
+      .getByRole('searchbox', { name: 'Search the library' })
+      .fill('Moon')
+    await page.getByRole('button', { name: 'Leave reader mode' }).click()
+    await expectPath(page, '/profiles')
+    await page.clock.fastForward(220)
+    await expectPath(page, '/profiles')
+  })
 
   test('pending search ownership is released for a public route link', async ({
     page,
@@ -1300,55 +1195,6 @@ test.describe('Library 2 bookshelf', () => {
     ).not.toBe('hidden')
   })
 
-  test('opening story details dismisses the parent popover before isolating the dialog', async ({
-    page,
-  }) => {
-    await gotoReadyLibrary(page)
-    const parent = page.getByRole('button', { name: 'Parent options' })
-    await parent.click()
-    await expect(page.locator('.parent-menu')).toBeVisible()
-
-    await storyCard(page, CURRENT_STORY.title)
-      .getByRole('button', { name: `Details for ${CURRENT_STORY.title}` })
-      .click()
-    await expect(page.locator('.parent-menu')).toBeHidden()
-    const dialog = page.getByRole('dialog', { name: CURRENT_STORY.title })
-    await expect(dialog).toBeVisible()
-
-    const dialogBox = await dialog.boundingBox()
-    expect(dialogBox).not.toBeNull()
-    const topTargets = await page.evaluate(
-      ({ dialogPoint }) => {
-        const belongsToDialogLayer = (x: number, y: number) => {
-          const target = document.elementFromPoint(x, y)
-          return Boolean(
-            target?.closest(
-              '[data-testid="story-details-dialog"], .story-dialog__overlay',
-            ),
-          )
-        }
-        return {
-          dialog: belongsToDialogLayer(dialogPoint.x, dialogPoint.y),
-          viewportCorner: belongsToDialogLayer(8, 8),
-        }
-      },
-      {
-        dialogPoint: {
-          x: Number(dialogBox?.x) + Number(dialogBox?.width) / 2,
-          y: Number(dialogBox?.y) + Number(dialogBox?.height) / 2,
-        },
-      },
-    )
-    expect(topTargets).toEqual({
-      dialog: true,
-      viewportCorner: true,
-    })
-    await expect(page.locator('.library-skip-link')).toHaveAttribute(
-      'aria-hidden',
-      'true',
-    )
-  })
-
   test('Surprise me chooses only from the visible result set and disables with no eligible story', async ({
     page,
   }) => {
@@ -1482,7 +1328,7 @@ test.describe('Library 2 bookshelf', () => {
       page.getByRole('heading', { name: 'Stories could not be shown safely' }),
     ).toBeVisible()
     await expect(page.getByText('2 published stories could')).toBeVisible()
-    await expect(page.getByText('A parent needs to review')).toBeVisible()
+    await expect(page.getByText('An account owner needs to review')).toBeVisible()
     await expect(
       page.getByRole('heading', { name: 'No published stories yet' }),
     ).toHaveCount(0)
@@ -1532,77 +1378,6 @@ test.describe('Library 2 bookshelf', () => {
     expect(api.count('GET', '/api/v1/library')).toBe(1)
   })
 
-  test('the parent popover supports WebKit Tab order, reverse traversal, Escape, restoration, and onward focus @webkit-library', async ({
-    page,
-  }) => {
-    await gotoReadyLibrary(page)
-    const trigger = page.getByRole('button', { name: 'Parent options' })
-    await expect(trigger).toContainText('Parent options')
-    await trigger.click()
-
-    const menu = page.getByRole('dialog', { name: 'Parent options' })
-    await expect(menu).toBeVisible()
-    await expectParentMenuPresented(page)
-    await expect(menu.getByRole('button', { name: 'Who’s reading?' })).toBeVisible()
-    await expect(
-      menu.getByRole('button', { name: 'Reading profile' }),
-    ).toBeVisible()
-    await expect(menu.getByRole('button', { name: 'Admin' })).toBeVisible()
-    await expect(menu.getByRole('button')).toHaveCount(3)
-    await expect(page.locator('.surprise-button')).toBeVisible()
-
-    const readers = menu.getByRole('button', { name: 'Who’s reading?' })
-    const profile = menu.getByRole('button', { name: 'Reading profile' })
-    const admin = menu.getByRole('button', { name: 'Admin' })
-    const lock = page.getByRole('button', { name: 'Sign out of Panda Pages' })
-
-    await page.keyboard.press('Tab')
-    await expect(readers).toBeFocused()
-    await page.keyboard.press('Tab')
-    await expect(profile).toBeFocused()
-    await page.keyboard.press('Tab')
-    await expect(admin).toBeFocused()
-    await page.keyboard.press('Shift+Tab')
-    await expect(profile).toBeFocused()
-    await page.keyboard.press('Shift+Tab')
-    await expect(readers).toBeFocused()
-    await page.keyboard.press('Shift+Tab')
-    await expect(menu).toBeHidden()
-    await expect(trigger).toBeFocused()
-
-    await trigger.click()
-    await expectParentMenuPresented(page)
-    const search = page.getByRole('searchbox', { name: 'Search the library' })
-    await search.click()
-    await expect(menu).toBeHidden()
-    await expect(search).toBeFocused()
-    await trigger.focus()
-
-    await trigger.click()
-    await page.keyboard.press('Tab')
-    await page.keyboard.press('Escape')
-    await expect(menu).toBeHidden()
-    await expect(trigger).toBeFocused()
-
-    await trigger.click()
-    await page.keyboard.press('Tab')
-    await page.keyboard.press('Tab')
-    await page.keyboard.press('Tab')
-    await page.keyboard.press('Tab')
-    await expect(menu).toBeHidden()
-    await expect(lock).toBeFocused()
-
-    await trigger.click()
-    await menu.getByRole('button', { name: 'Reading profile' }).click()
-    await expectPath(page, '/journey')
-    await expect(
-      page.getByRole('heading', { name: 'Reading profile' }),
-    ).toBeVisible()
-    const body = await page.locator('body').innerText()
-    expect(body).not.toContain('Personalise stories')
-    expect(body).not.toContain('Personalised:')
-  })
-
   test('the public-home route works from representative mobile and desktop navigation', async ({
     page,
   }) => {
@@ -1626,64 +1401,6 @@ test.describe('Library 2 bookshelf', () => {
         ).toBeVisible()
       })
     }
-  })
-
-  test('sign-out waits for Supabase confirmation before clearing and navigating', async ({
-    page,
-  }) => {
-    await page.clock.install()
-    const logout = await deferSupabaseLogout(page)
-    await gotoReadyLibrary(page)
-    await page
-      .getByRole('searchbox', { name: 'Search the library' })
-      .fill('Moon')
-    await page.getByRole('button', { name: 'Sign out of Panda Pages' }).click()
-    await logout.started
-    await page
-      .getByRole('searchbox', { name: 'Search the library' })
-      .fill('Moonlit')
-
-    await page.clock.fastForward(220)
-    await expectPath(page, '/library')
-    expect(new URL(page.url()).searchParams.get('q')).toBeNull()
-    await expect(page.getByText(CURRENT_STORY.title).first()).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Sign out of Panda Pages' })).toContainText(
-      'Signing out…',
-    )
-
-    logout.fulfill()
-    await expectPath(page, '/account/login')
-    await expect(page.getByText(CURRENT_STORY.title)).toHaveCount(0)
-    expect(logout.calls()).toBe(1)
-  })
-
-  test('a failed Supabase sign-out keeps the library open and reports the failure', async ({
-    page,
-  }) => {
-    await page.clock.install()
-    const logout = await deferSupabaseLogout(page)
-    await gotoReadyLibrary(page)
-    const search = page.getByRole('searchbox', {
-      name: 'Search the library',
-    })
-    await search.fill('before failed Lock')
-    await page.getByRole('button', { name: 'Sign out of Panda Pages' }).click()
-    await logout.started
-    await search.fill('Moonlit')
-    await page.clock.fastForward(220)
-    await expectQuery(page, null)
-    logout.fulfill(
-      { error: { code: 'unavailable', message: 'Try later' } },
-      503,
-    )
-
-    const alert = page.getByRole('alert')
-    await expect(alert).toContainText('Could not sign out of Panda Pages')
-    await expect(alert).toContainText('Your library is still open')
-    await expectPath(page, '/library')
-    await expect(page.getByText(CURRENT_STORY.title).first()).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Sign out of Panda Pages' })).toBeEnabled()
-    await expect(search).toHaveValue('Moonlit')
   })
 
   test('has no page overflow across required phone, landscape, tablet, desktop, and 200%-equivalent viewports', async ({
@@ -1719,9 +1436,14 @@ test.describe('Library 2 bookshelf', () => {
           page.getByRole('searchbox', { name: 'Search the library' }),
         ).toBeVisible()
         await expect(
-          page.getByRole('button', { name: 'Parent options' }),
+          page.getByRole('button', { name: 'Leave reader mode' }),
         ).toBeVisible()
-        await expect(page.getByRole('button', { name: 'Sign out of Panda Pages' })).toBeVisible()
+        await expect(
+          page.getByRole('button', { name: 'Parent options' }),
+        ).toHaveCount(0)
+        await expect(
+          page.getByRole('button', { name: 'Sign out of Panda Pages' }),
+        ).toHaveCount(0)
       })
     }
 
@@ -1750,8 +1472,7 @@ test.describe('Library 2 bookshelf', () => {
         name: `Details for ${CURRENT_STORY.title}`,
       }),
       page.getByRole('button', { name: 'Clear search' }),
-      page.getByRole('button', { name: 'Parent options' }),
-      page.getByRole('button', { name: 'Sign out of Panda Pages' }),
+      page.getByRole('button', { name: 'Leave reader mode' }),
       page.getByRole('button', { name: 'Surprise me' }),
     ]
 
@@ -1837,8 +1558,7 @@ test.describe('Library 2 bookshelf', () => {
 
     const header = page.locator('.library-header')
     const brand = page.getByRole('link', { name: 'Panda Pages home' })
-    const parent = page.getByRole('button', { name: 'Parent options' })
-    const lock = page.getByRole('button', { name: 'Sign out of Panda Pages' })
+    const leaveReaderMode = page.getByRole('button', { name: 'Leave reader mode' })
     await expect(header).toHaveClass(/library-header--static/)
     expect(await header.evaluate((element) => getComputedStyle(element).position)).not.toBe(
       'sticky',
@@ -1851,23 +1571,20 @@ test.describe('Library 2 bookshelf', () => {
       ),
     ).toBe(0)
     await expect(brand).toBeVisible()
-    await expect(parent).toBeVisible()
-    await expect(lock).toBeVisible()
+    await expect(leaveReaderMode).toBeVisible()
+    await expect(
+      page.getByRole('button', { name: 'Parent options' }),
+    ).toHaveCount(0)
+    await expect(
+      page.getByRole('button', { name: 'Sign out of Panda Pages' }),
+    ).toHaveCount(0)
     const brandBox = await brand.boundingBox()
-    const parentBox = await parent.boundingBox()
-    const lockBox = await lock.boundingBox()
+    const leaveReaderModeBox = await leaveReaderMode.boundingBox()
     expect(brandBox).not.toBeNull()
-    expect(parentBox).not.toBeNull()
-    expect(lockBox).not.toBeNull()
-    expect(boxesOverlap(brandBox!, parentBox!)).toBe(false)
-    expect(boxesOverlap(brandBox!, lockBox!)).toBe(false)
-    expect(boxesOverlap(parentBox!, lockBox!)).toBe(false)
+    expect(leaveReaderModeBox).not.toBeNull()
+    expect(boxesOverlap(brandBox!, leaveReaderModeBox!)).toBe(false)
 
-    await parent.click()
-    await expectParentMenuPresented(page)
     await expectNoSeriousOrCriticalViolations(page)
-    await page.keyboard.press('Escape')
-    await expect(parent).toBeFocused()
 
     const card = storyCard(page, LONG_UNAUTHORED_STORY.title)
     await expect(card).toBeVisible()
