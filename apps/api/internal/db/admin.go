@@ -695,6 +695,26 @@ func updateStoryDraftCompatibility(
 // as idempotency candidate keys, but reuse succeeds only when the complete
 // locked immutable version still matches the canonical incoming story.
 func (s *Store) AdminDraftUpsert(accountID string, req model.AdminDraftUpsertRequest) (model.AdminDraftUpsertResponse, error) {
+	ctx, cancel := s.ctx()
+	defer cancel()
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return model.AdminDraftUpsertResponse{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	out, err := adminDraftUpsertTx(ctx, tx, accountID, req)
+	if err != nil {
+		return model.AdminDraftUpsertResponse{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return model.AdminDraftUpsertResponse{}, err
+	}
+	return out, nil
+}
+
+func adminDraftUpsertTx(ctx context.Context, tx *sql.Tx, accountID string, req model.AdminDraftUpsertRequest) (model.AdminDraftUpsertResponse, error) {
 	accountID = strings.TrimSpace(accountID)
 	if accountID == "" {
 		return model.AdminDraftUpsertResponse{}, fmt.Errorf("account required")
@@ -712,15 +732,6 @@ func (s *Store) AdminDraftUpsert(accountID string, req model.AdminDraftUpsertReq
 	if err != nil {
 		return model.AdminDraftUpsertResponse{}, err
 	}
-
-	ctx, cancel := s.ctx()
-	defer cancel()
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return model.AdminDraftUpsertResponse{}, err
-	}
-	defer func() { _ = tx.Rollback() }()
 
 	// story upsert (account-scoped)
 	sourceJSON, _ := json.Marshal(ing.Source)
@@ -839,10 +850,6 @@ func (s *Store) AdminDraftUpsert(accountID string, req model.AdminDraftUpsertReq
 					ON CONFLICT DO NOTHING
 				`, storyID, contribID)
 			}
-		}
-
-		if err := tx.Commit(); err != nil {
-			return model.AdminDraftUpsertResponse{}, err
 		}
 
 		return model.AdminDraftUpsertResponse{
@@ -1019,10 +1026,6 @@ func (s *Store) AdminDraftUpsert(accountID string, req model.AdminDraftUpsertReq
 				ON CONFLICT DO NOTHING
 			`, storyID, contribID)
 		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return model.AdminDraftUpsertResponse{}, err
 	}
 
 	wordCount, chapterCount := adminSegmentCounts(ing.Segments)
