@@ -60,6 +60,16 @@ func (*adminStore) AdminGetStory(string, string) (model.AdminStoryDetailResponse
 func (*adminStore) AdminGetVersionSource(string, string, string) (model.AdminVersionSourceResponse, error) {
 	return model.AdminVersionSourceResponse{}, nil
 }
+func (*adminStore) AdminSourceUpsert(string, string, model.AdminSourceUpsertRequest) (model.AdminSourceUpsertResponse, error) {
+	return model.AdminSourceUpsertResponse{}, nil
+}
+func (*adminStore) AdminGetSource(string, string) (model.AdminSourceDetailResponse, error) {
+	return model.AdminSourceDetailResponse{}, nil
+}
+func (*adminStore) AdminGetSourceVersion(string, string, string) (model.AdminSourceVersionResponse, error) {
+	return model.AdminSourceVersionResponse{}, nil
+}
+
 func (s *adminStore) AdminGetEditionVersionSource(
 	_ string,
 	_ string,

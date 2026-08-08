@@ -310,6 +310,188 @@ func TestReaderStoreIntegration(t *testing.T) {
 		}
 	})
 
+	t.Run("canonical source lifecycle is independent from reading editions", func(t *testing.T) {
+		const sourceSlug = "canonical-source-lifecycle"
+		sourceURL := "https://example.invalid/public-domain/source"
+		sourceLanguage := "en"
+		sourceAuthor := "Original Author"
+		originalBody := "ORIGINAL SOURCE\r\n\r\nCafé 世界\r\n"
+		rights := map[string]any{
+			"label": "Public domain",
+			"year":  1901,
+		}
+
+		first, err := store.AdminSourceUpsert(readerAccountA, sourceSlug, model.AdminSourceUpsertRequest{
+			Title:      "Canonical Original",
+			Author:     &sourceAuthor,
+			Language:   &sourceLanguage,
+			SourceURL:  &sourceURL,
+			Rights:     rights,
+			SourceText: originalBody,
+		})
+		if err != nil {
+			t.Fatalf("create canonical source: %v", err)
+		}
+		if first.Outcome != model.AdminSourceOutcomeCreatedSource ||
+			first.Version != 1 || first.VersionID == "" {
+			t.Fatalf("first canonical source = %#v", first)
+		}
+
+		sourceOnlyStory, err := store.AdminGetStory(readerAccountA, sourceSlug)
+		if err != nil {
+			t.Fatalf("get source-only story: %v", err)
+		}
+		if sourceOnlyStory.Title != "Canonical Original" ||
+			sourceOnlyStory.Author == nil || *sourceOnlyStory.Author != sourceAuthor ||
+			sourceOnlyStory.Status != model.AdminStoryStatusUnpublished ||
+			sourceOnlyStory.Source.Status != model.AdminSourceStatusReady ||
+			sourceOnlyStory.Source.CurrentVersion == nil ||
+			sourceOnlyStory.Source.CurrentVersion.VersionID != first.VersionID ||
+			sourceOnlyStory.VersionCount != 0 || len(sourceOnlyStory.Versions) != 0 {
+			t.Fatalf("source-only Story Studio detail = %#v", sourceOnlyStory)
+		}
+		for _, edition := range sourceOnlyStory.Editions {
+			if edition.Status != model.AdminEditionStatusEmpty ||
+				edition.VersionCount != 0 || len(edition.Versions) != 0 {
+				t.Fatalf("source creation manufactured an edition: %#v", edition)
+			}
+		}
+		var sourceEditionRows int
+		if err := adminDB.QueryRow(`
+			SELECT count(*)
+			FROM story_editions AS edition
+			JOIN stories AS story ON story.id = edition.story_id
+			WHERE story.slug = $1 AND story.account_id = $2
+		`, sourceSlug, readerAccountA).Scan(&sourceEditionRows); err != nil {
+			t.Fatalf("count source-only editions: %v", err)
+		}
+		if sourceEditionRows != 0 {
+			t.Fatalf("source-only story persisted %d editions", sourceEditionRows)
+		}
+
+		detail, err := store.AdminGetSource(readerAccountA, sourceSlug)
+		if err != nil {
+			t.Fatalf("get canonical source detail: %v", err)
+		}
+		if detail.Status != model.AdminSourceStatusReady ||
+			detail.VersionCount != 1 ||
+			detail.CurrentVersion == nil ||
+			detail.CurrentVersion.VersionID != first.VersionID ||
+			len(detail.Versions) != 1 ||
+			!detail.Versions[0].IsCurrent {
+			t.Fatalf("canonical source detail = %#v", detail)
+		}
+
+		snapshot, err := store.AdminGetSourceVersion(readerAccountA, sourceSlug, first.VersionID)
+		if err != nil {
+			t.Fatalf("get canonical source v1: %v", err)
+		}
+		if snapshot.SourceText != originalBody ||
+			snapshot.Title != "Canonical Original" ||
+			snapshot.SourceURL == nil || *snapshot.SourceURL != sourceURL ||
+			!snapshot.IsCurrent {
+			t.Fatalf("canonical source v1 = %#v", snapshot)
+		}
+
+		reused, err := store.AdminSourceUpsert(readerAccountA, sourceSlug, model.AdminSourceUpsertRequest{
+			Title:      " Canonical Original ",
+			Author:     &sourceAuthor,
+			Language:   &sourceLanguage,
+			SourceURL:  &sourceURL,
+			Rights:     rights,
+			SourceText: originalBody,
+		})
+		if err != nil {
+			t.Fatalf("reuse canonical source: %v", err)
+		}
+		if reused.Outcome != model.AdminSourceOutcomeReused ||
+			reused.Version != 1 || reused.VersionID != first.VersionID {
+			t.Fatalf("reused canonical source = %#v", reused)
+		}
+
+		revisedBody := originalBody + "A corrected final line.\n"
+		revised, err := store.AdminSourceUpsert(readerAccountA, sourceSlug, model.AdminSourceUpsertRequest{
+			Title:      "Canonical Original",
+			Author:     &sourceAuthor,
+			Language:   &sourceLanguage,
+			SourceURL:  &sourceURL,
+			Rights:     map[string]any{"label": "Public domain", "year": 1902},
+			SourceText: revisedBody,
+		})
+		if err != nil {
+			t.Fatalf("revise canonical source: %v", err)
+		}
+		if revised.Outcome != model.AdminSourceOutcomeCreatedVersion ||
+			revised.Version != 2 || revised.VersionID == first.VersionID {
+			t.Fatalf("revised canonical source = %#v", revised)
+		}
+
+		detail, err = store.AdminGetSource(readerAccountA, sourceSlug)
+		if err != nil {
+			t.Fatalf("get revised canonical source detail: %v", err)
+		}
+		if detail.VersionCount != 2 ||
+			detail.CurrentVersion == nil ||
+			detail.CurrentVersion.VersionID != revised.VersionID ||
+			len(detail.Versions) != 2 ||
+			detail.Versions[0].Version != 2 ||
+			detail.Versions[1].Version != 1 {
+			t.Fatalf("revised source history = %#v", detail)
+		}
+		oldSnapshot, err := store.AdminGetSourceVersion(readerAccountA, sourceSlug, first.VersionID)
+		if err != nil {
+			t.Fatalf("get retained canonical source v1: %v", err)
+		}
+		if oldSnapshot.SourceText != originalBody || oldSnapshot.IsCurrent {
+			t.Fatalf("retained canonical source v1 = %#v", oldSnapshot)
+		}
+		if _, err := store.AdminGetSource(readerAccountB, sourceSlug); !errors.Is(err, model.ErrAdminSourceNotFound) {
+			t.Fatalf("cross-account source detail error = %v", err)
+		}
+
+		classicDraft, err := store.AdminDraftUpsert(readerAccountA, model.AdminDraftUpsertRequest{
+			Slug:     sourceSlug,
+			Title:    "Adapted Classic",
+			Author:   &author,
+			Language: &language,
+			Markdown: "# Adapted Classic\n\nThis is an adaptation, not the source.\n",
+		})
+		if err != nil {
+			t.Fatalf("create Classic from sourced story: %v", err)
+		}
+		if classicDraft.Version != 1 ||
+			classicDraft.EditionKey != model.AdminStoryEditionClassic {
+			t.Fatalf("Classic source-independent version = %#v", classicDraft)
+		}
+		if _, err := store.AdminPublishStory(readerAccountA, sourceSlug, classicDraft.VersionID); err != nil {
+			t.Fatalf("publish sourced Classic: %v", err)
+		}
+
+		storyAfterEdition, err := store.AdminGetStory(readerAccountA, sourceSlug)
+		if err != nil {
+			t.Fatalf("get sourced story after Classic: %v", err)
+		}
+		if storyAfterEdition.Title != "Canonical Original" ||
+			storyAfterEdition.Source.Status != model.AdminSourceStatusReady ||
+			storyAfterEdition.Source.CurrentVersion == nil ||
+			storyAfterEdition.Source.CurrentVersion.VersionID != revised.VersionID ||
+			storyAfterEdition.Status != model.AdminStoryStatusPublished {
+			t.Fatalf("source stopped owning Story Studio identity = %#v", storyAfterEdition)
+		}
+
+		readerStory, err := store.ReaderStory(readerAccountA, sourceSlug)
+		if err != nil {
+			t.Fatalf("read sourced Classic: %v", err)
+		}
+		if readerStory.Title != "Adapted Classic" || readerStory.Version != 1 {
+			t.Fatalf("Reader confused canonical source with adaptation: %#v", readerStory)
+		}
+
+		if _, err := store.AdminGetSource(readerAccountA, readerSlug); !errors.Is(err, model.ErrAdminSourceNotFound) {
+			t.Fatalf("existing Classic was incorrectly backfilled as a source: %v", err)
+		}
+	})
+
 	accountBDraft, err := store.AdminDraftUpsert(readerAccountB, model.AdminDraftUpsertRequest{
 		Slug:     readerSlug,
 		Title:    "Account B isolated story",

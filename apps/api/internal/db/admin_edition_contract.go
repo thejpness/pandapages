@@ -226,21 +226,34 @@ func inspectAdminStoryByEdition(
 		}
 	}
 
-	// Edition rows are authoritative for Story Studio. The temporary
-	// story-level draft/published pointers continue to serve the current
-	// Reader/Library contract but do not redefine or invalidate edition state.
-	metadata := selectEditionMetadata(inspectedByKey)
+	// Edition rows are authoritative for adapted reading state. Canonical
+	// source metadata is authoritative for Story Studio identity whenever an
+	// explicit source exists; an edition is never treated as the original.
+	source, err := inspectAdminStorySource(ctx, tx, story.ID)
+	if err != nil {
+		return inspectedAdminStory{}, err
+	}
+	editionMetadata := selectEditionMetadata(inspectedByKey)
 	title := "Story requires repair"
 	language := "und"
 	var author *string
 	var sourceURL *string
 	rights := map[string]any{}
-	if metadata != nil {
-		title = metadata.Title
-		author = cloneString(metadata.Author)
-		language = metadata.Language
-		rights = cloneJSONMap(metadata.Rights)
-		sourceURL = cloneString(metadata.SourceURL)
+	metadataAvailable := false
+	if source.Summary.Status == model.AdminSourceStatusReady && source.Current != nil {
+		title = source.Current.Title
+		author = cloneString(source.Current.Author)
+		language = source.Current.Language
+		rights = cloneJSONMap(source.Current.Rights)
+		sourceURL = cloneString(source.Current.SourceURL)
+		metadataAvailable = true
+	} else if editionMetadata != nil {
+		title = editionMetadata.Title
+		author = cloneString(editionMetadata.Author)
+		language = editionMetadata.Language
+		rights = cloneJSONMap(editionMetadata.Rights)
+		sourceURL = cloneString(editionMetadata.SourceURL)
+		metadataAvailable = true
 	}
 
 	editionSummaries := make([]model.AdminEditionSummary, 0, len(model.AdminStoryEditionKeys()))
@@ -253,7 +266,7 @@ func inspectAdminStoryByEdition(
 
 	classic := inspectedByKey[model.AdminStoryEditionClassic]
 	topLevelStatus := adminStoryStatusFromEdition(classic.Summary.Status)
-	if metadata == nil {
+	if !metadataAvailable || source.Summary.Status == model.AdminSourceStatusRepairRequired {
 		topLevelStatus = model.AdminStoryStatusRepairRequired
 	}
 
@@ -271,6 +284,7 @@ func inspectAdminStoryByEdition(
 			DraftVersion:     classic.Summary.DraftVersion,
 			VersionCount:     classic.Summary.VersionCount,
 			UpdatedAt:        story.UpdatedAt.UTC().Format(time.RFC3339Nano),
+			Source:           source.Summary,
 			Editions:         editionSummaries,
 		},
 		Versions: classic.Detail.Versions,

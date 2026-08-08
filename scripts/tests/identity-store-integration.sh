@@ -128,7 +128,7 @@ run_goose up-to 16
 [[ $(query "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('principals','external_identities','account_memberships');") == 3 ]]
 
 run_goose up
-[[ $(query "SELECT version_id FROM goose_db_version WHERE is_applied ORDER BY id DESC LIMIT 1;") == 20 ]]
+[[ $(query "SELECT version_id FROM goose_db_version WHERE is_applied ORDER BY id DESC LIMIT 1;") == 21 ]]
 [[ $(query "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('principals','external_identities','account_memberships','account_settings');") == 4 ]]
 [[ $(query "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='profiles' AND column_name IN ('pin_hash','pin_failed_attempts','pin_lock_until');") == 3 ]]
 [[ $(query "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='reading_progress' AND column_name='profile_id' AND is_nullable='NO';") == 1 ]]

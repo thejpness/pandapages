@@ -914,7 +914,7 @@ grep -q 'OK.*00015_account_ownership_integrity.sql' \
   "$test_root/fresh-goose.out" "$test_root/fresh-goose.err"
 grep -q 'OK.*00016_identity_foundation.sql' \
   "$test_root/fresh-goose.out" "$test_root/fresh-goose.err"
-assert_query '20|true' "
+assert_query '21|true' "
   SELECT version_id || '|' || is_applied
   FROM goose_db_version ORDER BY id DESC LIMIT 1;
 " 'fresh latest migration marker'
@@ -931,15 +931,21 @@ assert_query 't' "
     (to_regclass('public.principals')),
     (to_regclass('public.reading_progress')),
     (to_regclass('public.stories')),
+    (to_regclass('public.story_editions')),
     (to_regclass('public.story_sections')),
+    (to_regclass('public.story_source_versions')),
+    (to_regclass('public.story_sources')),
     (to_regclass('public.story_segments')),
     (to_regclass('public.story_versions'))
   ) AS required(relation);
 " 'fresh schema tables'
-assert_query '0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0' "
+assert_query '0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0' "
   SELECT
     (SELECT count(*) FROM stories),
     (SELECT count(*) FROM story_versions),
+    (SELECT count(*) FROM story_editions),
+    (SELECT count(*) FROM story_sources),
+    (SELECT count(*) FROM story_source_versions),
     (SELECT count(*) FROM story_sections),
     (SELECT count(*) FROM story_segments),
     (SELECT count(*) FROM reading_progress),
@@ -947,7 +953,6 @@ assert_query '0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0' "
     (SELECT count(*) FROM prompt_profiles),
     (SELECT count(*) FROM generation_jobs),
     (SELECT count(*) FROM account_settings),
-    (SELECT count(*) FROM works),
     (SELECT count(*) FROM contributors),
     (SELECT count(*) FROM story_contributors),
     (SELECT count(*) FROM assets),
@@ -955,6 +960,12 @@ assert_query '0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0' "
     (SELECT count(*) FROM external_identities),
     (SELECT count(*) FROM account_memberships);
 " 'fresh migration fixture inventory'
+assert_query 'false|0' "
+  SELECT
+    (to_regclass('public.works') IS NOT NULL)::text,
+    (SELECT count(*) FROM information_schema.columns
+      WHERE table_schema='public' AND table_name='stories' AND column_name='work_id');
+" 'retired works scaffolding'
 printf 'ok 1 - fresh migrations leave the complete application schema without fixture content\n'
 
 assert_query '1|1|0' "
@@ -1404,12 +1415,29 @@ expect_seed_failure malformed-invocation \
     "$seed_script" --unknown
 printf 'ok 11 - seed command fails closed for acknowledgement, target, Docker, service, and invocation errors\n'
 
-# Current explicit seed data now includes required story-edition ownership. Keep
-# the historical migration/cleanup cases above at their original boundaries,
-# then move this disposable database to the current schema before exercising
-# the current seed and API tooling.
+# Migration 21 intentionally refuses to guess how legacy Works data maps to
+# canonical source text. This historical-preservation database still contains
+# one deliberately retained Work, so prove the migration fails closed first.
+if run_goose up \
+  >"$test_root/current-seed-source-preflight.out" \
+  2>"$test_root/current-seed-source-preflight.err"; then
+  printf 'Canonical source migration unexpectedly accepted unresolved legacy Works data\n' >&2
+  exit 1
+fi
+grep -Fq 'canonical source migration refused: legacy works scaffolding contains data' \
+  "$test_root/current-seed-source-preflight.err"
+
+# The disposable harness now performs the explicit operator decision required
+# by the fresh source model: detach and remove obsolete Work scaffolding. The
+# preserved story, versions, settings, progress history, jobs and contributor
+# data remain in place.
+psql_query "
+  UPDATE stories SET work_id = NULL WHERE work_id IS NOT NULL;
+  DELETE FROM works;
+" >/dev/null
+
 run_goose up >"$test_root/current-seed-schema-upgrade.out" 2>"$test_root/current-seed-schema-upgrade.err"
-assert_query '20|true' "
+assert_query '21|true' "
   SELECT version_id || '|' || is_applied
   FROM goose_db_version ORDER BY id DESC LIMIT 1;
 " 'current seed schema marker'
@@ -1420,18 +1448,19 @@ env \
   PP_TEST_SEED_CONTAINER="$postgres_container" \
   "$seed_script" >"$test_root/seed.out"
 grep -q '^test_seed=installed progress=absent target=local_or_disposable$' "$test_root/seed.out"
-assert_query '1|1|1|1|1|1|2|6|1|0' "
+assert_query '1|1|1|1|1|2|6|1|0|0|0' "
   SELECT
     (SELECT count(*) FROM child_profiles WHERE id = 'f17e0000-0000-4000-8000-000000000001'),
     (SELECT count(*) FROM prompt_profiles WHERE id = 'f17e0000-0000-4000-8000-000000000002'),
-    (SELECT count(*) FROM works WHERE id = 'f17e0000-0000-4000-8000-000000000003'),
     (SELECT count(*) FROM contributors WHERE id = 'f17e0000-0000-4000-8000-000000000004'),
     (SELECT count(*) FROM stories WHERE id = 'f17e0000-0000-4000-8000-000000000010' AND is_published),
     (SELECT count(*) FROM story_versions WHERE id = 'f17e0000-0000-4000-8000-000000000011'),
     (SELECT count(*) FROM story_sections WHERE story_version_id = 'f17e0000-0000-4000-8000-000000000011'),
     (SELECT count(*) FROM story_segments WHERE story_version_id = 'f17e0000-0000-4000-8000-000000000011'),
     (SELECT count(*) FROM generation_jobs WHERE id = 'f17e0000-0000-4000-8000-000000000040'),
-    (SELECT count(*) FROM reading_progress WHERE story_id = 'f17e0000-0000-4000-8000-000000000010');
+    (SELECT count(*) FROM reading_progress WHERE story_id = 'f17e0000-0000-4000-8000-000000000010'),
+    (SELECT count(*) FROM story_sources WHERE story_id = 'f17e0000-0000-4000-8000-000000000010'),
+    (SELECT count(*) FROM story_source_versions WHERE story_id = 'f17e0000-0000-4000-8000-000000000010');
 " 'explicit seed inventory'
 printf 'ok 12 - explicit seed installs deterministic published UTF-8 chapter/segment fixtures without progress\n'
 
@@ -1547,7 +1576,7 @@ env \
   PP_TEST_SEED_DATABASE="$database" \
   PP_TEST_SEED_CONTAINER="$postgres_container" \
   "$seed_script" --remove >/dev/null
-assert_query '0|0|0|0|0|0|0|0|0|0|0|1|1|0' "
+assert_query '0|0|0|0|0|0|0|0|0|0|1|1|0' "
   SELECT
     (SELECT count(*) FROM stories WHERE id = 'f17e0000-0000-4000-8000-000000000010'),
     (SELECT count(*) FROM story_versions WHERE id = 'f17e0000-0000-4000-8000-000000000011'),
@@ -1555,7 +1584,6 @@ assert_query '0|0|0|0|0|0|0|0|0|0|0|1|1|0' "
     (SELECT count(*) FROM story_segments WHERE story_version_id = 'f17e0000-0000-4000-8000-000000000011'),
     (SELECT count(*) FROM child_profiles WHERE id = 'f17e0000-0000-4000-8000-000000000001'),
     (SELECT count(*) FROM prompt_profiles WHERE id = 'f17e0000-0000-4000-8000-000000000002'),
-    (SELECT count(*) FROM works WHERE id = 'f17e0000-0000-4000-8000-000000000003'),
     (SELECT count(*) FROM contributors WHERE id = 'f17e0000-0000-4000-8000-000000000004'),
     (SELECT count(*) FROM generation_jobs WHERE id = 'f17e0000-0000-4000-8000-000000000040'),
     (SELECT count(*) FROM reading_progress WHERE story_id = 'f17e0000-0000-4000-8000-000000000010'),
