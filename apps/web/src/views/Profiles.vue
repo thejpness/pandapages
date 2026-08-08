@@ -8,6 +8,7 @@ import {
   deleteReaderProfile,
   getAPIErrorStatus,
   listReaderProfiles,
+  logout as logoutSession,
   removeReaderProfilePIN,
   renameReaderProfile,
   setReaderProfilePIN,
@@ -28,8 +29,13 @@ const router = useRouter();
 const profiles = ref<readonly ReaderProfile[]>([]);
 const selectedID = ref<string | null>(null);
 const canOpenStoryStudio = ref(false);
+const canSwitchAccount = ref(false);
+const accountName = ref("");
+const accountRole = ref<"owner" | "adult" | null>(null);
+const principalName = ref("");
 const loading = ref(true);
 const busy = ref(false);
+const signingOut = ref(false);
 const errorMessage = ref("");
 const newName = ref("");
 const editingID = ref<string | null>(null);
@@ -42,6 +48,9 @@ const pinAction = ref<"set" | "verify" | null>(null);
 const removePINTarget = ref<ReaderProfile | null>(null);
 const pinError = ref("");
 const unavailable = computed(() => route.query.unavailable === '1');
+const accountRoleLabel = computed(() =>
+  accountRole.value === "owner" ? "Owner" : "Adult member",
+);
 
 function destination(): string {
   const next = route.query.next;
@@ -72,12 +81,39 @@ function restoreSelection(): void {
 async function refresh(): Promise<void> {
   const account = await currentAccountContext();
   canOpenStoryStudio.value = account.membership.role === "owner";
+  canSwitchAccount.value = account.identity.memberships.length > 1;
+  accountName.value = account.membership.accountName;
+  accountRole.value = account.membership.role;
+  principalName.value = account.identity.principal.displayName;
   profiles.value = await listReaderProfiles(account);
   restoreSelection();
 }
 
+function openReadingProfile(): void {
+  void router.push("/journey");
+}
+
 function openStoryStudio(): void {
   void router.push("/admin/stories");
+}
+
+function openAccountChooser(): void {
+  void router.push("/account");
+}
+
+async function signOut(): Promise<void> {
+  if (signingOut.value) return;
+  signingOut.value = true;
+  errorMessage.value = "";
+  try {
+    await logoutSession();
+    await router.replace("/account/login");
+  } catch {
+    errorMessage.value =
+      "Sign-out could not be completed. Your Panda Pages account is still open.";
+  } finally {
+    signingOut.value = false;
+  }
 }
 
 async function choose(profile: ReaderProfile): Promise<void> {
@@ -159,7 +195,9 @@ async function createProfile(): Promise<void> {
     const created = await createReaderProfile(newName.value);
     newName.value = "";
     await refresh();
-    await choose(created);
+    selectReaderProfile(created.id);
+    selectedID.value = created.id;
+    leaveChildMode();
   } catch (error) {
     errorMessage.value = messageFor(error);
   } finally {
@@ -228,16 +266,48 @@ onMounted(async () => {
 
 <template>
   <PandaAuthShell
-    eyebrow="Panda Pages"
-    title="Who’s reading?"
-    description="Choose a reader, or add someone new."
+    eyebrow="Parent area"
+    title="Parent Hub"
+    description="Choose a reader, manage reading settings and stories, or manage your Panda Pages account."
   >
-    <p v-if="loading" role="status">Loading readers…</p>
+    <p v-if="loading" role="status">Loading Parent Hub…</p>
     <p v-else-if="errorMessage" class="error" role="alert">
       {{ errorMessage }}
     </p>
 
     <div v-if="!loading" class="profiles">
+      <section class="account-summary" aria-labelledby="account-heading">
+        <div>
+          <p class="section-kicker">Account</p>
+          <h2 id="account-heading">{{ accountName }}</h2>
+          <p class="account-meta">
+            Signed in as {{ principalName }} · {{ accountRoleLabel }}
+          </p>
+        </div>
+        <div class="account-actions">
+          <button
+            v-if="canSwitchAccount"
+            type="button"
+            :disabled="signingOut"
+            @click="openAccountChooser"
+          >
+            Switch account
+          </button>
+          <button type="button" :disabled="signingOut" @click="signOut">
+            {{ signingOut ? "Signing out…" : "Sign out" }}
+          </button>
+        </div>
+      </section>
+
+      <section class="section-heading" aria-labelledby="readers-heading">
+        <p class="section-kicker">Readers</p>
+        <h2 id="readers-heading">Start reading</h2>
+        <p>
+          Choose a reader to enter reader mode. Parent controls stay here in the
+          Parent Hub.
+        </p>
+      </section>
+
       <p v-if="unavailable" class="notice" role="status">
         Readers could not be checked just now. Choose one when the connection is available.
       </p>
@@ -309,9 +379,28 @@ onMounted(async () => {
         </div>
       </form>
 
-      <nav v-if="canOpenStoryStudio" class="account-tools" aria-label="Account tools">
-        <button type="button" @click="openStoryStudio">Story Studio</button>
-      </nav>
+      <section class="hub-tools" aria-labelledby="parent-tools-heading">
+        <div class="section-heading">
+          <p class="section-kicker">Parent tools</p>
+          <h2 id="parent-tools-heading">Manage Panda Pages</h2>
+          <p>These controls stay outside reader mode.</p>
+        </div>
+        <div class="hub-links">
+          <button type="button" class="hub-link" @click="openReadingProfile">
+            <strong>Reading profile</strong>
+            <span>Parent notes, interests, sensitivities and story preferences.</span>
+          </button>
+          <button
+            v-if="canOpenStoryStudio"
+            type="button"
+            class="hub-link"
+            @click="openStoryStudio"
+          >
+            <strong>Story Studio</strong>
+            <span>Create, review and publish stories for the bookshelf.</span>
+          </button>
+        </div>
+      </section>
     </div>
 
     <section
@@ -400,10 +489,91 @@ onMounted(async () => {
   gap: 1rem;
 }
 
+.account-summary,
+.hub-tools {
+  border: 1px solid var(--panda-line-strong);
+  border-radius: var(--panda-radius-compact);
+  padding: 1rem;
+  background: var(--panda-paper);
+}
+
+.account-summary,
+.section-heading,
+.hub-tools,
+.hub-links,
+.hub-link {
+  display: grid;
+}
+
+.account-summary,
+.hub-tools {
+  gap: 0.9rem;
+}
+
+.section-heading {
+  gap: 0.25rem;
+}
+
+.hub-links {
+  gap: 0.65rem;
+}
+
 .empty,
 .notice,
-.error {
+.error,
+.section-kicker,
+.section-heading h2,
+.section-heading p,
+.account-summary h2,
+.account-meta {
   margin: 0;
+}
+
+.section-kicker {
+  color: var(--panda-soft-ink);
+  font-size: 0.72rem;
+  font-weight: 850;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.section-heading h2,
+.account-summary h2 {
+  font-family: var(--panda-serif);
+  font-size: 1.3rem;
+  line-height: 1.2;
+}
+
+.section-heading p:not(.section-kicker),
+.account-meta,
+.hub-link span {
+  color: var(--panda-muted);
+  line-height: 1.45;
+}
+
+.account-meta,
+.hub-link span {
+  font-size: 0.86rem;
+}
+
+.account-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.hub-link {
+  width: 100%;
+  gap: 0.15rem;
+  text-align: left;
+}
+
+.hub-link strong {
+  color: var(--panda-ink);
+}
+
+.hub-link span {
+  font-weight: 550;
 }
 
 .notice {

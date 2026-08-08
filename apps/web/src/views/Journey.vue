@@ -227,8 +227,8 @@ async function persist() {
   }
 }
 
-function goLibrary() {
-  void router.push('/library')
+function goParentHub() {
+  void router.push('/profiles')
 }
 
 onMounted(() => {
@@ -245,8 +245,8 @@ onMounted(() => {
         <button
           class="journey-brand"
           type="button"
-          aria-label="Panda Pages Library"
-          @click="goLibrary"
+          aria-label="Panda Pages Parent Hub"
+          @click="goParentHub"
         >
           <img src="/logo.png" alt="" aria-hidden="true" />
           <span>
@@ -258,10 +258,10 @@ onMounted(() => {
         <button
           class="journey-button journey-button--secondary journey-return"
           type="button"
-          @click="goLibrary"
+          @click="goParentHub"
         >
           <span aria-hidden="true">←</span>
-          Return to Library
+          Back to Parent Hub
         </button>
       </div>
     </header>
@@ -580,9 +580,9 @@ onMounted(() => {
           <button
             class="journey-button journey-button--primary"
             type="button"
-            @click="goLibrary"
+            @click="goParentHub"
           >
-            Go to Library
+            Back to Parent Hub
           </button>
           <button
             class="journey-button journey-button--secondary"

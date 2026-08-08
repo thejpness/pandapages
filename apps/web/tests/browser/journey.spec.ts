@@ -547,7 +547,7 @@ test.describe('Reading profile Journey', () => {
       ),
     ).toBeVisible()
     await expect(page.getByLabel('Genre')).toHaveValue('space')
-    await page.getByRole('button', { name: 'Back' }).click()
+    await page.getByRole('button', { name: 'Back', exact: true }).click()
     await expect(page.getByLabel('Nickname')).toHaveValue('Mina Updated')
     await expect(page.getByLabel('Nickname')).not.toHaveAttribute(
       'aria-invalid',
@@ -584,10 +584,11 @@ test.describe('Reading profile Journey', () => {
     await expect(page.getByRole('status')).toHaveCount(0)
   })
 
-  test('returns to Library without changing settings', async ({ page, api }) => {
+  test('returns to Parent Hub without changing settings or entering reader mode', async ({ page, api }) => {
     await gotoJourney(page)
-    await page.getByRole('button', { name: 'Return to Library' }).click()
-    await expect.poll(() => new URL(page.url()).pathname).toBe('/library')
+    await page.getByRole('button', { name: 'Back to Parent Hub' }).click()
+    await expect.poll(() => new URL(page.url()).pathname).toBe('/profiles')
+    await expect(page.getByRole('heading', { level: 1, name: 'Parent Hub' })).toBeVisible()
     expect(api.savedPayloads).toHaveLength(0)
   })
 
@@ -604,7 +605,7 @@ test.describe('Reading profile Journey', () => {
         await gotoJourney(page)
         await expectNoHorizontalOverflow(page)
         await expect(
-          page.getByRole('button', { name: 'Return to Library' }),
+          page.getByRole('button', { name: 'Back to Parent Hub' }),
         ).toBeVisible()
       })
     }

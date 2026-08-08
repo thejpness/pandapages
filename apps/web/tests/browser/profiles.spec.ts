@@ -165,7 +165,7 @@ test.describe('reader profile lifecycle', () => {
     await page.goto('/account')
     await page.getByRole('button', { name: 'Choose' }).click()
 
-    await expect(page).toHaveURL(/\/profiles\?next=\/library$/)
+    await expect(page).toHaveURL('/profiles')
     await expect.poll(() => page.evaluate(() => window.localStorage.getItem('pandapages.selected-reader-profile-id'))).toBeNull()
   })
 
@@ -176,9 +176,9 @@ test.describe('reader profile lifecycle', () => {
     await page.goto('/profiles')
     await page.getByLabel('New reader name').fill('  Ted  ')
     await page.getByRole('button', { name: 'Add reader' }).click()
-    await expect(page).toHaveURL('/library')
+    await expect(page).toHaveURL('/profiles')
+    await expect(page.getByRole('button', { name: 'Ted Selected' })).toBeVisible()
 
-    await page.goto('/profiles')
     await page.getByRole('button', { name: 'Rename' }).click()
     await page.getByLabel('Reader name', { exact: true }).fill('Theo')
     await page.getByRole('button', { name: 'Save name' }).click()
@@ -229,17 +229,47 @@ test.describe('reader profile lifecycle', () => {
     await expect(page.getByRole('button', { name: 'Leave reader mode' })).toBeVisible()
   })
 
-  test('Story Studio is discoverable to account owners only', async ({ page, auth }) => {
+  test('Parent Hub exposes account controls and owner-only Story Studio', async ({ page, auth }) => {
     const api = new ProfilesApiMock(page)
     api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false }]
     await api.install()
 
     await page.goto('/profiles')
-    await expect(page.getByRole('button', { name: 'Story Studio' })).toBeVisible()
+    await expect(page.getByRole('heading', { level: 1, name: 'Parent Hub' })).toBeVisible()
+    await expect(page.getByRole('heading', { level: 2, name: 'Start reading' })).toBeVisible()
+    await expect(page.getByRole('heading', { level: 2, name: 'My Panda Pages' })).toBeVisible()
+    await expect(page.getByText('Signed in as Panda Pages Adult · Owner')).toBeVisible()
+    await expect(page.getByRole('button', { name: /Reading profile/ })).toBeVisible()
+    await expect(page.getByRole('button', { name: /Story Studio/ })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible()
 
     auth.setRole('adult')
     await page.reload()
-    await expect(page.getByRole('button', { name: 'Story Studio' })).toHaveCount(0)
+    await expect(page.getByText('Signed in as Panda Pages Adult · Adult member')).toBeVisible()
+    await expect(page.getByRole('button', { name: /Story Studio/ })).toHaveCount(0)
+  })
+
+  test('Parent Hub signs out through Supabase and clears reader selection', async ({ page }) => {
+    const api = new ProfilesApiMock(page)
+    api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false }]
+    await api.install()
+    let logoutCalls = 0
+    await page.route('https://auth.invalid/auth/v1/logout**', async (route) => {
+      logoutCalls += 1
+      await route.fulfill({ status: 204 })
+    })
+
+    await page.goto('/profiles')
+    await expect.poll(() =>
+      page.evaluate(() => window.localStorage.getItem('pandapages.selected-reader-profile-id')),
+    ).toBe(fixtureProfileID)
+    await page.getByRole('button', { name: 'Sign out' }).click()
+
+    await expect(page).toHaveURL('/account/login')
+    expect(logoutCalls).toBe(1)
+    await expect.poll(() =>
+      page.evaluate(() => window.localStorage.getItem('pandapages.selected-reader-profile-id')),
+    ).toBeNull()
   })
 
   test('a protected reader requires its PIN and never persists it or its unlock', async ({ page }) => {

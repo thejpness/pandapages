@@ -148,8 +148,7 @@ const emit = defineEmits<{
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .studio-dialog__overlay,
-  .studio-dialog__content {
+  .studio-dialog__overlay {
     animation: studio-dialog-in 150ms ease-out;
   }
 }
