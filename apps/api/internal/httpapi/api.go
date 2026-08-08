@@ -16,6 +16,7 @@ import (
 	"pandapages/api/internal/httpbearer"
 	"pandapages/api/internal/httpprofile"
 	"pandapages/api/internal/model"
+	"pandapages/api/internal/profilepin"
 	"pandapages/api/internal/readercontract"
 	"pandapages/api/internal/readiness"
 )
@@ -39,6 +40,9 @@ type Store interface {
 	CreateProfile(accountID, name string) (model.ReaderProfile, error)
 	UpdateProfile(accountID, profileID, name string) (model.ReaderProfile, error)
 	DeleteProfile(accountID, profileID string) error
+	SetProfilePIN(accountID, profileID, encodedHash string) error
+	RemoveProfilePIN(accountID, profileID string) error
+	VerifyProfilePIN(accountID, profileID, candidate string) error
 
 	SettingsGet(accountID string) (model.SettingsPayload, error)
 	SettingsPut(accountID string, payload model.SettingsUpsert) (model.SettingsPayload, error)
@@ -322,9 +326,13 @@ func New(cfg Config, store Store) http.Handler {
 	}))
 
 	mux.HandleFunc("/api/v1/profiles/", withBearerAccount(func(w http.ResponseWriter, r *http.Request, accountID string) {
-		profileID, ok := profileIDFromPath(r.URL.Path)
+		profileID, action, ok := profilePath(r.URL.Path)
 		if !ok {
 			writeErr(w, http.StatusBadRequest, "invalid_profile", "profile id is invalid")
+			return
+		}
+		if action == "pin" {
+			handleProfilePIN(w, r, store, accountID, profileID)
 			return
 		}
 
@@ -468,12 +476,98 @@ func decodeProfileName(w http.ResponseWriter, r *http.Request) (string, bool) {
 	return name, true
 }
 
-func profileIDFromPath(path string) (string, bool) {
+func profilePath(path string) (profileID, action string, ok bool) {
 	raw := strings.TrimPrefix(path, "/api/v1/profiles/")
-	if raw == "" || strings.Contains(raw, "/") {
+	parts := strings.Split(raw, "/")
+	if len(parts) == 0 || parts[0] == "" || len(parts) > 2 || (len(parts) == 2 && parts[1] != "pin") {
+		return "", "", false
+	}
+	profileID, ok = httpbearer.CanonicalUUID(parts[0])
+	if !ok {
+		return "", "", false
+	}
+	if len(parts) == 2 {
+		return profileID, parts[1], true
+	}
+	return profileID, "", true
+}
+
+func decodeProfilePIN(w http.ResponseWriter, r *http.Request) (string, bool) {
+	var body struct {
+		PIN string `json:"pin"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		writeDecodeError(w, err)
 		return "", false
 	}
-	return httpbearer.CanonicalUUID(raw)
+	if !profilepin.Valid(body.PIN) {
+		writeErr(w, http.StatusBadRequest, "invalid_pin", "PIN must be exactly four digits")
+		return "", false
+	}
+	return body.PIN, true
+}
+
+func handleProfilePIN(w http.ResponseWriter, r *http.Request, store Store, accountID, profileID string) {
+	switch r.Method {
+	case http.MethodPut:
+		pin, ok := decodeProfilePIN(w, r)
+		if !ok {
+			return
+		}
+		hash, err := profilepin.Hash(pin)
+		if err != nil {
+			writeErr(w, http.StatusServiceUnavailable, "profile_unavailable", "profile PIN is temporarily unavailable")
+			return
+		}
+		err = store.SetProfilePIN(accountID, profileID, hash)
+		if errors.Is(err, sql.ErrNoRows) {
+			writeErr(w, http.StatusForbidden, "profile_forbidden", "profile is not available in this account")
+			return
+		}
+		if err != nil {
+			writeErr(w, http.StatusServiceUnavailable, "profile_unavailable", "profile PIN is temporarily unavailable")
+			return
+		}
+		noStore(w)
+		writeJSON(w, http.StatusOK, map[string]bool{"pin_enabled": true})
+
+	case http.MethodDelete:
+		err := store.RemoveProfilePIN(accountID, profileID)
+		if errors.Is(err, sql.ErrNoRows) {
+			writeErr(w, http.StatusForbidden, "profile_forbidden", "profile is not available in this account")
+			return
+		}
+		if err != nil {
+			writeErr(w, http.StatusServiceUnavailable, "profile_unavailable", "profile PIN is temporarily unavailable")
+			return
+		}
+		noStore(w)
+		writeJSON(w, http.StatusOK, map[string]bool{"pin_enabled": false})
+
+	case http.MethodPost:
+		pin, ok := decodeProfilePIN(w, r)
+		if !ok {
+			return
+		}
+		err := store.VerifyProfilePIN(accountID, profileID, pin)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			writeErr(w, http.StatusForbidden, "profile_forbidden", "profile is not available in this account")
+		case errors.Is(err, model.ErrProfilePINInvalid):
+			writeErr(w, http.StatusForbidden, "pin_invalid", "That PIN is not right")
+		case errors.Is(err, model.ErrProfilePINRateLimited):
+			w.Header().Set("Retry-After", "900")
+			writeErr(w, http.StatusTooManyRequests, "pin_rate_limited", "Try again later")
+		case err != nil:
+			writeErr(w, http.StatusServiceUnavailable, "profile_unavailable", "profile PIN is temporarily unavailable")
+		default:
+			noStore(w)
+			writeJSON(w, http.StatusOK, map[string]bool{"verified": true})
+		}
+
+	default:
+		methodNotAllowed(w, []string{http.MethodPut, http.MethodDelete, http.MethodPost})
+	}
 }
 
 func writeErr(w http.ResponseWriter, status int, code string, msg string) {

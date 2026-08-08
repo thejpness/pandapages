@@ -914,7 +914,7 @@ grep -q 'OK.*00015_account_ownership_integrity.sql' \
   "$test_root/fresh-goose.out" "$test_root/fresh-goose.err"
 grep -q 'OK.*00016_identity_foundation.sql' \
   "$test_root/fresh-goose.out" "$test_root/fresh-goose.err"
-assert_query '18|true' "
+assert_query '19|true' "
   SELECT version_id || '|' || is_applied
   FROM goose_db_version ORDER BY id DESC LIMIT 1;
 " 'fresh latest migration marker'

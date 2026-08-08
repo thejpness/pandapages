@@ -23,6 +23,12 @@ var (
 	// ErrProfileNameConflict is returned when the account-local unique profile
 	// name constraint rejects a create or rename request.
 	ErrProfileNameConflict = errors.New("reader profile name already exists")
+	// ErrProfilePINInvalid deliberately does not distinguish a wrong PIN from
+	// any internal verification detail.
+	ErrProfilePINInvalid = errors.New("reader profile PIN is invalid")
+	// ErrProfilePINRateLimited means repeated failed attempts temporarily block
+	// verification for this profile only.
+	ErrProfilePINRateLimited = errors.New("reader profile PIN verification is rate limited")
 )
 
 type StoryItem struct {
@@ -93,6 +99,7 @@ type ContinueItem struct {
 // representation. Profile ownership is always checked against the selected
 // account by the caller's authorization boundary.
 type ReaderProfile struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	PINEnabled bool   `json:"pin_enabled"`
 }

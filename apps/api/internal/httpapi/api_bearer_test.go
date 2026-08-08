@@ -21,70 +21,84 @@ const testProfileID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 const testBearer = "header.payload.signature"
 
 type authTestStore struct {
-	readinessErr         error
-	readinessCheck       func(context.Context) error
-	readinessCalls       int
-	identityErr          error
-	memberships          []appidentity.Membership
-	libraryCalls         int
-	libraryAccount       string
-	libraryResponse      model.LibraryReadModel
-	libraryErr           error
-	readerCalls          int
-	readerAccount        string
-	readerSlug           string
-	readerResponse       model.ReaderStory
-	readerErr            error
-	progressGetCalls     int
-	progressAccount      string
-	progressProfile      string
-	progressGetState     model.ProgressResponse
-	progressGetErr       error
-	progressPutCalls     int
-	progressSlug         string
-	progressVersion      int
-	progressLocator      readercontract.Locator
-	progressPercent      float64
-	progressPutErr       error
-	continueCalls        int
-	continueAccount      string
-	continueProfile      string
-	continueLimit        int
-	continueItems        []model.ContinueItem
-	continueErr          error
-	profilesCalls        int
-	profilesAccount      string
-	profiles             []model.ReaderProfile
-	profilesErr          error
-	profileExistsCalls   int
-	profileExistsAccount string
-	profileExistsID      string
-	profileForbidden     bool
-	profileExistsErr     error
-	profileCreateCalls   int
-	profileCreateAccount string
-	profileCreateName    string
-	profileCreate        model.ReaderProfile
-	profileCreateErr     error
-	profileUpdateCalls   int
-	profileUpdateAccount string
-	profileUpdateID      string
-	profileUpdateName    string
-	profileUpdate        model.ReaderProfile
-	profileUpdateErr     error
-	profileDeleteCalls   int
-	profileDeleteAccount string
-	profileDeleteID      string
-	profileDeleteErr     error
-	settingsGetCalls     int
-	settingsGetAccount   string
-	settingsGet          model.SettingsPayload
-	settingsGetErr       error
-	settingsPutCalls     int
-	settingsPutAccount   string
-	settingsPutPayload   model.SettingsUpsert
-	settingsPutResponse  model.SettingsPayload
-	settingsPutErr       error
+	readinessErr            error
+	readinessCheck          func(context.Context) error
+	readinessCalls          int
+	identityErr             error
+	memberships             []appidentity.Membership
+	libraryCalls            int
+	libraryAccount          string
+	libraryResponse         model.LibraryReadModel
+	libraryErr              error
+	readerCalls             int
+	readerAccount           string
+	readerSlug              string
+	readerResponse          model.ReaderStory
+	readerErr               error
+	progressGetCalls        int
+	progressAccount         string
+	progressProfile         string
+	progressGetState        model.ProgressResponse
+	progressGetErr          error
+	progressPutCalls        int
+	progressSlug            string
+	progressVersion         int
+	progressLocator         readercontract.Locator
+	progressPercent         float64
+	progressPutErr          error
+	continueCalls           int
+	continueAccount         string
+	continueProfile         string
+	continueLimit           int
+	continueItems           []model.ContinueItem
+	continueErr             error
+	profilesCalls           int
+	profilesAccount         string
+	profiles                []model.ReaderProfile
+	profilesErr             error
+	profileExistsCalls      int
+	profileExistsAccount    string
+	profileExistsID         string
+	profileForbidden        bool
+	profileExistsErr        error
+	profileCreateCalls      int
+	profileCreateAccount    string
+	profileCreateName       string
+	profileCreate           model.ReaderProfile
+	profileCreateErr        error
+	profileUpdateCalls      int
+	profileUpdateAccount    string
+	profileUpdateID         string
+	profileUpdateName       string
+	profileUpdate           model.ReaderProfile
+	profileUpdateErr        error
+	profileDeleteCalls      int
+	profileDeleteAccount    string
+	profileDeleteID         string
+	profileDeleteErr        error
+	profilePINSetCalls      int
+	profilePINSetAccount    string
+	profilePINSetID         string
+	profilePINHash          string
+	profilePINSetErr        error
+	profilePINRemoveCalls   int
+	profilePINRemoveAccount string
+	profilePINRemoveID      string
+	profilePINRemoveErr     error
+	profilePINVerifyCalls   int
+	profilePINVerifyAccount string
+	profilePINVerifyID      string
+	profilePINCandidate     string
+	profilePINVerifyErr     error
+	settingsGetCalls        int
+	settingsGetAccount      string
+	settingsGet             model.SettingsPayload
+	settingsGetErr          error
+	settingsPutCalls        int
+	settingsPutAccount      string
+	settingsPutPayload      model.SettingsUpsert
+	settingsPutResponse     model.SettingsPayload
+	settingsPutErr          error
 }
 
 func (s *authTestStore) Identity(context.Context, appidentity.ExternalIdentity) (appidentity.Snapshot, error) {
@@ -174,6 +188,26 @@ func (s *authTestStore) DeleteProfile(accountID, profileID string) error {
 	s.profileDeleteID = profileID
 	return s.profileDeleteErr
 }
+func (s *authTestStore) SetProfilePIN(accountID, profileID, encodedHash string) error {
+	s.profilePINSetCalls++
+	s.profilePINSetAccount = accountID
+	s.profilePINSetID = profileID
+	s.profilePINHash = encodedHash
+	return s.profilePINSetErr
+}
+func (s *authTestStore) RemoveProfilePIN(accountID, profileID string) error {
+	s.profilePINRemoveCalls++
+	s.profilePINRemoveAccount = accountID
+	s.profilePINRemoveID = profileID
+	return s.profilePINRemoveErr
+}
+func (s *authTestStore) VerifyProfilePIN(accountID, profileID, candidate string) error {
+	s.profilePINVerifyCalls++
+	s.profilePINVerifyAccount = accountID
+	s.profilePINVerifyID = profileID
+	s.profilePINCandidate = candidate
+	return s.profilePINVerifyErr
+}
 func (s *authTestStore) SettingsGet(accountID string) (model.SettingsPayload, error) {
 	s.settingsGetCalls++
 	s.settingsGetAccount = accountID
@@ -220,7 +254,7 @@ func profileBearerRequest(method, path string) *http.Request {
 
 func TestProtectedRoutesRequireBearerAccountContext(t *testing.T) {
 	tests := []struct{ name, method, path, body string }{
-		{"library", http.MethodGet, "/api/v1/library", ""}, {"reader", http.MethodGet, "/api/v1/reader/story", ""}, {"progress get", http.MethodGet, "/api/v1/progress/story", ""}, {"progress put", http.MethodPut, "/api/v1/progress/story", `{"version":1,"locator":{"schema":2,"segment":{"key":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","occurrence":1,"ordinal":1,"offset":0},"chapter":null},"percent":0}`}, {"continue", http.MethodGet, "/api/v1/continue", ""}, {"profiles list", http.MethodGet, "/api/v1/profiles", ""}, {"profiles create", http.MethodPost, "/api/v1/profiles", `{"name":"Ted"}`}, {"profiles update", http.MethodPatch, "/api/v1/profiles/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", `{"name":"Ted"}`}, {"profiles delete", http.MethodDelete, "/api/v1/profiles/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", ""}, {"settings get", http.MethodGet, "/api/v1/settings", ""}, {"settings put", http.MethodPut, "/api/v1/settings", `{}`},
+		{"library", http.MethodGet, "/api/v1/library", ""}, {"reader", http.MethodGet, "/api/v1/reader/story", ""}, {"progress get", http.MethodGet, "/api/v1/progress/story", ""}, {"progress put", http.MethodPut, "/api/v1/progress/story", `{"version":1,"locator":{"schema":2,"segment":{"key":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","occurrence":1,"ordinal":1,"offset":0},"chapter":null},"percent":0}`}, {"continue", http.MethodGet, "/api/v1/continue", ""}, {"profiles list", http.MethodGet, "/api/v1/profiles", ""}, {"profiles create", http.MethodPost, "/api/v1/profiles", `{"name":"Ted"}`}, {"profiles update", http.MethodPatch, "/api/v1/profiles/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", `{"name":"Ted"}`}, {"profiles delete", http.MethodDelete, "/api/v1/profiles/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", ""}, {"profiles PIN set", http.MethodPut, "/api/v1/profiles/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/pin", `{"pin":"1234"}`}, {"profiles PIN verify", http.MethodPost, "/api/v1/profiles/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/pin", `{"pin":"1234"}`}, {"profiles PIN remove", http.MethodDelete, "/api/v1/profiles/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/pin", ""}, {"settings get", http.MethodGet, "/api/v1/settings", ""}, {"settings put", http.MethodPut, "/api/v1/settings", `{}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

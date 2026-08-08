@@ -1,10 +1,18 @@
 package db
 
 import (
+	"database/sql"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"pandapages/api/internal/model"
+	"pandapages/api/internal/profilepin"
+)
+
+const (
+	profilePINMaxFailures  = 5
+	profilePINLockDuration = 15 * time.Minute
 )
 
 // Profiles returns only the selection fields for profiles belonging to one
@@ -14,7 +22,7 @@ func (s *Store) Profiles(accountID string) ([]model.ReaderProfile, error) {
 	defer cancel()
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name
+		SELECT id, name, pin_hash IS NOT NULL
 		FROM profiles
 		WHERE account_id = $1
 		ORDER BY name ASC, id ASC
@@ -27,7 +35,7 @@ func (s *Store) Profiles(accountID string) ([]model.ReaderProfile, error) {
 	profiles := []model.ReaderProfile{}
 	for rows.Next() {
 		var profile model.ReaderProfile
-		if err := rows.Scan(&profile.ID, &profile.Name); err != nil {
+		if err := rows.Scan(&profile.ID, &profile.Name, &profile.PINEnabled); err != nil {
 			return nil, err
 		}
 		profiles = append(profiles, profile)
@@ -36,6 +44,126 @@ func (s *Store) Profiles(accountID string) ([]model.ReaderProfile, error) {
 		return nil, err
 	}
 	return profiles, nil
+}
+
+// SetProfilePIN stores a bcrypt encoding only and clears the profile-local
+// verification lockout. The account/profile condition intentionally prevents
+// global profile probing.
+func (s *Store) SetProfilePIN(accountID, profileID, encodedHash string) error {
+	ctx, cancel := s.ctx()
+	defer cancel()
+
+	var updatedID string
+	return s.db.QueryRowContext(ctx, `
+		UPDATE profiles
+		SET pin_hash = $3,
+			pin_failed_attempts = 0,
+			pin_lock_until = NULL,
+			updated_at = now()
+		WHERE account_id = $1 AND id = $2
+		RETURNING id::text
+	`, accountID, profileID, encodedHash).Scan(&updatedID)
+}
+
+// RemoveProfilePIN removes the local reader-mode gate and clears only its
+// profile-local throttling state. It never affects adult authentication.
+func (s *Store) RemoveProfilePIN(accountID, profileID string) error {
+	ctx, cancel := s.ctx()
+	defer cancel()
+
+	var updatedID string
+	return s.db.QueryRowContext(ctx, `
+		UPDATE profiles
+		SET pin_hash = NULL,
+			pin_failed_attempts = 0,
+			pin_lock_until = NULL,
+			updated_at = now()
+		WHERE account_id = $1 AND id = $2
+		RETURNING id::text
+	`, accountID, profileID).Scan(&updatedID)
+}
+
+// VerifyProfilePIN compares a candidate inside a row-locked, account-scoped
+// transaction. A profile without a PIN succeeds directly; the caller still
+// needs the normal bearer and account membership boundary before reaching it.
+func (s *Store) VerifyProfilePIN(accountID, profileID, candidate string) error {
+	ctx, cancel := s.ctx()
+	defer cancel()
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var (
+		hash      sql.NullString
+		failures  int
+		lockUntil sql.NullTime
+	)
+	err = tx.QueryRowContext(ctx, `
+		SELECT pin_hash, pin_failed_attempts, pin_lock_until
+		FROM profiles
+		WHERE account_id = $1 AND id = $2
+		FOR UPDATE
+	`, accountID, profileID).Scan(&hash, &failures, &lockUntil)
+	if err != nil {
+		return err
+	}
+	if !hash.Valid || hash.String == "" {
+		return tx.Commit()
+	}
+
+	now := time.Now().UTC()
+	if lockUntil.Valid && lockUntil.Time.After(now) {
+		return model.ErrProfilePINRateLimited
+	}
+	if lockUntil.Valid {
+		failures = 0
+	}
+
+	matched, err := profilepin.Matches(hash.String, candidate)
+	if err != nil {
+		return err
+	}
+	if matched {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE profiles
+			SET pin_failed_attempts = 0, pin_lock_until = NULL, updated_at = now()
+			WHERE account_id = $1 AND id = $2
+		`, accountID, profileID); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
+
+	failures++
+	if failures >= profilePINMaxFailures {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE profiles
+			SET pin_failed_attempts = $3,
+				pin_lock_until = $4,
+				updated_at = now()
+			WHERE account_id = $1 AND id = $2
+		`, accountID, profileID, failures, now.Add(profilePINLockDuration)); err != nil {
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		return model.ErrProfilePINRateLimited
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE profiles
+		SET pin_failed_attempts = $3, pin_lock_until = NULL, updated_at = now()
+		WHERE account_id = $1 AND id = $2
+	`, accountID, profileID, failures); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return model.ErrProfilePINInvalid
 }
 
 // ProfileExists uses one account-scoped query so callers never learn whether a
@@ -93,9 +221,9 @@ func (s *Store) UpdateProfile(accountID, profileID, name string) (model.ReaderPr
 	return profile, err
 }
 
-// DeleteProfile hard-deletes only the selected account's profile. The current
-// account-scoped progress and settings schema has no profile FK, so this cannot
-// delete account or story data. sql.ErrNoRows remains externally forbidden.
+// DeleteProfile hard-deletes only the selected account's profile. The database
+// cascades only that profile's reader progress; it cannot delete account or
+// story data. sql.ErrNoRows remains externally forbidden.
 func (s *Store) DeleteProfile(accountID, profileID string) error {
 	ctx, cancel := s.ctx()
 	defer cancel()

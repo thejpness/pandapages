@@ -31,6 +31,7 @@ import {
   writeLibrarySortPreference,
   type LibrarySort,
 } from '../lib/library-sorting'
+import { isChildMode, leaveChildMode } from '../lib/reader-mode'
 
 type HeaderExpose = { focusSearch: () => void }
 type LoadErrorKind = 'server-error' | 'malformed' | null
@@ -378,6 +379,11 @@ onBeforeRouteUpdate((to) => {
 function navigateFromLibrary(path: string) {
   void router.push(path)
 }
+
+function leaveReaderMode() {
+  leaveChildMode()
+  void router.push('/profiles')
+}
 </script>
 
 <template>
@@ -390,6 +396,7 @@ function navigateFromLibrary(path: string) {
       :sort="sort"
       :result-label="resultLabel"
       :locking="locking"
+      :child-mode="isChildMode()"
       :surprise-disabled="visibleStories.length === 0 || loading || sessionLeaving"
       @update:q="setQuery"
       @update:sort="setSort"
@@ -399,6 +406,7 @@ function navigateFromLibrary(path: string) {
       @journey="navigateFromLibrary('/journey')"
       @admin="navigateFromLibrary('/admin/stories')"
       @lock="lockLibrary"
+      @leave-child="leaveReaderMode"
       @sticky-offset="setStickyHeaderOffset"
     />
 

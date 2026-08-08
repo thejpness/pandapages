@@ -6,9 +6,13 @@ import PandaAuthShell from "../components/app/PandaAuthShell.vue";
 import {
   createReaderProfile,
   deleteReaderProfile,
+  getAPIErrorStatus,
   listReaderProfiles,
+  removeReaderProfilePIN,
   renameReaderProfile,
+  setReaderProfilePIN,
   type ReaderProfile,
+  verifyReaderProfilePIN,
 } from "../lib/api";
 import { currentAccountContext } from "../lib/account-context";
 import {
@@ -17,6 +21,7 @@ import {
   selectReaderProfile,
   selectedReaderProfileID,
 } from "../lib/reader-profile-selection";
+import { enterChildMode, leaveChildMode } from "../lib/reader-mode";
 
 const route = useRoute();
 const router = useRouter();
@@ -30,6 +35,11 @@ const editingID = ref<string | null>(null);
 const editingName = ref("");
 const deleteTarget = ref<ReaderProfile | null>(null);
 const deleteConfirm = ref<HTMLButtonElement | null>(null);
+const pinTarget = ref<ReaderProfile | null>(null);
+const pinValue = ref("");
+const pinAction = ref<"set" | "verify" | null>(null);
+const removePINTarget = ref<ReaderProfile | null>(null);
+const pinError = ref("");
 const unavailable = computed(() => route.query.unavailable === '1');
 
 function destination(): string {
@@ -67,7 +77,72 @@ async function refresh(): Promise<void> {
 async function choose(profile: ReaderProfile): Promise<void> {
   selectReaderProfile(profile.id);
   selectedID.value = profile.id;
+  if (profile.pinEnabled) {
+    pinTarget.value = profile;
+    pinAction.value = "verify";
+    pinValue.value = "";
+    pinError.value = "";
+    return;
+  }
+  enterChildMode(profile.id);
   await router.replace(destination());
+}
+
+function beginSetPIN(profile: ReaderProfile): void {
+  pinTarget.value = profile;
+  pinAction.value = "set";
+  pinValue.value = "";
+  pinError.value = "";
+}
+
+function closePINDialog(): void {
+  pinTarget.value = null;
+  pinAction.value = null;
+  pinValue.value = "";
+  pinError.value = "";
+}
+
+async function submitPIN(): Promise<void> {
+  const profile = pinTarget.value;
+  if (!profile || !pinAction.value || busy.value) return;
+  busy.value = true;
+  pinError.value = "";
+  try {
+    if (pinAction.value === "set") {
+      await setReaderProfilePIN(profile.id, pinValue.value);
+      closePINDialog();
+      await refresh();
+    } else {
+      await verifyReaderProfilePIN(profile.id, pinValue.value);
+      closePINDialog();
+      enterChildMode(profile.id);
+      await router.replace(destination());
+    }
+  } catch (error) {
+    pinError.value = getAPIErrorStatus(error) === 429
+      ? "Too many tries. Please wait before trying again."
+      : pinAction.value === "verify"
+        ? "That PIN is not right."
+        : messageFor(error);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function removePIN(): Promise<void> {
+  const profile = removePINTarget.value;
+  if (!profile || busy.value) return;
+  busy.value = true;
+  errorMessage.value = "";
+  try {
+    await removeReaderProfilePIN(profile.id);
+    removePINTarget.value = null;
+    await refresh();
+  } catch (error) {
+    errorMessage.value = messageFor(error);
+  } finally {
+    busy.value = false;
+  }
 }
 
 async function createProfile(): Promise<void> {
@@ -123,6 +198,7 @@ async function deleteProfile(): Promise<void> {
     if (selectedID.value === profile.id) {
       clearSelectedReaderProfile();
       selectedID.value = null;
+      leaveChildMode();
     }
     deleteTarget.value = null;
     await refresh();
@@ -190,10 +266,21 @@ onMounted(async () => {
               @click="choose(profile)"
             >
               <span>{{ profile.name }}</span>
-              <small v-if="selectedID === profile.id">Selected</small>
+              <small v-if="profile.pinEnabled">PIN protected</small>
+              <small v-else-if="selectedID === profile.id">Selected</small>
             </button>
             <div class="actions">
               <button type="button" @click="startRename(profile)">Rename</button>
+              <button type="button" @click="beginSetPIN(profile)">
+                {{ profile.pinEnabled ? "Change PIN" : "Set PIN" }}
+              </button>
+              <button
+                v-if="profile.pinEnabled"
+                type="button"
+                @click="removePINTarget = profile"
+              >
+                Remove PIN
+              </button>
               <button type="button" class="danger" @click="confirmDelete(profile)">
                 Delete
               </button>
@@ -239,6 +326,56 @@ onMounted(async () => {
         >
           Delete reader
         </button>
+      </div>
+    </section>
+
+    <section
+      v-if="pinTarget && pinAction"
+      class="dialog"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="profile-pin-title"
+    >
+      <h2 id="profile-pin-title">
+        {{ pinAction === "verify" ? `Enter ${pinTarget.name}’s PIN` : `Set a PIN for ${pinTarget.name}` }}
+      </h2>
+      <p v-if="pinAction === 'set'">Use four numbers. You can change or remove it later.</p>
+      <form class="rename" @submit.prevent="submitPIN">
+        <label for="profile-pin">Four-digit PIN</label>
+        <input
+          id="profile-pin"
+          v-model="pinValue"
+          type="password"
+          inputmode="numeric"
+          autocomplete="off"
+          pattern="[0-9]{4}"
+          minlength="4"
+          maxlength="4"
+          :disabled="busy"
+          required
+        />
+        <p v-if="pinError" class="error" role="alert">{{ pinError }}</p>
+        <div class="actions">
+          <button type="button" :disabled="busy" @click="closePINDialog">Cancel</button>
+          <button type="submit" :disabled="busy">
+            {{ pinAction === "verify" ? "Continue" : "Save PIN" }}
+          </button>
+        </div>
+      </form>
+    </section>
+
+    <section
+      v-if="removePINTarget"
+      class="dialog"
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="remove-pin-title"
+    >
+      <h2 id="remove-pin-title">Remove {{ removePINTarget.name }}’s PIN?</h2>
+      <p>Anyone using this account can enter this reader without a PIN.</p>
+      <div class="actions">
+        <button type="button" :disabled="busy" @click="removePINTarget = null">Cancel</button>
+        <button type="button" class="danger" :disabled="busy" @click="removePIN">Remove PIN</button>
       </div>
     </section>
   </PandaAuthShell>

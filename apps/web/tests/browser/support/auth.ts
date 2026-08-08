@@ -6,7 +6,7 @@ export const fixturePrincipalID = '123e4567-e89b-12d3-a456-426614174100'
 export const fixtureProfileID = '123e4567-e89b-42d3-a456-426614174300'
 
 type Role = 'owner' | 'adult'
-export type BrowserProfile = { id: string; name: string }
+export type BrowserProfile = { id: string; name: string; pin_enabled?: boolean }
 
 export type BrowserAuth = {
   accountID: string
@@ -54,7 +54,7 @@ export const test = base.extend<{ auth: BrowserAuth }>({
   auth: [async ({ page }, use) => {
     let memberships = [{ accountId: fixtureAccountID, accountName: 'My Panda Pages', role: 'owner' as Role }]
     let onboardingRequired = false
-    let profiles: BrowserProfile[] = [{ id: fixtureProfileID, name: 'Mina' }]
+    let profiles: BrowserProfile[] = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false }]
     await installOfficialSession(page)
     await page.route('**/api/auth/**', async (route) => {
       const request = route.request()

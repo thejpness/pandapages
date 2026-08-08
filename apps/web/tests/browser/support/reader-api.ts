@@ -311,7 +311,7 @@ export class ReaderApiMock {
   readonly unhandledRequests: CapturedRequest[] = []
   readonly stories = new Map<string, ReaderStoryFixture>()
   readonly progress = new Map<string, ProgressFixture | null>()
-  profiles: BrowserProfile[] = [{ id: fixtureProfileID, name: 'Mina' }]
+  profiles: BrowserProfile[] = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false }]
 
   authSignedIn = true
   libraryItems: ReaderLibraryItemFixture[] = []

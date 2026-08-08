@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"pandapages/api/internal/appidentity"
 	"pandapages/api/internal/model"
+	"pandapages/api/internal/profilepin"
 )
 
 const (
@@ -164,6 +165,61 @@ func TestIdentityStoreIntegration(t *testing.T) {
 	}
 	if _, err := stores[0].UpdateProfile(legacyAccount, profileOne, "Elsewhere"); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("cross-account profile update error = %v", err)
+	}
+
+	// A profile PIN is an account-scoped, one-way local child-mode gate. It is
+	// neither an identity credential nor durable application authorization.
+	encodedPIN, err := profilepin.Hash("1234")
+	if err != nil {
+		t.Fatalf("hash profile PIN: %v", err)
+	}
+	if err := stores[0].SetProfilePIN(wantAccount, profileOne, encodedPIN); err != nil {
+		t.Fatalf("set account-scoped profile PIN: %v", err)
+	}
+	var storedPIN string
+	if err := admin.QueryRow(`SELECT pin_hash FROM profiles WHERE account_id=$1 AND id=$2`, wantAccount, profileOne).Scan(&storedPIN); err != nil || storedPIN == "1234" || storedPIN != encodedPIN {
+		t.Fatalf("stored profile PIN hash = %q, err=%v", storedPIN, err)
+	}
+	profilesForAccount, err = stores[0].Profiles(wantAccount)
+	pinEnabled := false
+	for _, profile := range profilesForAccount {
+		if profile.ID == profileOne {
+			pinEnabled = profile.PINEnabled
+			break
+		}
+	}
+	if err != nil || !pinEnabled {
+		t.Fatalf("PIN-enabled profile list = %#v, %v", profilesForAccount, err)
+	}
+	if err := stores[0].VerifyProfilePIN(wantAccount, profileOne, "0000"); !errors.Is(err, model.ErrProfilePINInvalid) {
+		t.Fatalf("wrong profile PIN error = %v", err)
+	}
+	if err := stores[0].VerifyProfilePIN(wantAccount, profileOne, "1234"); err != nil {
+		t.Fatalf("correct profile PIN error = %v", err)
+	}
+	for attempt := 0; attempt < profilePINMaxFailures-1; attempt++ {
+		if err := stores[0].VerifyProfilePIN(wantAccount, profileOne, "0000"); !errors.Is(err, model.ErrProfilePINInvalid) {
+			t.Fatalf("wrong profile PIN attempt %d error = %v", attempt, err)
+		}
+	}
+	if err := stores[0].VerifyProfilePIN(wantAccount, profileOne, "0000"); !errors.Is(err, model.ErrProfilePINRateLimited) {
+		t.Fatalf("rate-limited profile PIN error = %v", err)
+	}
+	if err := stores[0].SetProfilePIN(wantAccount, profileOne, encodedPIN); err != nil {
+		t.Fatalf("reset PIN lockout: %v", err)
+	}
+	if err := stores[0].RemoveProfilePIN(wantAccount, profileOne); err != nil {
+		t.Fatalf("remove profile PIN: %v", err)
+	}
+	if err := stores[0].VerifyProfilePIN(wantAccount, profileOne, "0000"); err != nil {
+		t.Fatalf("PIN-free profile verification: %v", err)
+	}
+	assertConstraint(t, admin, "profiles_pin_state_requires_hash_check", `
+		UPDATE profiles SET pin_failed_attempts=1, pin_hash=NULL
+		WHERE account_id=$1 AND id=$2
+	`, wantAccount, profileOne)
+	if err := stores[0].SetProfilePIN(legacyAccount, profileOne, encodedPIN); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("cross-account profile PIN set error = %v", err)
 	}
 	if err := stores[0].DeleteProfile(legacyAccount, profileOne); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("cross-account profile delete error = %v", err)

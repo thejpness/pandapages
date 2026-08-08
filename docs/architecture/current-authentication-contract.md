@@ -31,6 +31,30 @@ profile ID, so a missing profile and a profile from another account both fail
 closed as `profile_forbidden`. A final profile may be deleted without deleting
 account or story data.
 
+Panda Pages has two frontend modes, both layered over the same adult bearer
+and account membership boundary. Parent mode is the default and exposes
+account, profile, PIN, settings, and permitted admin controls. Child mode is a
+reader-focused UI state for one explicitly selected profile; it hides those
+parent controls and permits reader experiences. It does not grant an account
+role or any additional server authority.
+
+A profile may optionally have a four-digit PIN. `PUT` and `DELETE`
+`/api/v1/profiles/{profile ID}/pin` set or remove that local reader-mode gate;
+`POST /api/v1/profiles/{profile ID}/pin/verify` verifies it before the
+frontend enters child mode. Each endpoint is account-scoped, requires the
+adult bearer and selected account membership, and never needs a profile
+header. The database stores only a salted bcrypt encoding and profile-local
+failed-attempt/lock state. Five consecutive failures lock verification for 15
+minutes; success, setting, and removal reset that state. Wrong PINs return
+`pin_invalid`; locked profiles return `pin_rate_limited`; missing and
+cross-account profiles remain indistinguishable as `profile_forbidden`.
+
+The PIN is not authentication, a bearer token, a membership credential, or a
+replacement for Supabase. It is never returned, logged, placed in a URL, or
+persisted by the frontend. Child-mode unlock is memory-only, so a refresh
+returns to parent mode and requires a configured PIN again. No custom child
+cookie, token, or server session exists.
+
 The frontend restores the official Supabase PKCE session, resolves identity,
 and sends the bearer plus its explicit account selection with every protected
 request. A selected account stored locally is only a UI preference; membership
@@ -59,6 +83,11 @@ not alter accounts, profiles, stories, memberships, or settings. Its Down
 migration fails explicitly because multiple profile rows cannot truthfully be
 collapsed back to account scope.
 
+Migration 00019 adds optional profile-local PIN hash and throttling state. It
+does not affect progress, settings, accounts, profiles, or memberships beyond
+the new security columns. Its Down migration fails explicitly because silently
+removing configured reader gates would not be a truthful rollback.
+
 Admin routes require all of: a valid bearer, an explicit member account, an
 `owner` membership role, and the ingress-provided `X-PP-Admin-Key`.
 
@@ -68,4 +97,5 @@ Protected application errors use the finite bearer/account contract:
 `identity_state_invalid`, `account_forbidden`, and `identity_unavailable`.
 For profile-scoped endpoints the additional finite errors are
 `profile_required`, `invalid_profile`, `profile_forbidden`, and
-`profile_unavailable`.
+`profile_unavailable`. PIN endpoints additionally use `invalid_pin`,
+`pin_invalid`, and `pin_rate_limited`.

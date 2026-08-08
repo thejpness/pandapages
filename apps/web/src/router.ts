@@ -8,6 +8,7 @@ import {
   ProfileContextError,
   currentReaderProfileContext,
 } from "./lib/profile-context";
+import { isChildMode, isChildModeFor } from "./lib/reader-mode";
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -36,30 +37,30 @@ export const router = createRouter({
     {
       path: "/profiles",
       component: () => import("./views/Profiles.vue"),
-      meta: { requiresAccount: true },
+      meta: { requiresAccount: true, parentOnly: true },
     },
 
     {
       path: "/library",
       component: () => import("./views/Library.vue"),
-      meta: { requiresAccount: true, requiresProfile: true },
+      meta: { requiresAccount: true, requiresProfile: true, requiresChildMode: true },
     },
     {
       path: "/read/:slug",
       component: () => import("./views/Reader.vue"),
       props: true,
-      meta: { requiresAccount: true, requiresProfile: true },
+      meta: { requiresAccount: true, requiresProfile: true, requiresChildMode: true },
     },
     {
       path: "/journey",
       component: () => import("./views/Journey.vue"),
-      meta: { requiresAccount: true },
+      meta: { requiresAccount: true, parentOnly: true },
     },
 
     {
       path: "/admin",
       component: () => import("./views/admin/AdminLayout.vue"),
-      meta: { requiresAccount: true },
+      meta: { requiresAccount: true, parentOnly: true },
       children: [
         { path: "", redirect: { name: "admin-stories" } },
         { path: "upload", redirect: { name: "admin-story-new" } },
@@ -102,9 +103,20 @@ router.beforeEach(async (to) => {
     return { path: "/account/login", query: { next: to.fullPath } };
   }
 
+  if (to.matched.some((route) => route.meta.parentOnly) && isChildMode()) {
+    return "/library";
+  }
+
   if (!to.matched.some((route) => route.meta.requiresProfile)) return true;
   try {
-    await currentReaderProfileContext();
+    const context = await currentReaderProfileContext();
+    if (
+      to.matched.some((route) => route.meta.requiresChildMode) &&
+      context.profile.pinEnabled &&
+      !isChildModeFor(context.profile.id)
+    ) {
+      return { path: "/profiles", query: { next: to.fullPath } };
+    }
     return true;
   } catch (error) {
     if (error instanceof ProfileContextError) {

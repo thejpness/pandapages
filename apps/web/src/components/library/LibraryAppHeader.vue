@@ -14,6 +14,7 @@ const props = defineProps<{
   sort: LibrarySort
   resultLabel: string
   locking: boolean
+  childMode: boolean
   surpriseDisabled: boolean
 }>()
 
@@ -26,6 +27,7 @@ const emit = defineEmits<{
   journey: []
   admin: []
   lock: []
+  'leave-child': []
   'sticky-offset': [height: number]
 }>()
 
@@ -139,7 +141,7 @@ defineExpose({ focusSearch })
         </RouterLink>
 
         <div class="library-header__actions">
-          <PopoverRoot v-model:open="parentMenuOpen">
+          <PopoverRoot v-if="!childMode" v-model:open="parentMenuOpen">
             <div class="parent-options">
               <PopoverTrigger as-child>
                 <button
@@ -197,6 +199,17 @@ defineExpose({ focusSearch })
           </PopoverRoot>
 
           <button
+            v-if="childMode"
+            ref="lockButton"
+            class="header-button header-button--ink"
+            type="button"
+            @click="emit('leave-child')"
+          >
+            <span aria-hidden="true">‹</span>
+            Leave reader mode
+          </button>
+          <button
+            v-else
             ref="lockButton"
             class="header-button header-button--ink"
             type="button"
