@@ -215,6 +215,35 @@ test.describe('reader profile lifecycle', () => {
     await expect(page.getByText('Selected', { exact: true })).toBeVisible()
   })
 
+  test('reader mode contains parent and account SPA routes until it is explicitly left', async ({ page }) => {
+    const api = new ProfilesApiMock(page)
+    api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false }]
+    await api.install()
+
+    await page.goto('/profiles')
+    await page.getByRole('button', { name: 'Start reading as Mina' }).click()
+    await expect(page).toHaveURL('/library')
+
+    for (const path of ['/profiles', '/journey', '/admin/stories', '/account']) {
+      await page.evaluate(async (target) => {
+        type AppRouter = { push: (location: string) => Promise<unknown> }
+        type VueAppHost = HTMLElement & {
+          __vue_app__?: {
+            config: { globalProperties: { $router: AppRouter } }
+          }
+        }
+        const app = document.querySelector<VueAppHost>('#app')?.__vue_app__
+        if (!app) throw new Error('Vue application was not mounted')
+        await app.config.globalProperties.$router.push(target)
+      }, path)
+
+      await expect(page).toHaveURL('/library')
+      await expect(page.getByRole('button', { name: 'Leave reader mode' })).toBeVisible()
+      await expect(page.getByRole('heading', { level: 1, name: 'Parent Hub' })).toHaveCount(0)
+      await expect(page.getByRole('heading', { level: 1, name: 'Choose an account' })).toHaveCount(0)
+    }
+  })
+
   test('a no-PIN reader restores reader mode after reload and direct Library navigation', async ({ page }) => {
     const api = new ProfilesApiMock(page)
     api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false }]
