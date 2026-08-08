@@ -151,6 +151,26 @@ SQL
   }
 }
 
+expect_sql_rejected() {
+  local name=$1
+  local expected_constraint=$2
+  local statement=$3
+  local output
+  if output=$(
+    docker exec "$container_name" \
+      psql -X --username="$database_user" --dbname="$database_name" \
+        --set=ON_ERROR_STOP=1 --command="$statement" 2>&1
+  ); then
+    printf 'database edition constraint accepted invalid case: %s\n' "$name" >&2
+    exit 1
+  fi
+  [[ "$output" == *"$expected_constraint"* ]] || {
+    printf 'edition case %s failed outside %s\n' "$name" "$expected_constraint" >&2
+    printf '%s\n' "$output" >&2
+    exit 1
+  }
+}
+
 run_goose up-to 13 >/dev/null
 
 docker exec -i "$container_name" \
@@ -358,7 +378,7 @@ rollback_test_root=''
 
 # Migration 00019 introduces only local reader-mode PIN security state. Its
 # down migration fails explicitly rather than silently removing protection.
-run_goose up >/dev/null
+run_goose up-to 19 >/dev/null
 assert_query '3' "
   SELECT count(*)
   FROM information_schema.columns
@@ -373,6 +393,106 @@ fi
 grep -Fq 'profile PIN security migration is irreversible' "$rollback_test_root/down.err"
 rm -rf -- "$rollback_test_root"
 rollback_test_root=''
+
+# Migration 00020 adds the edition lifecycle without changing the public Reader
+# contract. Every historical version is attached to a Classic edition and both
+# compatibility pointers are copied exactly.
+run_goose up-to 20 >/dev/null
+assert_query 'classic|attached|draft|published' "
+  SELECT
+    edition.edition_key || '|' ||
+    CASE WHEN version.edition_id = edition.id THEN 'attached' ELSE 'detached' END || '|' ||
+    CASE WHEN edition.draft_version_id = story.draft_version_id THEN 'draft' ELSE 'draft-mismatch' END || '|' ||
+    CASE WHEN edition.published_version_id = story.published_version_id THEN 'published' ELSE 'published-mismatch' END
+  FROM stories AS story
+  JOIN story_editions AS edition
+    ON edition.story_id = story.id
+   AND edition.edition_key = 'classic'
+  JOIN story_versions AS version
+    ON version.story_id = story.id
+   AND version.id = 'e2140000-0000-4000-8000-000000000002'
+  WHERE story.slug = 'reader-2-migration-vector';
+" 'Classic edition backfill and compatibility pointers'
+
+expect_sql_rejected invalid-edition-key story_editions_edition_key_check "
+  INSERT INTO story_editions (story_id, edition_key)
+  SELECT id, 'bedtime-ultra'
+  FROM stories
+  WHERE slug = 'reader-2-migration-vector';
+"
+
+psql_query "
+  INSERT INTO story_editions (story_id, edition_key)
+  SELECT id, 'growing-readers'
+  FROM stories
+  WHERE slug = 'reader-2-migration-vector';
+" >/dev/null
+
+expect_sql_rejected cross-edition-draft-pointer story_editions_draft_version_fkey "
+  UPDATE story_editions
+  SET draft_version_id = 'e2140000-0000-4000-8000-000000000002'
+  WHERE story_id = (
+    SELECT id FROM stories WHERE slug = 'reader-2-migration-vector'
+  )
+    AND edition_key = 'growing-readers';
+"
+
+psql_query "
+  INSERT INTO story_versions (
+    story_id, edition_id, version, frontmatter, markdown, rendered_html, content_hash
+  )
+  SELECT
+    original.story_id,
+    edition.id,
+    2,
+    original.frontmatter,
+    original.markdown,
+    original.rendered_html,
+    original.content_hash
+  FROM story_versions AS original
+  JOIN story_editions AS edition
+    ON edition.story_id = original.story_id
+   AND edition.edition_key = 'growing-readers'
+  WHERE original.id = 'e2140000-0000-4000-8000-000000000002';
+" >/dev/null
+assert_query '2' "
+  SELECT count(*)
+  FROM story_versions AS version
+  JOIN stories AS story ON story.id = version.story_id
+  WHERE story.slug = 'reader-2-migration-vector';
+" 'same immutable body may exist independently in two editions'
+
+psql_query "
+  DELETE FROM story_versions
+  WHERE story_id = (SELECT id FROM stories WHERE slug = 'reader-2-migration-vector')
+    AND version = 2;
+  DELETE FROM story_editions
+  WHERE story_id = (SELECT id FROM stories WHERE slug = 'reader-2-migration-vector')
+    AND edition_key = 'growing-readers';
+" >/dev/null
+
+run_goose down-to 19 >/dev/null
+assert_query '0|0|1' "
+  SELECT
+    (SELECT count(*) FROM information_schema.tables
+      WHERE table_schema='public' AND table_name='story_editions') || '|' ||
+    (SELECT count(*) FROM information_schema.columns
+      WHERE table_schema='public' AND table_name='story_versions' AND column_name='edition_id') || '|' ||
+    (SELECT count(*) FROM pg_constraint
+      WHERE conname='story_versions_story_id_content_hash_key');
+" 'edition migration rollback restores the pre-20 version shape'
+
+run_goose up-to 20 >/dev/null
+assert_query '1|1|1' "
+  SELECT
+    (SELECT count(*) FROM story_editions AS edition
+      JOIN stories AS story ON story.id=edition.story_id
+      WHERE story.slug='reader-2-migration-vector' AND edition.edition_key='classic') || '|' ||
+    (SELECT count(*) FROM story_versions
+      WHERE id='e2140000-0000-4000-8000-000000000002' AND edition_id IS NOT NULL) || '|' ||
+    (SELECT count(*) FROM pg_constraint
+      WHERE conname='story_versions_edition_id_content_hash_key');
+" 'edition migration reapplies cleanly'
 
 published_address=$(docker port "$container_name" 5432/tcp)
 published_port=${published_address##*:}

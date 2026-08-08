@@ -185,7 +185,7 @@ run_goose() {
   fi
 }
 
-printf '1..13\n'
+printf '1..14\n'
 
 "$role_script" audit \
   --container "$source_container" \
@@ -376,10 +376,119 @@ expect_denied 'migration create database' "$migration_role" "$database" 'CREATE 
 expect_denied 'migration create role' "$migration_role" "$database" 'CREATE ROLE migration_forbidden;'
 printf 'ok 11 - trusted pgcrypto and DDL need no migration-role superuser capability\n'
 
+psql_as "$migration_role" --command="
+  DROP TABLE role_future_runtime;
+  DROP FUNCTION role_required_upper(text);
+" >/dev/null
+
 run_goose goose-account-scope-up up
 account_scope_shape=$(psql_as "$migration_role" --tuples-only --no-align \
   --command="SELECT (SELECT max(version_id) FROM goose_db_version WHERE is_applied) || '|' || (to_regclass('public.account_settings') IS NOT NULL)::int || '|' || (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='reading_progress' AND column_name='profile_id');")
-[[ "$account_scope_shape" == '19|1|1' ]]
+[[ "$account_scope_shape" == '20|1|1' ]]
+
+edition_backfill=$(psql_as "$application_role" --tuples-only --no-align \
+  --command="
+    SELECT
+      ((SELECT count(*) FROM story_editions WHERE edition_key='classic') =
+       (SELECT count(*) FROM stories))::text
+      || '|' ||
+      (NOT EXISTS (
+        SELECT 1 FROM story_versions WHERE edition_id IS NULL
+      ))::text;
+  ")
+[[ "$edition_backfill" == 'true|true' ]]
+
+edition_acl=$(docker exec "$source_container" \
+  psql -X --username="$admin_user" --dbname="$database" --tuples-only --no-align \
+  --command="
+    SELECT
+      has_table_privilege('$application_role','public.story_editions','SELECT,INSERT,UPDATE,DELETE')
+      || '|' ||
+      has_table_privilege('$backup_role','public.story_editions','SELECT')
+      || '|' ||
+      has_table_privilege('$backup_role','public.story_editions','INSERT,UPDATE,DELETE,TRUNCATE');
+  ")
+[[ "$edition_acl" == 'true|true|false' ]]
+
+psql_as "$application_role" --command="
+  INSERT INTO story_editions (story_id, edition_key)
+  VALUES ('a1500000-0000-4000-8000-000000000041', 'growing-readers');
+  UPDATE story_editions
+  SET updated_at = now()
+  WHERE story_id = 'a1500000-0000-4000-8000-000000000041'
+    AND edition_key = 'growing-readers';
+  DELETE FROM story_editions
+  WHERE story_id = 'a1500000-0000-4000-8000-000000000041'
+    AND edition_key = 'growing-readers';
+" >/dev/null
+
+psql_as "$application_role" --command="
+  INSERT INTO stories (id, account_id, slug, title)
+  VALUES (
+    'c1500000-0000-4000-8000-000000000041',
+    'a1500000-0000-4000-8000-000000000001',
+    'edition-cascade-test',
+    'Edition cascade test'
+  );
+  INSERT INTO story_editions (
+    id, story_id, edition_key
+  ) VALUES (
+    'c1500000-0000-4000-8000-000000000061',
+    'c1500000-0000-4000-8000-000000000041',
+    'classic'
+  );
+  INSERT INTO story_versions (
+    id, story_id, edition_id, version, markdown, rendered_html, content_hash
+  ) VALUES (
+    'c1500000-0000-4000-8000-000000000051',
+    'c1500000-0000-4000-8000-000000000041',
+    'c1500000-0000-4000-8000-000000000061',
+    1,
+    '# Edition cascade test',
+    '<h1>Edition cascade test</h1>',
+    'edition-cascade-test-v1'
+  );
+  UPDATE story_editions
+  SET draft_version_id = 'c1500000-0000-4000-8000-000000000051',
+      published_version_id = 'c1500000-0000-4000-8000-000000000051'
+  WHERE id = 'c1500000-0000-4000-8000-000000000061';
+  UPDATE stories
+  SET draft_version_id = 'c1500000-0000-4000-8000-000000000051',
+      published_version_id = 'c1500000-0000-4000-8000-000000000051',
+      is_published = true
+  WHERE id = 'c1500000-0000-4000-8000-000000000041';
+  DELETE FROM stories
+  WHERE id = 'c1500000-0000-4000-8000-000000000041';
+" >/dev/null
+
+edition_cascade=$(psql_as "$application_role" --tuples-only --no-align \
+  --command="
+    SELECT
+      (SELECT count(*) FROM stories WHERE id='c1500000-0000-4000-8000-000000000041')
+      || '|' ||
+      (SELECT count(*) FROM story_editions WHERE story_id='c1500000-0000-4000-8000-000000000041')
+      || '|' ||
+      (SELECT count(*) FROM story_versions WHERE story_id='c1500000-0000-4000-8000-000000000041');
+  ")
+[[ "$edition_cascade" == '0|0|0' ]]
+
+apply_policy
+verify_policy
+
+psql_as "$admin_user" --command="
+  GRANT TRUNCATE ON TABLE story_editions TO $application_role;
+" >/dev/null
+if verify_policy 2>"$test_root/verify-excessive.err"; then
+  printf 'Role verifier accepted an excessive story_editions privilege\n' >&2
+  exit 1
+fi
+grep -Fq 'verification failed: application table privileges are incomplete or excessive' \
+  "$test_root/verify-excessive.err"
+apply_policy
+verify_policy
+
+printf 'ok 12 - story edition migration backfills Classic, grants runtime and backup access, cascades cleanly, and verifies fail-closed\n'
+
 if docker run --rm \
   --network "$source_network" \
   --read-only \
@@ -395,8 +504,8 @@ if docker run --rm \
   exit 1
 fi
 grep -Fq 'profile PIN security migration is irreversible' "$test_root/goose-account-scope-down.err"
-printf 'ok 12 - profile PIN security migration applies under the owner role and rejects an untruthful rollback\n'
+printf 'ok 13 - profile PIN security migration applies under the owner role and rejects an untruthful rollback\n'
 after_resources="$test_root/after-resources"
 docker ps -aq --filter label=com.pandapages.disposable=role-integration | sort >"$after_resources"
 [[ $(wc -l <"$after_resources") -eq 1 ]]
-printf 'ok 13 - generated test uses only isolated disposable resources\n'
+printf 'ok 14 - generated test uses only isolated disposable resources\n'

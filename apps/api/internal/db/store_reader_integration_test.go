@@ -107,6 +107,52 @@ func TestReaderStoreIntegration(t *testing.T) {
 		t.Fatalf("restore first publication: %v", err)
 	}
 
+	var (
+		classicEditionID        string
+		classicDraftVersionID   string
+		classicPublishedVersion string
+		classicVersionCount     int
+		editionCount            int
+	)
+	if err := adminDB.QueryRow(`
+		SELECT
+			edition.id,
+			edition.draft_version_id,
+			edition.published_version_id,
+			count(version.id)
+		FROM story_editions AS edition
+		JOIN story_versions AS version ON version.edition_id = edition.id
+		WHERE edition.story_id = $1
+		  AND edition.edition_key = 'classic'
+		GROUP BY edition.id, edition.draft_version_id, edition.published_version_id
+	`, firstDraft.StoryID).Scan(
+		&classicEditionID,
+		&classicDraftVersionID,
+		&classicPublishedVersion,
+		&classicVersionCount,
+	); err != nil {
+		t.Fatalf("read Classic edition lifecycle: %v", err)
+	}
+	if err := adminDB.QueryRow(`
+		SELECT count(*)
+		FROM story_editions
+		WHERE story_id = $1
+	`, firstDraft.StoryID).Scan(&editionCount); err != nil {
+		t.Fatalf("count story editions: %v", err)
+	}
+	if classicEditionID == "" || editionCount != 1 || classicVersionCount != 2 ||
+		classicDraftVersionID != secondDraft.VersionID ||
+		classicPublishedVersion != firstDraft.VersionID {
+		t.Fatalf(
+			"Classic edition lifecycle = id %q, editions %d, versions %d, draft %q, published %q",
+			classicEditionID,
+			editionCount,
+			classicVersionCount,
+			classicDraftVersionID,
+			classicPublishedVersion,
+		)
+	}
+
 	accountBDraft, err := store.AdminDraftUpsert(readerAccountB, model.AdminDraftUpsertRequest{
 		Slug:     readerSlug,
 		Title:    "Account B isolated story",
@@ -293,6 +339,28 @@ func TestReaderStoreIntegration(t *testing.T) {
 			unpublishedStatus.PublishedVersion != nil || unpublishedStatus.DraftVersion == nil ||
 			unpublishedStatus.DraftVersion.VersionID != unpublishDraft.VersionID || unpublishedStatus.VersionCount != 1 {
 			t.Fatalf("unpublish response = %#v", unpublishedStatus)
+		}
+		var (
+			editionDraftAfterUnpublish     string
+			editionPublishedAfterUnpublish sql.NullString
+		)
+		if err := adminDB.QueryRow(`
+			SELECT edition.draft_version_id, edition.published_version_id
+			FROM story_editions AS edition
+			WHERE edition.story_id = $1
+			  AND edition.edition_key = 'classic'
+		`, unpublishDraft.StoryID).Scan(
+			&editionDraftAfterUnpublish,
+			&editionPublishedAfterUnpublish,
+		); err != nil {
+			t.Fatalf("read Classic edition after unpublish: %v", err)
+		}
+		if editionDraftAfterUnpublish != unpublishDraft.VersionID || editionPublishedAfterUnpublish.Valid {
+			t.Fatalf(
+				"Classic edition after unpublish = draft %q, published %#v",
+				editionDraftAfterUnpublish,
+				editionPublishedAfterUnpublish,
+			)
 		}
 		repeatedUnpublish, err := store.AdminUnpublish(readerAccountA, unpublishSlug)
 		if err != nil || !reflect.DeepEqual(repeatedUnpublish, unpublishedStatus) {
@@ -495,7 +563,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 		}
 	})
 
-	t.Run("Story Studio repair state never follows a foreign pointer or leaks corrupt content", func(t *testing.T) {
+	t.Run("database rejects a foreign story pointer and repair state never leaks corrupt content", func(t *testing.T) {
 		const pointerSlug = "story-studio-foreign-pointer"
 		pointerDraft, err := store.AdminDraftUpsert(readerAccountA, model.AdminDraftUpsertRequest{
 			Slug: pointerSlug, Title: "Account A pointer story", Markdown: "# Account A pointer story\n\nSafe metadata.\n",
@@ -508,16 +576,19 @@ func TestReaderStoreIntegration(t *testing.T) {
 			UPDATE stories
 			SET draft_version_id = $2
 			WHERE id = $1
-		`, pointerDraft.StoryID, accountBDraft.VersionID); err != nil {
-			t.Fatalf("install cross-story pointer: %v", err)
+		`, pointerDraft.StoryID, accountBDraft.VersionID); err == nil {
+			t.Fatal("database accepted a cross-story draft pointer")
+		} else if !strings.Contains(err.Error(), "fk_stories_draft_version") {
+			t.Fatalf("cross-story draft pointer failed outside fk_stories_draft_version: %v", err)
 		}
 		pointerDetail, err := store.AdminGetStory(readerAccountA, pointerSlug)
 		if err != nil {
-			t.Fatalf("get foreign-pointer repair detail: %v", err)
+			t.Fatalf("get pointer story after rejected corruption: %v", err)
 		}
-		if pointerDetail.Status != model.AdminStoryStatusRepairRequired || pointerDetail.DraftVersion != nil ||
+		if pointerDetail.Status != model.AdminStoryStatusDraftOnly || pointerDetail.DraftVersion == nil ||
+			pointerDetail.DraftVersion.VersionID != pointerDraft.VersionID ||
 			pointerDetail.Title != "Account A pointer story" || pointerDetail.Title == "Account B isolated story" {
-			t.Fatalf("foreign-pointer repair detail = %#v", pointerDetail)
+			t.Fatalf("pointer story after rejected corruption = %#v", pointerDetail)
 		}
 
 		const corruptSlug = "story-studio-corrupt-version"
@@ -1036,7 +1107,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 					WHERE application_name = $1
 					  AND state = 'active'
 					  AND wait_event_type = 'Lock'
-					  AND query LIKE '%content_hash = $2%'
+					  AND query LIKE '%content_hash = $3%'
 				)
 			`, reuseApplicationName).Scan(&lockObserved); err != nil {
 				t.Fatalf("inspect blocked idempotent reuse: %v", err)
@@ -1357,9 +1428,17 @@ func TestReaderStoreIntegration(t *testing.T) {
 			var rawVersionID string
 			if err := adminDB.QueryRow(`
 				INSERT INTO story_versions (
-					story_id, version, frontmatter, markdown, rendered_html, content_hash
+					story_id, edition_id, version, frontmatter, markdown, rendered_html, content_hash
 				) VALUES (
-					$1, 3, '{"title":"Unreadable manual version","author":"","language":"en-GB"}',
+					$1,
+					(
+						SELECT id
+						FROM story_editions
+						WHERE story_id = $1
+						  AND edition_key = 'classic'
+					),
+					3,
+					'{"title":"Unreadable manual version","author":"","language":"en-GB"}',
 					$2, $3, $4
 				)
 				RETURNING id

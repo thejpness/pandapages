@@ -705,6 +705,11 @@ func (s *Store) AdminDraftUpsert(accountID string, req model.AdminDraftUpsertReq
 		return model.AdminDraftUpsertResponse{}, err
 	}
 
+	classicEditionID, err := ensureClassicEdition(ctx, tx, storyID)
+	if err != nil {
+		return model.AdminDraftUpsertResponse{}, err
+	}
+
 	// Body hashes identify possible idempotency targets for compatibility with
 	// existing versions. Reuse still requires the complete locked immutable
 	// version to equal this request. Metadata-only changes therefore return the
@@ -714,10 +719,11 @@ func (s *Store) AdminDraftUpsert(accountID string, req model.AdminDraftUpsertReq
 		SELECT id
 		FROM story_versions
 		WHERE story_id = $1
-		  AND (content_hash = $2 OR markdown = $3)
+		  AND edition_id = $2
+		  AND (content_hash = $3 OR markdown = $4)
 		ORDER BY version ASC, id ASC
 		FOR UPDATE
-	`, storyID, ing.ContentHash, ing.Markdown)
+	`, storyID, classicEditionID, ing.ContentHash, ing.Markdown)
 	if err != nil {
 		return model.AdminDraftUpsertResponse{}, err
 	}
@@ -765,7 +771,11 @@ func (s *Store) AdminDraftUpsert(accountID string, req model.AdminDraftUpsertReq
 			return model.AdminDraftUpsertResponse{}, fmt.Errorf("%w", model.ErrAdminVersionRepairRequired)
 		}
 
-		// point draft at the existing version
+		// Keep the new edition-owned pointer and the temporary story-level
+		// compatibility pointer coherent in the same transaction.
+		if err := setEditionDraftPointer(ctx, tx, classicEditionID, existingVersionID); err != nil {
+			return model.AdminDraftUpsertResponse{}, err
+		}
 		_, err = tx.ExecContext(ctx, `
 			UPDATE stories
 			SET draft_version_id=$2,
@@ -827,10 +837,12 @@ func (s *Store) AdminDraftUpsert(accountID string, req model.AdminDraftUpsertReq
 
 	var versionID string
 	err = tx.QueryRowContext(ctx, `
-		INSERT INTO story_versions (story_id, version, frontmatter, markdown, rendered_html, content_hash)
-		VALUES ($1,$2,$3::jsonb,$4,$5,$6)
+		INSERT INTO story_versions (
+			story_id, edition_id, version, frontmatter, markdown, rendered_html, content_hash
+		)
+		VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7)
 		RETURNING id
-	`, storyID, nextVersion, string(frontmatterJSON), ing.Markdown, ing.RenderedHTML, ing.ContentHash).Scan(&versionID)
+	`, storyID, classicEditionID, nextVersion, string(frontmatterJSON), ing.Markdown, ing.RenderedHTML, ing.ContentHash).Scan(&versionID)
 	if err != nil {
 		return model.AdminDraftUpsertResponse{}, err
 	}
@@ -944,7 +956,11 @@ func (s *Store) AdminDraftUpsert(accountID string, req model.AdminDraftUpsertReq
 		}
 	}
 
-	// update draft pointer ONLY (publish is separate endpoint)
+	// Update the edition-owned draft pointer and the temporary story-level
+	// compatibility pointer only. Publication remains a separate endpoint.
+	if err := setEditionDraftPointer(ctx, tx, classicEditionID, versionID); err != nil {
+		return model.AdminDraftUpsertResponse{}, err
+	}
 	_, err = tx.ExecContext(ctx, `
 		UPDATE stories
 		SET draft_version_id=$2,
@@ -1036,6 +1052,20 @@ func (s *Store) AdminPublishStory(accountID string, slug string, versionID strin
 		return model.AdminStoryStatusResponse{}, err
 	}
 
+	classicEditionID, err := loadClassicEditionID(ctx, tx, story.ID, true)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.AdminStoryStatusResponse{}, fmt.Errorf("%w", model.ErrAdminPublishInvalid)
+	}
+	if err != nil {
+		return model.AdminStoryStatusResponse{}, err
+	}
+	if err := requireVersionInEdition(ctx, tx, story.ID, classicEditionID, versionID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.AdminStoryStatusResponse{}, fmt.Errorf("%w", model.ErrAdminPublishNotFound)
+		}
+		return model.AdminStoryStatusResponse{}, err
+	}
+
 	if _, err := validateStoredReaderVersion(ctx, tx, story.ID, versionID, slug); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return model.AdminStoryStatusResponse{}, fmt.Errorf("%w", model.ErrAdminPublishNotFound)
@@ -1046,6 +1076,9 @@ func (s *Store) AdminPublishStory(accountID string, slug string, versionID strin
 		return model.AdminStoryStatusResponse{}, err
 	}
 
+	if err := setEditionPublishedPointer(ctx, tx, classicEditionID, versionID); err != nil {
+		return model.AdminStoryStatusResponse{}, err
+	}
 	if err := tx.QueryRowContext(ctx, `
 		UPDATE stories
 		SET published_version_id = $2,

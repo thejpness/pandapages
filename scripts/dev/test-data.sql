@@ -175,6 +175,13 @@ ON CONFLICT (id) DO UPDATE SET
   work_id = EXCLUDED.work_id,
   updated_at = now();
 
+INSERT INTO story_editions (story_id, edition_key)
+VALUES (
+  'f17e0000-0000-4000-8000-000000000010',
+  'classic'
+)
+ON CONFLICT (story_id, edition_key) DO NOTHING;
+
 INSERT INTO story_contributors (story_id, contributor_id, role)
 VALUES (
   'f17e0000-0000-4000-8000-000000000010',
@@ -184,11 +191,17 @@ VALUES (
 ON CONFLICT (story_id, contributor_id, role) DO NOTHING;
 
 INSERT INTO story_versions (
-  id, story_id, version, frontmatter, markdown, rendered_html, content_hash
+  id, story_id, edition_id, version, frontmatter, markdown, rendered_html, content_hash
 )
 VALUES (
   'f17e0000-0000-4000-8000-000000000011',
   'f17e0000-0000-4000-8000-000000000010',
+  (
+    SELECT id
+    FROM story_editions
+    WHERE story_id = 'f17e0000-0000-4000-8000-000000000010'
+      AND edition_key = 'classic'
+  ),
   1,
   '{"author":"Panda Pages Test Fixture","language":"en-GB","rights":{"license":"test-only","test_fixture":true},"tags":["test-only","reader","utf-8"],"test_fixture":true,"title":"TEST ONLY — Moonlit Café"}'::jsonb,
   E'# TEST ONLY — Moonlit Café\n\nPöndá carried a lantern past the café window.\n\n## Chapter One — Lanterns\n\n“Ready?” asked Pöndá. The moon replied, “Oui — allons-y!”\n\n## Chapter Two — 世界\n\n星の光 shimmered over the quiet water. 🐼\n',
@@ -200,6 +213,7 @@ VALUES (
 )
 ON CONFLICT (id) DO UPDATE SET
   story_id = EXCLUDED.story_id,
+  edition_id = EXCLUDED.edition_id,
   version = EXCLUDED.version,
   frontmatter = EXCLUDED.frontmatter,
   markdown = EXCLUDED.markdown,
@@ -315,6 +329,13 @@ SET published_version_id = 'f17e0000-0000-4000-8000-000000000011',
     is_published = true,
     updated_at = now()
 WHERE id = 'f17e0000-0000-4000-8000-000000000010';
+
+UPDATE story_editions
+SET published_version_id = 'f17e0000-0000-4000-8000-000000000011',
+    draft_version_id = 'f17e0000-0000-4000-8000-000000000011',
+    updated_at = now()
+WHERE story_id = 'f17e0000-0000-4000-8000-000000000010'
+  AND edition_key = 'classic';
 
 INSERT INTO generation_jobs (
   id, status, story_id, story_version_id, child_profile_id, prompt_profile_id,
