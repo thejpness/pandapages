@@ -379,7 +379,7 @@ printf 'ok 11 - trusted pgcrypto and DDL need no migration-role superuser capabi
 run_goose goose-account-scope-up up
 account_scope_shape=$(psql_as "$migration_role" --tuples-only --no-align \
   --command="SELECT (SELECT max(version_id) FROM goose_db_version WHERE is_applied) || '|' || (to_regclass('public.account_settings') IS NOT NULL)::int || '|' || (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='reading_progress' AND column_name='profile_id');")
-[[ "$account_scope_shape" == '18|1|1' ]]
+[[ "$account_scope_shape" == '19|1|1' ]]
 if docker run --rm \
   --network "$source_network" \
   --read-only \
@@ -389,13 +389,13 @@ if docker run --rm \
   --env "GOOSE_DBSTRING=postgres://$migration_role:$migration_password@$source_container:5432/$database?sslmode=disable" \
   --env GOOSE_MIGRATION_DIR=/migrations \
   --mount "type=bind,src=$repo_root/apps/api/migrations,dst=/migrations,readonly" \
-  "$migration_image" down-to 17 \
+  "$migration_image" down-to 18 \
   >"$test_root/goose-account-scope-down.out" 2>"$test_root/goose-account-scope-down.err"; then
-  printf 'Goose unexpectedly accepted an profile-scoped progress rollback\n' >&2
+  printf 'Goose unexpectedly accepted a profile PIN security rollback\n' >&2
   exit 1
 fi
-grep -Fq 'profile-scoped reading progress migration is irreversible' "$test_root/goose-account-scope-down.err"
-printf 'ok 12 - profile-scoped progress migration applies under the owner role and rejects an untruthful rollback\n'
+grep -Fq 'profile PIN security migration is irreversible' "$test_root/goose-account-scope-down.err"
+printf 'ok 12 - profile PIN security migration applies under the owner role and rejects an untruthful rollback\n'
 after_resources="$test_root/after-resources"
 docker ps -aq --filter label=com.pandapages.disposable=role-integration | sort >"$after_resources"
 [[ $(wc -l <"$after_resources") -eq 1 ]]

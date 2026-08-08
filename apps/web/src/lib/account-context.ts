@@ -6,6 +6,7 @@ import {
   type IdentityMembership,
 } from "./supabase-auth";
 import { clearSelectedReaderProfile } from "./reader-profile-selection";
+import { leaveChildMode } from "./reader-mode";
 
 const selectedAccountStorageKey = "pandapages.selected-account-id";
 export type AccountContext = Readonly<{
@@ -25,12 +26,16 @@ function selectedAccountID(): string | null {
   return value && value.trim() === value ? value : null;
 }
 export function selectAccount(accountID: string): void {
-  if (selectedAccountID() !== accountID) clearSelectedReaderProfile();
+  if (selectedAccountID() !== accountID) {
+    clearSelectedReaderProfile();
+    leaveChildMode();
+  }
   window.localStorage.setItem(selectedAccountStorageKey, accountID);
 }
 export function clearSelectedAccount(): void {
   window.localStorage.removeItem(selectedAccountStorageKey);
   clearSelectedReaderProfile();
+  leaveChildMode();
 }
 export async function currentAccountContext(): Promise<AccountContext> {
   let session;
@@ -68,6 +73,7 @@ export async function currentAccountContext(): Promise<AccountContext> {
   // list reconciles it for that account.
   if (saved !== null && saved !== membership.accountId) {
     clearSelectedReaderProfile();
+    leaveChildMode();
   }
   return { accessToken: session.access_token, identity, membership };
 }

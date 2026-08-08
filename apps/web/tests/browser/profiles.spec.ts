@@ -8,11 +8,12 @@ import {
   test,
 } from './support/auth'
 
-type Profile = { id: string; name: string }
+type Profile = { id: string; name: string; pin_enabled: boolean }
 const alternateAccountID = '123e4567-e89b-42d3-a456-426614174400'
 
 class ProfilesApiMock {
   profiles: Profile[] = []
+  rateLimitPINVerification = false
   private readonly page: Page
 
   constructor(page: Page) {
@@ -49,14 +50,15 @@ class ProfilesApiMock {
       const body = request.postDataJSON() as { name: string }
       const profile = {
         id: fixtureProfileID.slice(0, -1) + String(this.profiles.length + 1),
-        name: body.name.trim(),
+        name: body.name.trim(), pin_enabled: false,
       }
       this.profiles.push(profile)
       await this.respond(route, profile)
       return
     }
     if (url.pathname.startsWith('/api/v1/profiles/')) {
-      const id = url.pathname.slice('/api/v1/profiles/'.length)
+      const remainder = url.pathname.slice('/api/v1/profiles/'.length)
+      const [id, action] = remainder.split('/')
       const profile = this.profiles.find((candidate) => candidate.id === id)
       if (!profile) {
         await this.respond(route, { error: { code: 'profile_forbidden' } }, 403)
@@ -65,6 +67,29 @@ class ProfilesApiMock {
       if (request.method() === 'PATCH') {
         profile.name = (request.postDataJSON() as { name: string }).name.trim()
         await this.respond(route, profile)
+        return
+      }
+      if (action === 'pin' && request.method() === 'PUT') {
+        profile.pin_enabled = true
+        await this.respond(route, { pin_enabled: true })
+        return
+      }
+      if (action === 'pin' && request.method() === 'POST') {
+        if (this.rateLimitPINVerification) {
+          await this.respond(route, { error: { code: 'pin_rate_limited' } }, 429)
+          return
+        }
+        const pin = (request.postDataJSON() as { pin: string }).pin
+        if (pin !== '1234') {
+          await this.respond(route, { error: { code: 'pin_invalid' } }, 403)
+          return
+        }
+        await this.respond(route, { verified: true })
+        return
+      }
+      if (action === 'pin' && request.method() === 'DELETE') {
+        profile.pin_enabled = false
+        await this.respond(route, { pin_enabled: false })
         return
       }
       if (request.method() === 'DELETE') {
@@ -95,7 +120,7 @@ test.describe('reader profile lifecycle', () => {
 
   test('one profile is selected as a frontend convenience and its ID is not displayed', async ({ page }) => {
     const api = new ProfilesApiMock(page)
-    api.profiles = [{ id: fixtureProfileID, name: 'Mina' }]
+    api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false }]
     await api.install()
 
     await page.goto('/profiles')
@@ -107,8 +132,8 @@ test.describe('reader profile lifecycle', () => {
   test('multiple profiles require a choice, and switching stores only the selected ID', async ({ page }) => {
     const api = new ProfilesApiMock(page)
     api.profiles = [
-      { id: fixtureProfileID, name: 'Mina' },
-      { id: fixtureProfileID.slice(0, -1) + '1', name: 'Ted' },
+      { id: fixtureProfileID, name: 'Mina', pin_enabled: false },
+      { id: fixtureProfileID.slice(0, -1) + '1', name: 'Ted', pin_enabled: false },
     ]
     await api.install()
 
@@ -164,5 +189,70 @@ test.describe('reader profile lifecycle', () => {
     await page.getByRole('button', { name: 'Delete reader' }).click()
     await expect(page.getByText('Add the first reader for this account.')).toBeVisible()
     await expect.poll(() => page.evaluate(() => window.localStorage.getItem('pandapages.selected-reader-profile-id'))).toBeNull()
+  })
+
+  test('a no-PIN reader enters memory-only child mode and can explicitly return to parent mode', async ({ page }) => {
+    const api = new ProfilesApiMock(page)
+    api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false }]
+    await api.install()
+
+    await page.goto('/profiles')
+    await page.getByRole('button', { name: 'Mina Selected' }).click()
+    await expect(page).toHaveURL('/library')
+    await expect(page.getByRole('button', { name: 'Leave reader mode' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Parent options' })).toHaveCount(0)
+
+    await page.getByRole('button', { name: 'Leave reader mode' }).click()
+    await expect(page).toHaveURL('/profiles')
+    await expect(page.getByRole('button', { name: 'Mina Selected' })).toBeVisible()
+  })
+
+  test('a protected reader requires its PIN and never persists it or its unlock', async ({ page }) => {
+    const api = new ProfilesApiMock(page)
+    api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: true }]
+    await api.install()
+
+    await page.goto('/library')
+    await expect(page).toHaveURL(/\/profiles\?next=\/library$/)
+    await page.getByRole('button', { name: 'Mina PIN protected' }).click()
+    await expect(page.getByRole('dialog')).toBeVisible()
+    await page.getByLabel('Four-digit PIN').fill('0000')
+    await page.getByRole('button', { name: 'Continue' }).click()
+    await expect(page.getByRole('alert')).toHaveText('That PIN is not right.')
+    await expect(page).toHaveURL(/\/profiles\?next=\/library$/)
+
+    await page.getByLabel('Four-digit PIN').fill('1234')
+    await page.getByRole('button', { name: 'Continue' }).click()
+    await expect(page).toHaveURL('/library')
+    await expect.poll(() => page.evaluate(() => JSON.stringify(window.localStorage))).not.toContain('1234')
+
+    await page.reload()
+    await expect(page).toHaveURL(/\/profiles/)
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+  })
+
+  test('PIN management supports set, remove, and a finite rate-limit message', async ({ page }) => {
+    const api = new ProfilesApiMock(page)
+    api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false }]
+    await api.install()
+
+    await page.goto('/profiles')
+    await page.getByRole('button', { name: 'Set PIN' }).click()
+    await page.getByLabel('Four-digit PIN').fill('1234')
+    await page.getByRole('button', { name: 'Save PIN' }).click()
+    await expect(page.getByRole('button', { name: 'Change PIN' })).toBeVisible()
+
+    await page.getByRole('button', { name: 'Remove PIN' }).click()
+    await expect(page.getByRole('alertdialog')).toContainText('Remove Mina’s PIN?')
+    await page.getByRole('button', { name: 'Remove PIN' }).last().click()
+    await expect(page.getByRole('button', { name: 'Set PIN' })).toBeVisible()
+
+    api.profiles[0].pin_enabled = true
+    api.rateLimitPINVerification = true
+    await page.reload()
+    await page.getByRole('button', { name: 'Mina PIN protected' }).click()
+    await page.getByLabel('Four-digit PIN').fill('1234')
+    await page.getByRole('button', { name: 'Continue' }).click()
+    await expect(page.getByRole('alert')).toHaveText('Too many tries. Please wait before trying again.')
   })
 })

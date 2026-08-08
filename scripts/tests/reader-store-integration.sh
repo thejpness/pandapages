@@ -356,6 +356,24 @@ grep -Fq 'profile-scoped reading progress migration is irreversible' "$rollback_
 rm -rf -- "$rollback_test_root"
 rollback_test_root=''
 
+# Migration 00019 introduces only local reader-mode PIN security state. Its
+# down migration fails explicitly rather than silently removing protection.
+run_goose up >/dev/null
+assert_query '3' "
+  SELECT count(*)
+  FROM information_schema.columns
+  WHERE table_schema='public' AND table_name='profiles'
+    AND column_name IN ('pin_hash', 'pin_failed_attempts', 'pin_lock_until');
+" 'profile PIN security columns'
+rollback_test_root=$(mktemp -d "${TMPDIR:-/tmp}/pandapages-profile-pin.XXXXXX")
+if run_goose down-to 18 >"$rollback_test_root/down.out" 2>"$rollback_test_root/down.err"; then
+  printf 'Goose unexpectedly accepted profile PIN security rollback\n' >&2
+  exit 1
+fi
+grep -Fq 'profile PIN security migration is irreversible' "$rollback_test_root/down.err"
+rm -rf -- "$rollback_test_root"
+rollback_test_root=''
+
 published_address=$(docker port "$container_name" 5432/tcp)
 published_port=${published_address##*:}
 [[ "$published_port" =~ ^[0-9]+$ ]] || {

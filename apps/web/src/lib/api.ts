@@ -171,6 +171,7 @@ export async function logout(): Promise<void> {
 export type ReaderProfile = Readonly<{
   id: string;
   name: string;
+  pinEnabled: boolean;
 }>;
 
 const canonicalUUIDPattern =
@@ -180,17 +181,19 @@ function parseReaderProfile(value: unknown): ReaderProfile {
   if (!isRecord(value)) throw new Error("Invalid reader profile response");
   const id = value.id;
   const name = value.name;
+  const pinEnabled = value.pin_enabled;
   if (
     typeof id !== "string" ||
     !canonicalUUIDPattern.test(id) ||
     typeof name !== "string" ||
     name.length === 0 ||
     name.length > 80 ||
-    name.trim() !== name
+    name.trim() !== name ||
+    typeof pinEnabled !== "boolean"
   ) {
     throw new Error("Invalid reader profile response");
   }
-  return Object.freeze({ id, name });
+  return Object.freeze({ id, name, pinEnabled });
 }
 
 function parseReaderProfiles(value: unknown): readonly ReaderProfile[] {
@@ -237,6 +240,47 @@ export async function deleteReaderProfile(profileID: string): Promise<void> {
   await request<unknown>(`/api/v1/profiles/${encodeURIComponent(profileID)}`, {
     method: "DELETE",
   });
+}
+
+function pinPayload(pin: string): string {
+  return JSON.stringify({ pin });
+}
+
+function parsePINState(value: unknown, field: "pin_enabled" | "verified"): boolean {
+  if (!isRecord(value) || value[field] !== true) {
+    throw new Error("Invalid profile PIN response");
+  }
+  return true;
+}
+
+export async function setReaderProfilePIN(profileID: string, pin: string): Promise<boolean> {
+  return parsePINState(
+    await request<unknown>(`/api/v1/profiles/${encodeURIComponent(profileID)}/pin`, {
+      method: "PUT",
+      body: pinPayload(pin),
+    }),
+    "pin_enabled",
+  );
+}
+
+export async function removeReaderProfilePIN(profileID: string): Promise<boolean> {
+  const result = await request<unknown>(`/api/v1/profiles/${encodeURIComponent(profileID)}/pin`, {
+    method: "DELETE",
+  });
+  if (!isRecord(result) || result.pin_enabled !== false) {
+    throw new Error("Invalid profile PIN response");
+  }
+  return false;
+}
+
+export async function verifyReaderProfilePIN(profileID: string, pin: string): Promise<boolean> {
+  return parsePINState(
+    await request<unknown>(`/api/v1/profiles/${encodeURIComponent(profileID)}/pin`, {
+      method: "POST",
+      body: pinPayload(pin),
+    }),
+    "verified",
+  );
 }
 
 // profileScopedRequest deliberately requires a profile ID at the call site.

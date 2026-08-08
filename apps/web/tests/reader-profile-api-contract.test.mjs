@@ -6,6 +6,7 @@ import { loadTypeScript } from './helpers/typescript-module.mjs'
 const profile = {
   id: '123e4567-e89b-42d3-a456-426614174300',
   name: 'Mina',
+  pin_enabled: false,
 }
 
 async function apiModule() {
@@ -56,6 +57,37 @@ test('profile management stays account scoped and sends bearer plus account cont
   assert.equal(requests[1].method, 'POST')
   assert.equal(requests[2].method, 'PATCH')
   assert.equal(requests[3].method, 'DELETE')
+})
+
+test('profile PIN operations remain account scoped and never require a profile header', async () => {
+  const { module: api } = await apiModule()
+  const requests = []
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async (input, init) => {
+    const headers = new Headers(init.headers)
+    requests.push({ path: String(input), method: init.method, headers, body: init.body })
+    const verified = init.method === 'POST'
+    const enabled = init.method !== 'DELETE'
+    return new Response(JSON.stringify(verified ? { verified: true } : { pin_enabled: enabled }), {
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+  try {
+    await api.setReaderProfilePIN(profile.id, '1234')
+    await api.verifyReaderProfilePIN(profile.id, '1234')
+    await api.removeReaderProfilePIN(profile.id)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+  assert.equal(requests.length, 3)
+  for (const request of requests) {
+    assert.equal(request.headers.get('authorization'), 'Bearer test-access-token')
+    assert.equal(request.headers.get('x-pp-account-id'), '11111111-1111-4111-8111-111111111111')
+    assert.equal(request.headers.get('x-pp-profile-id'), null)
+  }
+  assert.equal(requests[0].method, 'PUT')
+  assert.equal(requests[1].method, 'POST')
+  assert.equal(requests[2].method, 'DELETE')
 })
 
 test('future profile-scoped calls opt in to the profile header explicitly', async () => {

@@ -18,8 +18,8 @@ test('reader progress is reloaded and isolated when the selected profile changes
   if (!story) return
 
   api.profiles = [
-    { id: fixtureProfileID, name: 'Mina' },
-    { id: secondProfileID, name: 'Ted' },
+    { id: fixtureProfileID, name: 'Mina', pin_enabled: false },
+    { id: secondProfileID, name: 'Ted', pin_enabled: false },
   ]
   api.setProgress(
     READER_SLUG,
