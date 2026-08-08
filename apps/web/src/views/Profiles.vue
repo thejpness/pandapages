@@ -27,6 +27,7 @@ const route = useRoute();
 const router = useRouter();
 const profiles = ref<readonly ReaderProfile[]>([]);
 const selectedID = ref<string | null>(null);
+const canOpenStoryStudio = ref(false);
 const loading = ref(true);
 const busy = ref(false);
 const errorMessage = ref("");
@@ -70,8 +71,13 @@ function restoreSelection(): void {
 
 async function refresh(): Promise<void> {
   const account = await currentAccountContext();
+  canOpenStoryStudio.value = account.membership.role === "owner";
   profiles.value = await listReaderProfiles(account);
   restoreSelection();
+}
+
+function openStoryStudio(): void {
+  void router.push("/admin/stories");
 }
 
 async function choose(profile: ReaderProfile): Promise<void> {
@@ -302,6 +308,10 @@ onMounted(async () => {
           <button type="submit" :disabled="busy">Add reader</button>
         </div>
       </form>
+
+      <nav v-if="canOpenStoryStudio" class="account-tools" aria-label="Account tools">
+        <button type="button" @click="openStoryStudio">Story Studio</button>
+      </nav>
     </div>
 
     <section

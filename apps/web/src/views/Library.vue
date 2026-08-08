@@ -461,7 +461,6 @@ function leaveReaderMode() {
           v-if="stories.length === 0"
           :kind="unavailableItemCount > 0 ? 'unavailable' : 'empty'"
           :unavailable-count="unavailableItemCount"
-          @admin="navigateFromLibrary('/admin/stories')"
         />
 
         <LibraryEmptyState

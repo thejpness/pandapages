@@ -21,7 +21,6 @@ withDefaults(defineProps<{
 const emit = defineEmits<{
   retry: []
   clear: []
-  admin: []
 }>()
 </script>
 
@@ -39,8 +38,7 @@ const emit = defineEmits<{
     <template v-if="kind === 'empty'">
       <p class="library-state__eyebrow">The shelf is ready</p>
       <h2>No published stories yet</h2>
-      <p>When a parent publishes a story, it will appear here for reading.</p>
-      <button type="button" @click="emit('admin')">Open Admin</button>
+      <p>Published stories will appear here for reading.</p>
     </template>
 
     <template v-else-if="kind === 'search'">
@@ -73,7 +71,7 @@ const emit = defineEmits<{
       <h2>Stories could not be shown safely</h2>
       <p>
         {{ unavailableCount === 1 ? 'One published story could' : `${unavailableCount} published stories could` }}
-        not be shown safely. A parent needs to review the published stories before they can return to the bookshelf.
+        not be shown safely. An account owner needs to review the published stories before they can return to the bookshelf.
       </p>
     </template>
 
