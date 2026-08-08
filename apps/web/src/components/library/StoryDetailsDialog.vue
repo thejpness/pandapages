@@ -353,7 +353,7 @@ watch(
   }
 
   @keyframes story-dialog-in {
-    from { opacity: 0; transform: translate(-50%, calc(-50% + 0.6rem)); }
+    from { transform: translate(-50%, calc(-50% + 0.6rem)); }
   }
 }
 

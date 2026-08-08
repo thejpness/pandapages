@@ -118,14 +118,18 @@ test.describe('reader profile lifecycle', () => {
     await expect(page.locator('body')).not.toContainText('Default')
   })
 
-  test('one profile is selected as a frontend convenience and its ID is not displayed', async ({ page }) => {
+  test('one profile is selected as a frontend convenience while management stays secondary', async ({ page }) => {
     const api = new ProfilesApiMock(page)
     api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false }]
     await api.install()
 
     await page.goto('/profiles')
 
-    await expect(page.getByRole('button', { name: 'Mina Selected' })).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.getByRole('heading', { level: 3, name: 'Mina' })).toBeVisible()
+    await expect(page.getByText('Selected', { exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Start reading as Mina' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Manage reader' })).toHaveAttribute('aria-expanded', 'false')
+    await expect(page.getByRole('button', { name: 'Rename' })).toHaveCount(0)
     await expect(page.locator('body')).not.toContainText(fixtureProfileID)
   })
 
@@ -138,8 +142,8 @@ test.describe('reader profile lifecycle', () => {
     await api.install()
 
     await page.goto('/profiles')
-    await expect(page.getByRole('button', { name: 'Mina' })).toHaveAttribute('aria-pressed', 'false')
-    await page.getByRole('button', { name: 'Ted' }).click()
+    await expect(page.getByText('Selected', { exact: true })).toHaveCount(0)
+    await page.getByRole('button', { name: 'Start reading as Ted' }).click()
     await expect(page).toHaveURL('/library')
     await expect.poll(() => page.evaluate(() => window.localStorage.getItem('pandapages.selected-reader-profile-id'))).toBe(api.profiles[1].id)
   })
@@ -177,12 +181,15 @@ test.describe('reader profile lifecycle', () => {
     await page.getByLabel('New reader name').fill('  Ted  ')
     await page.getByRole('button', { name: 'Add reader' }).click()
     await expect(page).toHaveURL('/profiles')
-    await expect(page.getByRole('button', { name: 'Ted Selected' })).toBeVisible()
+    await expect(page.getByRole('heading', { level: 3, name: 'Ted' })).toBeVisible()
+    await expect(page.getByText('Selected', { exact: true })).toBeVisible()
 
+    await page.getByRole('button', { name: 'Manage reader' }).click()
     await page.getByRole('button', { name: 'Rename' }).click()
     await page.getByLabel('Reader name', { exact: true }).fill('Theo')
     await page.getByRole('button', { name: 'Save name' }).click()
-    await expect(page.getByRole('button', { name: 'Theo Selected' })).toBeVisible()
+    await expect(page.getByRole('heading', { level: 3, name: 'Theo' })).toBeVisible()
+    await expect(page.getByText('Selected', { exact: true })).toBeVisible()
 
     await page.getByRole('button', { name: 'Delete' }).click()
     await expect(page.getByRole('alertdialog')).toBeVisible()
@@ -197,14 +204,15 @@ test.describe('reader profile lifecycle', () => {
     await api.install()
 
     await page.goto('/profiles')
-    await page.getByRole('button', { name: 'Mina Selected' }).click()
+    await page.getByRole('button', { name: 'Start reading as Mina' }).click()
     await expect(page).toHaveURL('/library')
     await expect(page.getByRole('button', { name: 'Leave reader mode' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Parent options' })).toHaveCount(0)
 
     await page.getByRole('button', { name: 'Leave reader mode' }).click()
     await expect(page).toHaveURL('/profiles')
-    await expect(page.getByRole('button', { name: 'Mina Selected' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Start reading as Mina' })).toBeVisible()
+    await expect(page.getByText('Selected', { exact: true })).toBeVisible()
   })
 
   test('a no-PIN reader restores reader mode after reload and direct Library navigation', async ({ page }) => {
@@ -213,7 +221,7 @@ test.describe('reader profile lifecycle', () => {
     await api.install()
 
     await page.goto('/profiles')
-    await page.getByRole('button', { name: 'Mina Selected' }).click()
+    await page.getByRole('button', { name: 'Start reading as Mina' }).click()
     await expect(page).toHaveURL('/library')
     await expect(page.getByRole('button', { name: 'Leave reader mode' })).toBeVisible()
 
@@ -279,7 +287,8 @@ test.describe('reader profile lifecycle', () => {
 
     await page.goto('/library')
     await expect(page).toHaveURL(/\/profiles\?next=\/library$/)
-    await page.getByRole('button', { name: 'Mina PIN protected' }).click()
+    await expect(page.getByText('PIN protected', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'Start reading as Mina' }).click()
     await expect(page.getByRole('dialog')).toBeVisible()
     await page.getByLabel('Four-digit PIN').fill('0000')
     await page.getByRole('button', { name: 'Continue' }).click()
@@ -302,6 +311,7 @@ test.describe('reader profile lifecycle', () => {
     await api.install()
 
     await page.goto('/profiles')
+    await page.getByRole('button', { name: 'Manage reader' }).click()
     await page.getByRole('button', { name: 'Set PIN' }).click()
     await page.getByLabel('Four-digit PIN').fill('1234')
     await page.getByRole('button', { name: 'Save PIN' }).click()
@@ -315,7 +325,7 @@ test.describe('reader profile lifecycle', () => {
     api.profiles[0].pin_enabled = true
     api.rateLimitPINVerification = true
     await page.reload()
-    await page.getByRole('button', { name: 'Mina PIN protected' }).click()
+    await page.getByRole('button', { name: 'Start reading as Mina' }).click()
     await page.getByLabel('Four-digit PIN').fill('1234')
     await page.getByRole('button', { name: 'Continue' }).click()
     await expect(page.getByRole('alert')).toHaveText('Too many tries. Please wait before trying again.')
