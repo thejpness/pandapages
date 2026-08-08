@@ -1,4 +1,8 @@
 import type {
+  AdminSourceUpsertRequest,
+  AdminSourceVersion,
+  AdminStoryDetail,
+  AdminStoryEditionKey,
   AdminStoryInput,
   AdminVersionSource,
   JsonObject,
@@ -100,7 +104,10 @@ export function cloneJsonObject(value: JsonObject): JsonObject {
   )
 }
 
-export function normaliseStoryForm(form: StoryStudioForm): AdminStoryInput {
+export function normaliseStoryForm(
+  form: StoryStudioForm,
+  editionKey: AdminStoryEditionKey,
+): AdminStoryInput {
   const rights = cloneJsonObject(form.rights)
   const rightsLabel = form.rightsLabel.trim()
   if (rightsLabel) rights.label = rightsLabel
@@ -108,6 +115,7 @@ export function normaliseStoryForm(form: StoryStudioForm): AdminStoryInput {
 
   return {
     slug: slugifyStoryTitle(form.slug),
+    editionKey,
     title: form.title.trim(),
     author: form.author.trim() || null,
     language: form.language.trim() || 'en-GB',
@@ -129,15 +137,86 @@ function canonicalJson(value: JsonValue): JsonValue {
   return value
 }
 
-export function storyFormFingerprint(form: StoryStudioForm): string {
-  return JSON.stringify(canonicalJson(normaliseStoryForm(form)))
+export function storyFormFingerprint(
+  form: StoryStudioForm,
+  editionKey: AdminStoryEditionKey = 'classic',
+): string {
+  return JSON.stringify(canonicalJson(normaliseStoryForm(form, editionKey)))
 }
 
 export function storyFormIsDirty(
   form: StoryStudioForm,
   baselineFingerprint: string,
+  editionKey: AdminStoryEditionKey = 'classic',
 ): boolean {
-  return storyFormFingerprint(form) !== baselineFingerprint
+  return storyFormFingerprint(form, editionKey) !== baselineFingerprint
+}
+
+export function storyFormFromStory(story: AdminStoryDetail): StoryStudioForm {
+  return {
+    title: story.title,
+    author: story.author ?? '',
+    slug: story.slug,
+    language: story.language,
+    rightsLabel: typeof story.rights.label === 'string' ? story.rights.label : '',
+    rights: cloneJsonObject(story.rights),
+    sourceUrl: story.sourceUrl ?? '',
+    markdown: '',
+  }
+}
+
+export type StorySourceForm = {
+  title: string
+  author: string
+  language: string
+  rightsLabel: string
+  rights: JsonObject
+  sourceUrl: string
+  sourceText: string
+}
+
+export function sourceFormFromStory(story: AdminStoryDetail): StorySourceForm {
+  return {
+    title: story.title,
+    author: story.author ?? '',
+    language: story.language,
+    rightsLabel: typeof story.rights.label === 'string' ? story.rights.label : '',
+    rights: cloneJsonObject(story.rights),
+    sourceUrl: story.sourceUrl ?? '',
+    sourceText: '',
+  }
+}
+
+export function sourceFormFromVersion(source: AdminSourceVersion): StorySourceForm {
+  return {
+    title: source.title,
+    author: source.author ?? '',
+    language: source.language,
+    rightsLabel: typeof source.rights.label === 'string' ? source.rights.label : '',
+    rights: cloneJsonObject(source.rights),
+    sourceUrl: source.sourceUrl ?? '',
+    sourceText: source.sourceText,
+  }
+}
+
+export function normaliseSourceForm(form: StorySourceForm): AdminSourceUpsertRequest {
+  const rights = cloneJsonObject(form.rights)
+  const rightsLabel = form.rightsLabel.trim()
+  if (rightsLabel) rights.label = rightsLabel
+  else delete rights.label
+  return {
+    title: form.title.trim(),
+    author: form.author.trim() || null,
+    language: form.language.trim() || 'en-GB',
+    rights,
+    sourceUrl: form.sourceUrl.trim() || null,
+    // Source provenance stays byte-for-byte as entered; no adaptation transforms.
+    sourceText: form.sourceText,
+  }
+}
+
+export function sourceFormFingerprint(form: StorySourceForm): string {
+  return JSON.stringify(canonicalJson(normaliseSourceForm(form)))
 }
 
 export function normaliseNewlines(value: string): string {

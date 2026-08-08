@@ -20,7 +20,7 @@ function update<K extends keyof StoryStudioForm>(key: K, value: StoryStudioForm[
 <template>
   <fieldset class="metadata-form">
     <legend>Story details</legend>
-    <p class="metadata-form__intro">Metadata appears in Story Studio and, when published, in the reader.</p>
+    <p class="metadata-form__intro">Metadata is stored with this reading edition. Canonical source provenance remains separate.</p>
 
     <div class="metadata-form__grid">
       <div class="studio-field metadata-form__wide">

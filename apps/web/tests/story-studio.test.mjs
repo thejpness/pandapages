@@ -25,6 +25,8 @@ function story(status = 'published') {
     language: 'en-GB',
     rights: { label: 'Public domain' },
     sourceUrl: null,
+    source: { status: 'missing', currentVersion: null, versionCount: 0, updatedAt: null },
+    editions: [],
     status,
     publishedVersion:
       status === 'published' ? { versionId, version: 1 } : null,
@@ -36,6 +38,7 @@ function story(status = 'published') {
 
 function version(overrides = {}) {
   return {
+    editionKey: 'classic',
     versionId,
     version: 1,
     createdAt: '2026-07-20T10:00:00Z',
@@ -74,8 +77,9 @@ test('form normalization trims fields and preserves immutable rights metadata', 
     markdown: '# Panda Tale\r\n\r\nHello.  ',
   }
   const before = structuredClone(input)
-  assert.deepEqual(form.normaliseStoryForm(input), {
+  assert.deepEqual(form.normaliseStoryForm(input, 'classic'), {
     slug: 'panda-tale',
+    editionKey: 'classic',
     title: 'Panda Tale',
     author: 'Author',
     language: 'en-GB',
@@ -180,6 +184,14 @@ test('catalogue search and finite status filter preserve server order', async ()
   assert.deepEqual(navigation.filterStoryCatalogue(items, '', 'all'), items)
 })
 
+test('five edition keys have stable labels and only Classic is publishable', async () => {
+  const navigation = await loadNavigation()
+  assert.deepEqual(navigation.storyEditionOrder, ['classic','confident-readers','growing-readers','story-explorers','little-listeners'])
+  assert.deepEqual(navigation.storyEditionOrder.map(navigation.storyEditionLabel), ['Classic','Confident Readers','Growing Readers','Story Explorers','Little Listeners'])
+  assert.equal(navigation.versionCanPublish(version({ editionKey: 'growing-readers' })), false)
+  assert.equal(navigation.versionCanPublish(version()), true)
+})
+
 test('story statuses and version health use human labels', async () => {
   const navigation = await loadNavigation()
   assert.deepEqual(
@@ -216,9 +228,9 @@ test('preview outdated state only changes when input fingerprint changes', async
 
 test('created and reused save outcomes remain truthful', async () => {
   const navigation = await loadNavigation()
-  assert.equal(navigation.draftOutcomeMessage('created_story', 1), 'Story created as draft version 1.')
-  assert.equal(navigation.draftOutcomeMessage('created_version', 2), 'Draft version 2 created.')
-  assert.equal(navigation.draftOutcomeMessage('reused', 2), 'Existing healthy version 2 reused.')
+  assert.equal(navigation.draftOutcomeMessage('created_story', 1, 'classic'), 'Story created with Classic draft version 1.')
+  assert.equal(navigation.draftOutcomeMessage('created_version', 2, 'classic'), 'Classic draft version 2 created.')
+  assert.equal(navigation.draftOutcomeMessage('reused', 2, 'classic'), 'Existing healthy Classic version 2 reused.')
 })
 
 test('sensitive server error text is never projected into Story Studio', async () => {

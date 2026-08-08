@@ -1,10 +1,12 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { AdminStoryListItem } from '@/lib/api'
-import { storyRightsSummary } from '@/lib/story-studio-navigation'
+import { editionStartedCount, sourceStatusLabel, storyRightsSummary } from '@/lib/story-studio-navigation'
 import StoryStatusBadge from './StoryStatusBadge.vue'
 
-defineProps<{ story: AdminStoryListItem }>()
+const props = defineProps<{ story: AdminStoryListItem }>()
 const emit = defineEmits<{ open: [slug: string] }>()
+const editionsStarted = computed(() => editionStartedCount(props.story.editions))
 
 const dateFormatter = new Intl.DateTimeFormat('en-GB', {
   day: 'numeric',
@@ -24,18 +26,9 @@ const dateFormatter = new Intl.DateTimeFormat('en-GB', {
     <code>{{ story.slug }}</code>
 
     <dl class="story-card__facts">
-      <div>
-        <dt>Published</dt>
-        <dd>{{ story.publishedVersion ? `v${story.publishedVersion.version}` : '—' }}</dd>
-      </div>
-      <div>
-        <dt>Draft</dt>
-        <dd>{{ story.draftVersion ? `v${story.draftVersion.version}` : '—' }}</dd>
-      </div>
-      <div>
-        <dt>Versions</dt>
-        <dd>{{ story.versionCount }}</dd>
-      </div>
+      <div><dt>Source</dt><dd>{{ sourceStatusLabel(story.source.status) }}</dd></div>
+      <div><dt>Editions</dt><dd>{{ editionsStarted }}/5 started</dd></div>
+      <div><dt>Classic</dt><dd>{{ story.publishedVersion ? `Published v${story.publishedVersion.version}` : 'Not published' }}</dd></div>
     </dl>
 
     <p class="story-card__meta">

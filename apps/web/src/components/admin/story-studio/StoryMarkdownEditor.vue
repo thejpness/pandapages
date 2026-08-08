@@ -27,11 +27,11 @@ function fileChosen(event: Event) {
 </script>
 
 <template>
-  <section class="markdown-editor" aria-labelledby="markdown-editor-title">
+  <section class="markdown-editor">
     <div class="markdown-editor__heading">
       <div>
-        <h2 id="markdown-editor-title">Story source</h2>
-        <p>Write Markdown or import a local text, Markdown or HTML file.</p>
+        <h2 id="markdown-editor-title">Edition Markdown</h2>
+        <p>Write this reading edition in Markdown or import a local text, Markdown or HTML file.</p>
       </div>
       <input
         ref="fileInput"
