@@ -114,10 +114,25 @@ jobs:
       - name: Build production frontend
         run: npm run build
 
-      - name: Install Chromium and WebKit for browser tests
+      - name: Install Chromium for pull request browser checks
+        if: ${{ github.event_name == 'pull_request' }}
+        run: npx playwright install --with-deps chromium
+
+      - name: Run pull request browser checks
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          npx playwright test \
+            tests/browser/profiles.spec.ts \
+            tests/browser/library-page.spec.ts \
+            --project=chromium \
+            --grep "reader profile lifecycle|uses a modal Reka dialog|pending search ownership is released when leaving reader mode|an entirely quarantined shelf|a definitive library 401|has no page overflow|primary Library controls provide 44px-class touch targets"
+
+      - name: Install Chromium and WebKit for full browser tests
+        if: ${{ github.event_name != 'pull_request' }}
         run: npx playwright install --with-deps chromium webkit
 
-      - name: Run Reader browser and accessibility tests
+      - name: Run full Reader browser and accessibility tests
+        if: ${{ github.event_name != 'pull_request' }}
         run: npm run test:browser
 
       - name: Upload browser failure artifacts
