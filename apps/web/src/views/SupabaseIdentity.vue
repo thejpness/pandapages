@@ -17,7 +17,7 @@ const busy = ref(true)
 
 function chooseAccount(accountID: string) {
 	selectAccount(accountID)
-	void router.replace('/library')
+	void router.replace('/profiles')
 }
 
 onMounted(async () => {

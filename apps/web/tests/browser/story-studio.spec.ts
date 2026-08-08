@@ -209,6 +209,18 @@ class StudioAPI {
       await this.fulfill(route, { items: [], unavailableItemCount: 0 })
       return
     }
+    if (path === '/api/v1/profiles' && method === 'GET') {
+      await this.fulfill(route, {
+        profiles: [
+          {
+            id: '123e4567-e89b-42d3-a456-426614174300',
+            name: 'Mina',
+            pin_enabled: false,
+          },
+        ],
+      })
+      return
+    }
 
     if (path === '/api/v1/admin/stories' && method === 'GET') {
       if (this.abortNextList) {
@@ -522,6 +534,21 @@ test('catalogue loads human statuses and supports deterministic search and filte
   await expect(page.getByRole('heading', { name: 'The Tangled Story' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'The Quiet Moon' })).toBeHidden()
   expect(await seriousOrCriticalViolations(page)).toEqual([])
+  expect(api.unhandled).toEqual([])
+})
+
+test('Story Studio returns to Parent Hub instead of entering reader mode', async ({
+  page,
+}) => {
+  const api = new StudioAPI()
+  await openCatalogue(page, api)
+
+  await page.getByRole('button', { name: 'Parent Hub' }).click()
+
+  await expect(page).toHaveURL('/profiles')
+  await expect(
+    page.getByRole('heading', { level: 1, name: 'Parent Hub' }),
+  ).toBeVisible()
   expect(api.unhandled).toEqual([])
 })
 

@@ -69,8 +69,8 @@ function navigate(path: string) {
         >
           AI create
         </button>
-        <button type="button" class="studio-nav__secondary" @click="navigate('/library')">
-          Library
+        <button type="button" class="studio-nav__secondary" @click="navigate('/profiles')">
+          Parent Hub
         </button>
         <button
           type="button"
