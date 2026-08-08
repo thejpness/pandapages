@@ -33,6 +33,7 @@ export const router = createRouter({
     {
       path: "/account",
       component: () => import("./views/SupabaseIdentity.vue"),
+      meta: { parentOnly: true },
     },
     {
       path: "/profiles",
@@ -91,7 +92,13 @@ export const router = createRouter({
 });
 
 router.beforeEach(async (to) => {
-  if (!to.matched.some((route) => route.meta.requiresAccount)) return true;
+  const requiresAccount = to.matched.some((route) => route.meta.requiresAccount);
+  const parentOnly = to.matched.some((route) => route.meta.parentOnly);
+
+  if (!requiresAccount) {
+    return parentOnly && isChildMode() ? "/library" : true;
+  }
+
   try {
     await currentAccountContext();
   } catch (error) {
@@ -103,7 +110,7 @@ router.beforeEach(async (to) => {
     return { path: "/account/login", query: { next: to.fullPath } };
   }
 
-  if (to.matched.some((route) => route.meta.parentOnly) && isChildMode()) {
+  if (parentOnly && isChildMode()) {
     return "/library";
   }
 
