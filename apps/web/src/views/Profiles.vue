@@ -40,6 +40,7 @@ const errorMessage = ref("");
 const newName = ref("");
 const editingID = ref<string | null>(null);
 const editingName = ref("");
+const managingID = ref<string | null>(null);
 const deleteTarget = ref<ReaderProfile | null>(null);
 const deleteConfirm = ref<HTMLButtonElement | null>(null);
 const pinTarget = ref<ReaderProfile | null>(null);
@@ -205,7 +206,12 @@ async function createProfile(): Promise<void> {
   }
 }
 
+function toggleManagement(profileID: string): void {
+  managingID.value = managingID.value === profileID ? null : profileID;
+}
+
 function startRename(profile: ReaderProfile): void {
+  managingID.value = profile.id;
   editingID.value = profile.id;
   editingName.value = profile.name;
   errorMessage.value = "";
@@ -243,6 +249,9 @@ async function deleteProfile(): Promise<void> {
       clearSelectedReaderProfile();
       selectedID.value = null;
       leaveChildMode();
+    }
+    if (managingID.value === profile.id) {
+      managingID.value = null;
     }
     deleteTarget.value = null;
     await refresh();
@@ -315,7 +324,7 @@ onMounted(async () => {
         Add the first reader for this account.
       </p>
       <ul v-else aria-label="Readers">
-        <li v-for="profile in profiles" :key="profile.id">
+        <li v-for="profile in profiles" :key="profile.id" class="reader-card">
           <template v-if="editingID === profile.id">
             <form class="rename" @submit.prevent="renameProfile(profile)">
               <label :for="`profile-name-${profile.id}`">Reader name</label>
@@ -335,31 +344,66 @@ onMounted(async () => {
             </form>
           </template>
           <template v-else>
+            <div class="reader-card__header">
+              <div>
+                <h3>{{ profile.name }}</h3>
+                <div
+                  v-if="profile.pinEnabled || selectedID === profile.id"
+                  class="reader-card__status"
+                  aria-label="Reader status"
+                >
+                  <span v-if="profile.pinEnabled">PIN protected</span>
+                  <span v-if="selectedID === profile.id">Selected</span>
+                </div>
+              </div>
+            </div>
+
             <button
               type="button"
-              class="choose"
-              :aria-pressed="selectedID === profile.id"
+              class="reader-card__start"
+              :aria-label="`Start reading as ${profile.name}`"
               @click="choose(profile)"
             >
-              <span>{{ profile.name }}</span>
-              <small v-if="profile.pinEnabled">PIN protected</small>
-              <small v-else-if="selectedID === profile.id">Selected</small>
+              <span>Start reading</span>
+              <span aria-hidden="true">→</span>
             </button>
-            <div class="actions">
-              <button type="button" @click="startRename(profile)">Rename</button>
-              <button type="button" @click="beginSetPIN(profile)">
-                {{ profile.pinEnabled ? "Change PIN" : "Set PIN" }}
-              </button>
-              <button
-                v-if="profile.pinEnabled"
-                type="button"
-                @click="removePINTarget = profile"
-              >
-                Remove PIN
-              </button>
-              <button type="button" class="danger" @click="confirmDelete(profile)">
-                Delete
-              </button>
+
+            <button
+              type="button"
+              class="reader-card__manage"
+              :aria-expanded="managingID === profile.id"
+              :aria-controls="`reader-management-${profile.id}`"
+              @click="toggleManagement(profile.id)"
+            >
+              <span>Manage reader</span>
+              <span aria-hidden="true">
+                {{ managingID === profile.id ? "−" : "+" }}
+              </span>
+            </button>
+
+            <div
+              v-if="managingID === profile.id"
+              :id="`reader-management-${profile.id}`"
+              class="reader-card__management"
+              role="group"
+              :aria-label="`Manage ${profile.name}`"
+            >
+              <div class="actions">
+                <button type="button" @click="startRename(profile)">Rename</button>
+                <button type="button" @click="beginSetPIN(profile)">
+                  {{ profile.pinEnabled ? "Change PIN" : "Set PIN" }}
+                </button>
+                <button
+                  v-if="profile.pinEnabled"
+                  type="button"
+                  @click="removePINTarget = profile"
+                >
+                  Remove PIN
+                </button>
+                <button type="button" class="danger" @click="confirmDelete(profile)">
+                  Delete
+                </button>
+              </div>
             </div>
           </template>
         </li>
@@ -605,26 +649,64 @@ li {
   gap: 0.7rem;
 }
 
-.choose {
+.reader-card__header {
   display: flex;
-  align-items: baseline;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
-  width: 100%;
-  border: 0;
-  padding: 0;
-  background: transparent;
-  color: var(--panda-ink);
-  text-align: left;
-  font: inherit;
-  font-size: 1.1rem;
-  font-weight: 750;
-  cursor: pointer;
 }
 
-.choose small {
+.reader-card__header h3 {
+  margin: 0;
+  color: var(--panda-ink);
+  font-family: var(--panda-serif);
+  font-size: 1.2rem;
+  line-height: 1.25;
+}
+
+.reader-card__status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+}
+
+.reader-card__status span {
+  border: 1px solid var(--panda-line-strong);
+  border-radius: 999px;
+  padding: 0.2rem 0.5rem;
+  background: var(--panda-paper);
   color: var(--panda-muted);
-  font-size: 0.8rem;
+  font-size: 0.76rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.reader-card__start,
+.reader-card__manage {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.reader-card__start {
+  min-height: 3.1rem;
+  background: var(--panda-ink);
+  color: var(--panda-white);
+  font-size: 1rem;
+}
+
+.reader-card__manage {
+  border-color: var(--panda-line-strong);
+  background: transparent;
+  color: var(--panda-muted);
+  font-weight: 700;
+}
+
+.reader-card__management {
+  border-top: 1px solid var(--panda-line-strong);
+  padding-top: 0.75rem;
 }
 
 .actions,
