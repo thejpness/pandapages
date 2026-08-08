@@ -314,6 +314,8 @@ WITH runtime_table(name) AS (
     ('story_editions'),
     ('story_contributors'),
     ('story_sections'),
+    ('story_source_versions'),
+    ('story_sources'),
     ('story_segments'),
     ('story_versions')
 )

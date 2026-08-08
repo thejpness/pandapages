@@ -168,6 +168,8 @@ WITH runtime_table(name) AS (
     ('story_editions'),
     ('story_contributors'),
     ('story_sections'),
+    ('story_source_versions'),
+    ('story_sources'),
     ('story_segments'),
     ('story_versions')
 ), checked AS (
@@ -190,6 +192,8 @@ WITH runtime_table(name) AS (
 SELECT
   count(*) = 15
     + CASE WHEN to_regclass('public.story_editions') IS NULL THEN 0 ELSE 1 END
+    + CASE WHEN to_regclass('public.story_sources') IS NULL THEN 0 ELSE 1 END
+    + CASE WHEN to_regclass('public.story_source_versions') IS NULL THEN 0 ELSE 1 END
   AND (to_regclass('public.profile_settings') IS NULL)
       <> (to_regclass('public.account_settings') IS NULL)
   AND bool_and(
@@ -250,6 +254,8 @@ WITH runtime_table(name) AS (
     ('story_editions'),
     ('story_contributors'),
     ('story_sections'),
+    ('story_source_versions'),
+    ('story_sources'),
     ('goose_db_version'),
     ('story_segments'),
     ('story_versions')

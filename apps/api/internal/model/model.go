@@ -20,6 +20,12 @@ var (
 	// ErrAdminStoryNotFound intentionally covers missing, cross-account, and
 	// cross-story admin targets so ownership boundaries are not disclosed.
 	ErrAdminStoryNotFound = errors.New("admin story resource was not found")
+	// ErrAdminSourceNotFound covers missing and out-of-account canonical-source
+	// targets without disclosing ownership boundaries.
+	ErrAdminSourceNotFound = errors.New("canonical story source was not found")
+	// ErrAdminSourceRepairRequired refuses to present or reuse a canonical source
+	// revision whose immutable snapshot no longer validates.
+	ErrAdminSourceRepairRequired = errors.New("canonical story source requires repair")
 	// ErrProfileNameConflict is returned when the account-local unique profile
 	// name constraint rejects a create or rename request.
 	ErrProfileNameConflict = errors.New("reader profile name already exists")

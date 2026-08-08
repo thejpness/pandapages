@@ -102,6 +102,7 @@ type AdminStorySummary struct {
 	DraftVersion     *AdminVersionPointerSummary `json:"draftVersion"`
 	VersionCount     int                         `json:"versionCount"`
 	UpdatedAt        string                      `json:"updatedAt"`
+	Source           AdminStorySourceSummary     `json:"source"`
 	Editions         []AdminEditionSummary       `json:"editions"`
 }
 
@@ -135,6 +136,7 @@ type AdminStoryDetailResponse struct {
 	VersionCount     int                         `json:"versionCount"`
 	CreatedAt        string                      `json:"createdAt"`
 	UpdatedAt        string                      `json:"updatedAt"`
+	Source           AdminStorySourceSummary     `json:"source"`
 	Versions         []AdminVersionSummary       `json:"versions"`
 	Editions         []AdminEditionDetail        `json:"editions"`
 }

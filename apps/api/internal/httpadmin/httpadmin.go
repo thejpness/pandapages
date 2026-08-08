@@ -27,6 +27,10 @@ type Store interface {
 	AdminGetStory(accountID string, slug string) (model.AdminStoryDetailResponse, error)
 	AdminGetVersionSource(accountID string, slug string, versionID string) (model.AdminVersionSourceResponse, error)
 	AdminGetEditionVersionSource(accountID string, slug string, editionKey model.AdminStoryEditionKey, versionID string) (model.AdminVersionSourceResponse, error)
+
+	AdminSourceUpsert(accountID string, slug string, req model.AdminSourceUpsertRequest) (model.AdminSourceUpsertResponse, error)
+	AdminGetSource(accountID string, slug string) (model.AdminSourceDetailResponse, error)
+	AdminGetSourceVersion(accountID string, slug string, versionID string) (model.AdminSourceVersionResponse, error)
 }
 
 const (
@@ -143,6 +147,70 @@ func New(cfg Config, store Store) http.Handler {
 			return
 		}
 
+		noStore(w)
+		writeJSON(w, http.StatusOK, out)
+	}))
+
+	// PUT /api/v1/admin/stories/{slug}/source
+	mux.HandleFunc("PUT /api/v1/admin/stories/{slug}/source", withAdmin(func(w http.ResponseWriter, r *http.Request) {
+		slug := strings.TrimSpace(r.PathValue("slug"))
+		var body model.AdminSourceUpsertRequest
+		if err := decodeJSON(w, r, &body); err != nil {
+			writeDecodeError(w, err)
+			return
+		}
+		out, err := store.AdminSourceUpsert(accountIDFromCtx(r), slug, body)
+		if err != nil {
+			var validationErr *model.AdminValidationError
+			switch {
+			case errors.As(err, &validationErr):
+				writeIssues(w, http.StatusBadRequest, "source_invalid", "Canonical source is invalid", validationErr.Issues)
+			case errors.Is(err, model.ErrAdminSourceRepairRequired):
+				writeErr(w, http.StatusConflict, "source_repair_required", "canonical source requires repair")
+			default:
+				slog.Error("admin canonical source save failed")
+				writeErr(w, http.StatusInternalServerError, "source_failed", "canonical source could not be saved")
+			}
+			return
+		}
+		noStore(w)
+		writeJSON(w, http.StatusOK, out)
+	}))
+
+	// GET /api/v1/admin/stories/{slug}/source
+	mux.HandleFunc("GET /api/v1/admin/stories/{slug}/source", withAdmin(func(w http.ResponseWriter, r *http.Request) {
+		slug := strings.TrimSpace(r.PathValue("slug"))
+		out, err := store.AdminGetSource(accountIDFromCtx(r), slug)
+		if err != nil {
+			if errors.Is(err, model.ErrAdminSourceNotFound) {
+				writeErr(w, http.StatusNotFound, "source_not_found", "canonical source was not found")
+				return
+			}
+			slog.Error("admin canonical source detail failed")
+			writeErr(w, http.StatusInternalServerError, "source_failed", "canonical source unavailable")
+			return
+		}
+		noStore(w)
+		writeJSON(w, http.StatusOK, out)
+	}))
+
+	// GET /api/v1/admin/stories/{slug}/source/versions/{versionId}
+	mux.HandleFunc("GET /api/v1/admin/stories/{slug}/source/versions/{versionId}", withAdmin(func(w http.ResponseWriter, r *http.Request) {
+		slug := strings.TrimSpace(r.PathValue("slug"))
+		versionID := strings.TrimSpace(r.PathValue("versionId"))
+		out, err := store.AdminGetSourceVersion(accountIDFromCtx(r), slug, versionID)
+		if err != nil {
+			switch {
+			case errors.Is(err, model.ErrAdminSourceNotFound):
+				writeErr(w, http.StatusNotFound, "source_version_not_found", "canonical source version was not found")
+			case errors.Is(err, model.ErrAdminSourceRepairRequired):
+				writeErr(w, http.StatusConflict, "source_repair_required", "canonical source requires repair")
+			default:
+				slog.Error("admin canonical source version failed")
+				writeErr(w, http.StatusInternalServerError, "source_failed", "canonical source unavailable")
+			}
+			return
+		}
 		noStore(w)
 		writeJSON(w, http.StatusOK, out)
 	}))

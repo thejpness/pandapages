@@ -30,13 +30,6 @@ DELETE FROM prompt_profiles
 WHERE id = 'f17e0000-0000-4000-8000-000000000002'
   AND name = 'TEST ONLY — Reader prompt';
 
-DELETE FROM works AS work
-WHERE work.id = 'f17e0000-0000-4000-8000-000000000003'
-  AND work.canonical_title = 'TEST ONLY — Moonlit Café'
-  AND NOT EXISTS (
-    SELECT 1 FROM stories AS story WHERE story.work_id = work.id
-  );
-
 DELETE FROM contributors AS contributor
 WHERE contributor.id = 'f17e0000-0000-4000-8000-000000000004'
   AND contributor.name = 'Panda Pages Test Fixture'

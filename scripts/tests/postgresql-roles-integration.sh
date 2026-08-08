@@ -384,7 +384,7 @@ psql_as "$migration_role" --command="
 run_goose goose-account-scope-up up
 account_scope_shape=$(psql_as "$migration_role" --tuples-only --no-align \
   --command="SELECT (SELECT max(version_id) FROM goose_db_version WHERE is_applied) || '|' || (to_regclass('public.account_settings') IS NOT NULL)::int || '|' || (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='reading_progress' AND column_name='profile_id');")
-[[ "$account_scope_shape" == '20|1|1' ]]
+[[ "$account_scope_shape" == '21|1|1' ]]
 
 edition_backfill=$(psql_as "$application_role" --tuples-only --no-align \
   --command="
@@ -409,6 +409,39 @@ edition_acl=$(docker exec "$source_container" \
       has_table_privilege('$backup_role','public.story_editions','INSERT,UPDATE,DELETE,TRUNCATE');
   ")
 [[ "$edition_acl" == 'true|true|false' ]]
+
+
+source_acl=$(docker exec "$source_container" \
+  psql -X --username="$admin_user" --dbname="$database" --tuples-only --no-align \
+  --command="
+    SELECT
+      has_table_privilege('$application_role','public.story_sources','SELECT,INSERT,UPDATE,DELETE')
+      || '|' ||
+      has_table_privilege('$application_role','public.story_source_versions','SELECT,INSERT,UPDATE,DELETE')
+      || '|' ||
+      has_table_privilege('$backup_role','public.story_sources','SELECT')
+      || '|' ||
+      has_table_privilege('$backup_role','public.story_source_versions','SELECT')
+      || '|' ||
+      has_table_privilege('$backup_role','public.story_sources','INSERT,UPDATE,DELETE,TRUNCATE')
+      || '|' ||
+      has_table_privilege('$backup_role','public.story_source_versions','INSERT,UPDATE,DELETE,TRUNCATE');
+  ")
+[[ "$source_acl" == 'true|true|true|true|false|false' ]]
+
+source_shape=$(psql_as "$application_role" --tuples-only --no-align \
+  --command="
+    SELECT
+      (to_regclass('public.story_sources') IS NOT NULL)::text
+      || '|' ||
+      (to_regclass('public.story_source_versions') IS NOT NULL)::text
+      || '|' ||
+      (to_regclass('public.works') IS NULL)::text
+      || '|' ||
+      ((SELECT count(*) FROM information_schema.columns
+        WHERE table_schema='public' AND table_name='stories' AND column_name='work_id') = 0)::text;
+  ")
+[[ "$source_shape" == 'true|true|true|true' ]]
 
 psql_as "$application_role" --command="
   INSERT INTO story_editions (story_id, edition_key)
@@ -457,6 +490,26 @@ psql_as "$application_role" --command="
       published_version_id = 'c1500000-0000-4000-8000-000000000051',
       is_published = true
   WHERE id = 'c1500000-0000-4000-8000-000000000041';
+  INSERT INTO story_sources (id, story_id)
+  VALUES (
+    'c1500000-0000-4000-8000-000000000071',
+    'c1500000-0000-4000-8000-000000000041'
+  );
+  INSERT INTO story_source_versions (
+    id, source_id, story_id, version, title, language, source_text, snapshot_hash
+  ) VALUES (
+    'c1500000-0000-4000-8000-000000000072',
+    'c1500000-0000-4000-8000-000000000071',
+    'c1500000-0000-4000-8000-000000000041',
+    1,
+    'Canonical source cascade test',
+    'en-GB',
+    'Original source body',
+    repeat('a', 64)
+  );
+  UPDATE story_sources
+  SET current_version_id = 'c1500000-0000-4000-8000-000000000072'
+  WHERE id = 'c1500000-0000-4000-8000-000000000071';
   DELETE FROM stories
   WHERE id = 'c1500000-0000-4000-8000-000000000041';
 " >/dev/null
@@ -468,9 +521,13 @@ edition_cascade=$(psql_as "$application_role" --tuples-only --no-align \
       || '|' ||
       (SELECT count(*) FROM story_editions WHERE story_id='c1500000-0000-4000-8000-000000000041')
       || '|' ||
-      (SELECT count(*) FROM story_versions WHERE story_id='c1500000-0000-4000-8000-000000000041');
+      (SELECT count(*) FROM story_versions WHERE story_id='c1500000-0000-4000-8000-000000000041')
+      || '|' ||
+      (SELECT count(*) FROM story_sources WHERE story_id='c1500000-0000-4000-8000-000000000041')
+      || '|' ||
+      (SELECT count(*) FROM story_source_versions WHERE story_id='c1500000-0000-4000-8000-000000000041');
   ")
-[[ "$edition_cascade" == '0|0|0' ]]
+[[ "$edition_cascade" == '0|0|0|0|0' ]]
 
 apply_policy
 verify_policy
@@ -487,7 +544,7 @@ grep -Fq 'verification failed: application table privileges are incomplete or ex
 apply_policy
 verify_policy
 
-printf 'ok 12 - story edition migration backfills Classic, grants runtime and backup access, cascades cleanly, and verifies fail-closed\n'
+printf 'ok 12 - edition and canonical-source migrations grant runtime/backup access, cascade cleanly, and verify fail-closed\n'
 
 if docker run --rm \
   --network "$source_network" \

@@ -396,6 +396,7 @@ func adminStoryDetail(story inspectedAdminStory) model.AdminStoryDetailResponse 
 		VersionCount:     summary.VersionCount,
 		CreatedAt:        story.Row.CreatedAt.UTC().Format(time.RFC3339Nano),
 		UpdatedAt:        summary.UpdatedAt,
+		Source:           summary.Source,
 		Versions:         story.Versions,
 		Editions:         story.Editions,
 	}

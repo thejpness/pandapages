@@ -29,14 +29,6 @@ BEGIN
   END IF;
 
   IF EXISTS (
-    SELECT 1 FROM works
-    WHERE id = 'f17e0000-0000-4000-8000-000000000003'
-      AND canonical_title <> 'TEST ONLY — Moonlit Café'
-  ) THEN
-    RAISE EXCEPTION 'fixed work fixture ID is already in unrelated use';
-  END IF;
-
-  IF EXISTS (
     SELECT 1 FROM contributors
     WHERE id = 'f17e0000-0000-4000-8000-000000000004'
       AND name <> 'Panda Pages Test Fixture'
@@ -122,17 +114,6 @@ ON CONFLICT (id) DO UPDATE SET
   schema_version = EXCLUDED.schema_version,
   updated_at = now();
 
-INSERT INTO works (id, canonical_title, description)
-VALUES (
-  'f17e0000-0000-4000-8000-000000000003',
-  'TEST ONLY — Moonlit Café',
-  'Deterministic local/disposable Reader fixture; never production content.'
-)
-ON CONFLICT (id) DO UPDATE SET
-  canonical_title = EXCLUDED.canonical_title,
-  description = EXCLUDED.description,
-  updated_at = now();
-
 INSERT INTO contributors (id, name, sort_name)
 VALUES (
   'f17e0000-0000-4000-8000-000000000004',
@@ -150,7 +131,7 @@ WITH target_account AS (
   LIMIT 1
 )
 INSERT INTO stories (
-  id, account_id, slug, title, author, is_published, language, rights, source, work_id
+  id, account_id, slug, title, author, is_published, language, rights, source
 )
 SELECT
   'f17e0000-0000-4000-8000-000000000010',
@@ -161,8 +142,7 @@ SELECT
   false,
   'en-GB',
   '{"license":"test-only","test_fixture":true}'::jsonb,
-  '{"origin":"explicit-test-seed","test_fixture":true}'::jsonb,
-  'f17e0000-0000-4000-8000-000000000003'
+  '{"origin":"explicit-test-seed","test_fixture":true}'::jsonb
 FROM target_account
 ON CONFLICT (id) DO UPDATE SET
   account_id = EXCLUDED.account_id,
@@ -172,7 +152,6 @@ ON CONFLICT (id) DO UPDATE SET
   language = EXCLUDED.language,
   rights = EXCLUDED.rights,
   source = EXCLUDED.source,
-  work_id = EXCLUDED.work_id,
   updated_at = now();
 
 INSERT INTO story_editions (story_id, edition_key)

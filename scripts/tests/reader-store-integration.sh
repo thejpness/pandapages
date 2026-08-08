@@ -494,6 +494,46 @@ assert_query '1|1|1' "
       WHERE conname='story_versions_edition_id_content_hash_key');
 " 'edition migration reapplies cleanly'
 
+
+# Migration 00021 establishes explicit canonical-source provenance. Existing
+# adaptations are not backfilled, and the unused Works scaffolding disappears.
+run_goose up-to 21 >/dev/null
+assert_query '0|0|0|0' "
+  SELECT
+    (SELECT count(*) FROM story_sources) || '|' ||
+    (SELECT count(*) FROM story_source_versions) || '|' ||
+    (SELECT count(*) FROM information_schema.tables
+      WHERE table_schema='public' AND table_name='works') || '|' ||
+    (SELECT count(*) FROM information_schema.columns
+      WHERE table_schema='public' AND table_name='stories' AND column_name='work_id');
+" 'canonical source migration starts empty and retires Works'
+
+run_goose down-to 20 >/dev/null
+assert_query '0|0|1|1' "
+  SELECT
+    (SELECT count(*) FROM information_schema.tables
+      WHERE table_schema='public' AND table_name='story_sources') || '|' ||
+    (SELECT count(*) FROM information_schema.tables
+      WHERE table_schema='public' AND table_name='story_source_versions') || '|' ||
+    (SELECT count(*) FROM information_schema.tables
+      WHERE table_schema='public' AND table_name='works') || '|' ||
+    (SELECT count(*) FROM information_schema.columns
+      WHERE table_schema='public' AND table_name='stories' AND column_name='work_id');
+" 'canonical source migration empty rollback restores historical shape'
+
+run_goose up-to 21 >/dev/null
+assert_query '1|1|0|0' "
+  SELECT
+    (SELECT count(*) FROM information_schema.tables
+      WHERE table_schema='public' AND table_name='story_sources') || '|' ||
+    (SELECT count(*) FROM information_schema.tables
+      WHERE table_schema='public' AND table_name='story_source_versions') || '|' ||
+    (SELECT count(*) FROM information_schema.tables
+      WHERE table_schema='public' AND table_name='works') || '|' ||
+    (SELECT count(*) FROM information_schema.columns
+      WHERE table_schema='public' AND table_name='stories' AND column_name='work_id');
+" 'canonical source migration reapplies cleanly'
+
 published_address=$(docker port "$container_name" 5432/tcp)
 published_port=${published_address##*:}
 [[ "$published_port" =~ ^[0-9]+$ ]] || {
@@ -508,6 +548,15 @@ database_url="postgres://$database_user:$database_password@127.0.0.1:$published_
     PP_READER_STORE_TEST_DATABASE_URL="$database_url" \
     go test ./internal/db -run '^TestReaderStoreIntegration$' -count=1
 )
+
+rollback_test_root=$(mktemp -d "${TMPDIR:-/tmp}/pandapages-story-source.XXXXXX")
+if run_goose down-to 20 >"$rollback_test_root/down.out" 2>"$rollback_test_root/down.err"; then
+  printf 'Goose unexpectedly accepted canonical-source rollback after source data existed\n' >&2
+  exit 1
+fi
+grep -Fq 'canonical source rollback refused: source data exists' "$rollback_test_root/down.err"
+rm -rf -- "$rollback_test_root"
+rollback_test_root=''
 
 cleanup
 container_created=false
