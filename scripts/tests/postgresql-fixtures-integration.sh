@@ -914,7 +914,7 @@ grep -q 'OK.*00015_account_ownership_integrity.sql' \
   "$test_root/fresh-goose.out" "$test_root/fresh-goose.err"
 grep -q 'OK.*00016_identity_foundation.sql' \
   "$test_root/fresh-goose.out" "$test_root/fresh-goose.err"
-assert_query '21|true' "
+assert_query '22|true' "
   SELECT version_id || '|' || is_applied
   FROM goose_db_version ORDER BY id DESC LIMIT 1;
 " 'fresh latest migration marker'
@@ -932,6 +932,8 @@ assert_query 't' "
     (to_regclass('public.reading_progress')),
     (to_regclass('public.stories')),
     (to_regclass('public.story_editions')),
+    (to_regclass('public.story_release_editions')),
+    (to_regclass('public.story_releases')),
     (to_regclass('public.story_sections')),
     (to_regclass('public.story_source_versions')),
     (to_regclass('public.story_sources')),
@@ -939,11 +941,13 @@ assert_query 't' "
     (to_regclass('public.story_versions'))
   ) AS required(relation);
 " 'fresh schema tables'
-assert_query '0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0' "
+assert_query '0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0' "
   SELECT
     (SELECT count(*) FROM stories),
     (SELECT count(*) FROM story_versions),
     (SELECT count(*) FROM story_editions),
+    (SELECT count(*) FROM story_releases),
+    (SELECT count(*) FROM story_release_editions),
     (SELECT count(*) FROM story_sources),
     (SELECT count(*) FROM story_source_versions),
     (SELECT count(*) FROM story_sections),
@@ -1437,7 +1441,7 @@ psql_query "
 " >/dev/null
 
 run_goose up >"$test_root/current-seed-schema-upgrade.out" 2>"$test_root/current-seed-schema-upgrade.err"
-assert_query '21|true' "
+assert_query '22|true' "
   SELECT version_id || '|' || is_applied
   FROM goose_db_version ORDER BY id DESC LIMIT 1;
 " 'current seed schema marker'

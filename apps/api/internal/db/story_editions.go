@@ -28,8 +28,6 @@ func ensureStoryEdition(
 	return loadStoryEditionID(ctx, tx, storyID, editionKey, true)
 }
 
-// ensureClassicEdition remains the compatibility bridge for the existing
-// Classic-only publish/unpublish contract.
 func ensureClassicEdition(ctx context.Context, tx *sql.Tx, storyID string) (string, error) {
 	return ensureStoryEdition(ctx, tx, storyID, classicStoryEditionKey)
 }
@@ -96,22 +94,17 @@ func setEditionPublishedPointer(ctx context.Context, tx *sql.Tx, editionID, vers
 		SET published_version_id = $2,
 		    updated_at = now()
 		WHERE id = $1
-		  AND edition_key = $3
 		RETURNING id
-	`, editionID, versionID, classicStoryEditionKey).Scan(&id)
+	`, editionID, versionID).Scan(&id)
 }
 
-func clearEditionPublishedPointer(ctx context.Context, tx *sql.Tx, editionID string) error {
-	var id string
-	return tx.QueryRowContext(ctx, `
+func clearStoryEditionPublishedPointers(ctx context.Context, tx *sql.Tx, storyID string) error {
+	_, err := tx.ExecContext(ctx, `
 		UPDATE story_editions
 		SET published_version_id = NULL,
-		    updated_at = CASE
-		      WHEN published_version_id IS NOT NULL THEN now()
-		      ELSE updated_at
-		    END
-		WHERE id = $1
-		  AND edition_key = $2
-		RETURNING id
-	`, editionID, classicStoryEditionKey).Scan(&id)
+		    updated_at = now()
+		WHERE story_id = $1
+		  AND published_version_id IS NOT NULL
+	`, storyID)
+	return err
 }

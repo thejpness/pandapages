@@ -316,6 +316,31 @@ SET published_version_id = 'f17e0000-0000-4000-8000-000000000011',
 WHERE story_id = 'f17e0000-0000-4000-8000-000000000010'
   AND edition_key = 'classic';
 
+INSERT INTO story_releases (story_id, release_number, migration_backfill)
+VALUES ('f17e0000-0000-4000-8000-000000000010', 1, false)
+ON CONFLICT (story_id, release_number) DO NOTHING;
+
+INSERT INTO story_release_editions (release_id, story_id, edition_id, story_version_id)
+SELECT release.id,
+       'f17e0000-0000-4000-8000-000000000010',
+       edition.id,
+       'f17e0000-0000-4000-8000-000000000011'
+FROM story_releases AS release
+JOIN story_editions AS edition
+  ON edition.story_id = release.story_id
+ AND edition.edition_key = 'classic'
+WHERE release.story_id = 'f17e0000-0000-4000-8000-000000000010'
+  AND release.release_number = 1
+ON CONFLICT (release_id, edition_id) DO NOTHING;
+
+UPDATE stories
+SET current_release_id = (
+  SELECT id FROM story_releases
+  WHERE story_id = 'f17e0000-0000-4000-8000-000000000010'
+    AND release_number = 1
+)
+WHERE id = 'f17e0000-0000-4000-8000-000000000010';
+
 INSERT INTO generation_jobs (
   id, status, story_id, story_version_id, child_profile_id, prompt_profile_id,
   theme, request_payload, response_payload, model, prompt_version, tokens_in, tokens_out

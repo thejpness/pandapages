@@ -312,6 +312,8 @@ WITH runtime_table(name) AS (
     ('reading_progress'),
     ('stories'),
     ('story_editions'),
+    ('story_release_editions'),
+    ('story_releases'),
     ('story_contributors'),
     ('story_sections'),
     ('story_source_versions'),
@@ -326,6 +328,22 @@ SELECT format(
 )
 FROM runtime_table
 JOIN pg_class class ON class.relname = runtime_table.name
+JOIN pg_namespace namespace ON namespace.oid = class.relnamespace
+WHERE namespace.nspname = 'public'
+  AND class.relkind IN ('r', 'p')
+\gexec
+
+-- Release history is append-only at the runtime privilege boundary.
+WITH immutable_release_table(name) AS (
+  VALUES ('story_releases'), ('story_release_editions')
+)
+SELECT format(
+  'REVOKE UPDATE, DELETE ON TABLE public.%I FROM %I',
+  class.relname,
+  :'application_role'
+)
+FROM immutable_release_table
+JOIN pg_class class ON class.relname = immutable_release_table.name
 JOIN pg_namespace namespace ON namespace.oid = class.relnamespace
 WHERE namespace.nspname = 'public'
   AND class.relkind IN ('r', 'p')

@@ -21,6 +21,7 @@ type adminStoryRow struct {
 	UpdatedAt          time.Time
 	DraftVersionID     *string
 	PublishedVersionID *string
+	CurrentReleaseID   *string
 }
 
 type inspectedAdminVersion struct {
@@ -47,6 +48,7 @@ type inspectedAdminStory struct {
 	Summary  model.AdminStorySummary
 	Versions []model.AdminVersionSummary
 	Editions []model.AdminEditionDetail
+	Releases []model.AdminReleaseSummary
 }
 
 func (s *Store) AdminListStories(accountID string) (model.AdminStoriesListResponse, error) {
@@ -64,7 +66,7 @@ func (s *Store) AdminListStories(accountID string) (model.AdminStoriesListRespon
 	defer func() { _ = tx.Rollback() }()
 
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id, slug, is_published, created_at, updated_at, draft_version_id, published_version_id
+		SELECT id, slug, is_published, created_at, updated_at, draft_version_id, published_version_id, current_release_id
 		FROM stories
 		WHERE account_id = $1
 		ORDER BY updated_at DESC, slug ASC
@@ -151,9 +153,10 @@ type adminStoryScanner interface {
 
 func scanAdminStory(scanner adminStoryScanner) (adminStoryRow, error) {
 	var (
-		story       adminStoryRow
-		draftID     sql.NullString
-		publishedID sql.NullString
+		story            adminStoryRow
+		draftID          sql.NullString
+		publishedID      sql.NullString
+		currentReleaseID sql.NullString
 	)
 	if err := scanner.Scan(
 		&story.ID,
@@ -163,11 +166,13 @@ func scanAdminStory(scanner adminStoryScanner) (adminStoryRow, error) {
 		&story.UpdatedAt,
 		&draftID,
 		&publishedID,
+		&currentReleaseID,
 	); err != nil {
 		return adminStoryRow{}, err
 	}
 	story.DraftVersionID = nullStringValue(draftID)
 	story.PublishedVersionID = nullStringValue(publishedID)
+	story.CurrentReleaseID = nullStringValue(currentReleaseID)
 	return story, nil
 }
 
@@ -177,7 +182,7 @@ func loadAdminStory(ctx context.Context, tx *sql.Tx, accountID, slug string, loc
 		lockClause = " FOR UPDATE"
 	}
 	story, err := scanAdminStory(tx.QueryRowContext(ctx, `
-		SELECT id, slug, is_published, created_at, updated_at, draft_version_id, published_version_id
+		SELECT id, slug, is_published, created_at, updated_at, draft_version_id, published_version_id, current_release_id
 		FROM stories
 		WHERE account_id = $1
 		  AND slug = $2
@@ -399,18 +404,22 @@ func adminStoryDetail(story inspectedAdminStory) model.AdminStoryDetailResponse 
 		Source:           summary.Source,
 		Versions:         story.Versions,
 		Editions:         story.Editions,
+		CurrentRelease:   summary.CurrentRelease,
+		ReleaseCount:     summary.ReleaseCount,
+		Releases:         story.Releases,
 	}
 }
 
 func adminStoryStatusResponse(story inspectedAdminStory) model.AdminStoryStatusResponse {
 	return model.AdminStoryStatusResponse{
 		Slug:             story.Summary.Slug,
-		EditionKey:       model.AdminStoryEditionClassic,
 		Status:           story.Summary.Status,
 		PublishedVersion: story.Summary.PublishedVersion,
 		DraftVersion:     story.Summary.DraftVersion,
 		VersionCount:     story.Summary.VersionCount,
 		UpdatedAt:        story.Summary.UpdatedAt,
+		CurrentRelease:   story.Summary.CurrentRelease,
+		ReleaseCount:     story.Summary.ReleaseCount,
 	}
 }
 

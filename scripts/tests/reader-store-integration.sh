@@ -534,6 +534,49 @@ assert_query '1|1|0|0' "
       WHERE table_schema='public' AND table_name='stories' AND column_name='work_id');
 " 'canonical source migration reapplies cleanly'
 
+# Migration 00022 establishes immutable one-to-five edition releases. Existing
+# Classic publication is backfilled as a legitimate one-edition release.
+run_goose up-to 22 >/dev/null
+assert_query '1|1|1|1' "
+  SELECT
+    (SELECT count(*) FROM story_releases AS release
+      JOIN stories AS story ON story.id = release.story_id
+      WHERE story.slug='reader-2-migration-vector'
+        AND release.release_number=1
+        AND release.migration_backfill) || '|' ||
+    (SELECT count(*) FROM story_release_editions AS member
+      JOIN story_releases AS release ON release.id=member.release_id
+      JOIN story_editions AS edition ON edition.id=member.edition_id
+      JOIN stories AS story ON story.id=release.story_id
+      WHERE story.slug='reader-2-migration-vector'
+        AND edition.edition_key='classic') || '|' ||
+    (SELECT count(*) FROM stories
+      WHERE slug='reader-2-migration-vector'
+        AND current_release_id IS NOT NULL
+        AND is_published) || '|' ||
+    (SELECT count(*) FROM information_schema.columns
+      WHERE table_schema='public'
+        AND table_name='stories'
+        AND column_name='current_release_id');
+" 'release migration backfills the existing Classic publication'
+
+run_goose down-to 21 >/dev/null
+assert_query '0|0|0|1' "
+  SELECT
+    (SELECT count(*) FROM information_schema.tables
+      WHERE table_schema='public' AND table_name='story_releases') || '|' ||
+    (SELECT count(*) FROM information_schema.tables
+      WHERE table_schema='public' AND table_name='story_release_editions') || '|' ||
+    (SELECT count(*) FROM information_schema.columns
+      WHERE table_schema='public' AND table_name='stories' AND column_name='current_release_id') || '|' ||
+    (SELECT count(*) FROM stories
+      WHERE slug='reader-2-migration-vector'
+        AND published_version_id IS NOT NULL
+        AND is_published);
+" 'release migration rollback restores the pre-22 publication shape'
+
+run_goose up-to 22 >/dev/null
+
 published_address=$(docker port "$container_name" 5432/tcp)
 published_port=${published_address##*:}
 [[ "$published_port" =~ ^[0-9]+$ ]] || {
@@ -546,8 +589,20 @@ database_url="postgres://$database_user:$database_password@127.0.0.1:$published_
   cd "$repo_root/apps/api"
   PP_READER_STORE_TEST_DISPOSABLE=1 \
     PP_READER_STORE_TEST_DATABASE_URL="$database_url" \
-    go test ./internal/db -run '^(TestReaderStoreIntegration|TestAdminEditionBundleIntegration)$' -count=1
+    go test ./internal/db -run '^(TestReaderStoreIntegration|TestAdminEditionBundleIntegration|TestAdminReleaseIntegration)$' -count=1
 )
+
+# Store integration tests intentionally create non-backfill release history.
+# Remove only that disposable publication state so the existing migration-21
+# rollback refusal can still reach the canonical-source boundary.
+psql_query "
+  UPDATE story_editions SET published_version_id = NULL;
+  UPDATE stories
+  SET current_release_id = NULL,
+      published_version_id = NULL,
+      is_published = false;
+  DELETE FROM story_releases WHERE NOT migration_backfill;
+" >/dev/null
 
 rollback_test_root=$(mktemp -d "${TMPDIR:-/tmp}/pandapages-story-source.XXXXXX")
 if run_goose down-to 20 >"$rollback_test_root/down.out" 2>"$rollback_test_root/down.err"; then

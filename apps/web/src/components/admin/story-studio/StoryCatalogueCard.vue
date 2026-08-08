@@ -1,141 +1,43 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { AdminStoryListItem } from '@/lib/api'
-import { editionStartedCount, sourceStatusLabel, storyRightsSummary } from '@/lib/story-studio-navigation'
+import { editionStartedCount, sourceStatusLabel, storyStatusLabel } from '@/lib/story-studio-navigation'
 import StoryStatusBadge from './StoryStatusBadge.vue'
 
 const props = defineProps<{ story: AdminStoryListItem }>()
 const emit = defineEmits<{ open: [slug: string] }>()
-const editionsStarted = computed(() => editionStartedCount(props.story.editions))
-
-const dateFormatter = new Intl.DateTimeFormat('en-GB', {
-  day: 'numeric',
-  month: 'short',
-  year: 'numeric',
+const started = computed(() => editionStartedCount(props.story.editions))
+const releaseFact = computed(() => {
+  const release = props.story.currentRelease
+  if (release) {
+    const count = release.editions.length
+    return `Release ${release.release} · ${count} ${count === 1 ? 'edition' : 'editions'}`
+  }
+  if (props.story.releaseCount > 0) return `Not published · ${props.story.releaseCount} historical ${props.story.releaseCount === 1 ? 'release' : 'releases'}`
+  return 'Not published'
 })
 </script>
 
 <template>
   <article class="story-card">
-    <div class="story-card__topline">
+    <div class="story-card__top">
+      <div>
+        <p class="story-card__slug">{{ story.slug }}</p>
+        <h2>{{ story.title }}</h2>
+        <p>{{ story.author || 'Author not recorded' }}</p>
+      </div>
       <StoryStatusBadge :status="story.status" />
-      <time :datetime="story.updatedAt">Updated {{ dateFormatter.format(new Date(story.updatedAt)) }}</time>
     </div>
-    <h2>{{ story.title }}</h2>
-    <p v-if="story.author" class="story-card__author">by {{ story.author }}</p>
-    <code>{{ story.slug }}</code>
-
-    <dl class="story-card__facts">
+    <dl>
       <div><dt>Source</dt><dd>{{ sourceStatusLabel(story.source.status) }}</dd></div>
-      <div><dt>Editions</dt><dd>{{ editionsStarted }}/5 started</dd></div>
-      <div><dt>Classic</dt><dd>{{ story.publishedVersion ? `Published v${story.publishedVersion.version}` : 'Not published' }}</dd></div>
+      <div><dt>Editions</dt><dd>{{ started }}/5 started</dd></div>
+      <div><dt>Publication</dt><dd>{{ releaseFact }}</dd></div>
+      <div><dt>Status</dt><dd>{{ storyStatusLabel(story.status) }}</dd></div>
     </dl>
-
-    <p class="story-card__meta">
-      {{ story.language }} <span aria-hidden="true">·</span>
-      {{ storyRightsSummary(story.rights) }}
-    </p>
-
-    <button type="button" class="story-card__open" @click="emit('open', story.slug)">
-      {{ story.status === 'repair_required' ? 'Review story' : 'Manage story' }}
-      <span aria-hidden="true">→</span>
-    </button>
+    <button type="button" class="studio-button studio-button--quiet" @click="emit('open', story.slug)">Review story</button>
   </article>
 </template>
 
 <style scoped>
-.story-card {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  border: 1px solid var(--panda-line-strong);
-  border-radius: var(--panda-radius-card);
-  background: var(--panda-paper-raised);
-  padding: 1.2rem;
-  box-shadow: var(--panda-shadow-soft);
-}
-
-.story-card__topline {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-}
-
-.story-card__topline time {
-  color: var(--studio-muted);
-  font-size: 0.75rem;
-}
-
-.story-card h2 {
-  overflow-wrap: anywhere;
-  margin-top: 1rem;
-  color: var(--studio-ink);
-  font-family: var(--panda-serif);
-  font-size: 1.28rem;
-  font-weight: 650;
-  line-height: 1.25;
-}
-
-.story-card__author {
-  margin-top: 0.25rem;
-  color: var(--studio-muted);
-  font-size: 0.9rem;
-}
-
-.story-card code {
-  overflow-wrap: anywhere;
-  margin-top: 0.7rem;
-  color: var(--panda-muted);
-  font-size: 0.75rem;
-}
-
-.story-card__facts {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  margin-top: 1.1rem;
-  border-block: 1px solid var(--studio-line);
-  padding-block: 0.8rem;
-}
-
-.story-card__facts div + div {
-  border-left: 1px solid var(--studio-line);
-  padding-left: 0.8rem;
-}
-
-.story-card__facts dt {
-  color: var(--studio-muted);
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-
-.story-card__facts dd {
-  margin-top: 0.2rem;
-  color: var(--studio-ink);
-  font-weight: 720;
-}
-
-.story-card__meta {
-  margin-top: 0.8rem;
-  color: var(--studio-muted);
-  font-size: 0.8rem;
-}
-
-.story-card__open {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 2.75rem;
-  margin-top: auto;
-  padding-top: 1rem;
-  border: 1px solid var(--panda-ink);
-  border-radius: var(--panda-radius-compact);
-  background: var(--panda-ink);
-  color: var(--panda-white);
-  font-weight: 720;
-  padding: 0.65rem 0.8rem;
-}
-
-.story-card__open:hover { background: var(--panda-soft-ink); }
+.story-card{display:grid;gap:1rem;border:1px solid var(--studio-line);border-radius:var(--panda-radius-card);background:var(--studio-card);padding:1rem;box-shadow:var(--studio-shadow-soft)}.story-card__top{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem}.story-card__slug{overflow-wrap:anywhere;color:var(--studio-muted);font-size:.72rem;font-weight:700;letter-spacing:.04em}.story-card h2{margin-top:.2rem;font-family:var(--panda-serif);font-size:1.2rem;font-weight:650}.story-card__top p:last-child{margin-top:.2rem;color:var(--studio-muted);font-size:.82rem}.story-card dl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.65rem}.story-card dt{color:var(--studio-muted);font-size:.68rem;text-transform:uppercase;letter-spacing:.05em}.story-card dd{margin-top:.15rem;font-size:.84rem;font-weight:650}.story-card>.studio-button{justify-self:start}@media(max-width:520px){.story-card__top{align-items:stretch;flex-direction:column}.story-card dl{grid-template-columns:1fr}}
 </style>
