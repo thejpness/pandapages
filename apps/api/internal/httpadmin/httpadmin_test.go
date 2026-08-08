@@ -40,6 +40,9 @@ func (s *adminStore) Identity(context.Context, appidentity.ExternalIdentity) (ap
 func (*adminStore) AdminDraftUpsert(string, model.AdminDraftUpsertRequest) (model.AdminDraftUpsertResponse, error) {
 	return model.AdminDraftUpsertResponse{}, nil
 }
+func (*adminStore) AdminEditionBundleUpsert(string, model.AdminEditionBundleUpsertRequest) (model.AdminEditionBundleUpsertResponse, error) {
+	return model.AdminEditionBundleUpsertResponse{}, nil
+}
 func (*adminStore) AdminPublishStory(string, string, string) (model.AdminStoryStatusResponse, error) {
 	return model.AdminStoryStatusResponse{}, nil
 }

@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import { loadTypeScript } from './helpers/typescript-module.mjs'
+
+async function loadBundle(){return(await loadTypeScript('../src/lib/story-edition-bundle.ts',import.meta.url)).module}
+function files(){return[{name:'little-listeners.md',text:'# Panda Story\n\nLittle.\n'},{name:'growing-readers.md',text:'# Panda Story\n\nGrowing.\n'},{name:'classic.md',text:'# Panda Story\r\n\r\nClassic café 世界.\r\n'},{name:'story-explorers.md',text:'# Panda Story\n\nExplore.\n'},{name:'confident-readers.md',text:'# Panda Story\n\nConfident.\n'}]}
+
+test('edition bundle requires exact filenames and returns canonical order without rewriting Markdown',async()=>{const bundle=await loadBundle();const selection=bundle.parseEditionBundleFiles(files());assert.deepEqual(selection.items.map((item)=>item.editionKey),['classic','confident-readers','growing-readers','story-explorers','little-listeners']);assert.equal(selection.items[0].markdown,'# Panda Story\r\n\r\nClassic café 世界.\r\n');assert.deepEqual(bundle.editionBundleInputs(selection).map((item)=>item.editionKey),selection.items.map((item)=>item.editionKey));assert.equal(bundle.inferEditionBundleTitle(selection),'Panda Story')})
+
+test('edition bundle rejects missing, duplicate, unexpected, empty and unreadable files',async()=>{const bundle=await loadBundle();assert.throws(()=>bundle.parseEditionBundleFiles(files().slice(0,4)),/exactly these five files/);assert.throws(()=>bundle.parseEditionBundleFiles([...files().slice(0,4),{name:'bonus.md',text:'# Bonus'}]),/exact Panda Pages filenames/);const duplicate=files();duplicate[4]={...duplicate[0]};assert.throws(()=>bundle.parseEditionBundleFiles(duplicate),/selected more than once|exactly these five files/);const empty=files();empty[0]={...empty[0],text:'   '};assert.throws(()=>bundle.parseEditionBundleFiles(empty),/is empty/);const unreadable=files();unreadable[0]={...unreadable[0],text:'# Story\uFFFD'};assert.throws(()=>bundle.parseEditionBundleFiles(unreadable),/clean UTF-8/)})

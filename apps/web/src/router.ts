@@ -76,6 +76,11 @@ export const router = createRouter({
           component: () => import("./views/admin/StoryStudioEditor.vue"),
         },
         {
+          path: "stories/ingest",
+          name: "admin-story-ingest",
+          component: () => import("./views/admin/StoryStudioEditionIngest.vue"),
+        },
+        {
           path: "stories/:slug/edit",
           name: "admin-story-edit",
           component: () => import("./views/admin/StoryStudioEditor.vue"),
@@ -84,6 +89,11 @@ export const router = createRouter({
           path: "stories/:slug/source",
           name: "admin-story-source",
           component: () => import("./views/admin/StoryStudioSourceEditor.vue"),
+        },
+        {
+          path: "stories/:slug/ingest",
+          name: "admin-story-ingest-existing",
+          component: () => import("./views/admin/StoryStudioEditionIngest.vue"),
         },
         {
           path: "stories/:slug",

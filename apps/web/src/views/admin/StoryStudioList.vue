@@ -77,9 +77,10 @@ onBeforeUnmount(() => {
           Create, review and publish the stories in your Panda Pages catalogue.
         </p>
       </div>
-      <button type="button" class="studio-button studio-button--primary" @click="router.push('/admin/stories/new')">
-        New story
-      </button>
+      <div class="catalogue-heading__actions">
+        <button type="button" class="studio-button studio-button--quiet" @click="router.push('/admin/stories/ingest')">Import five editions</button>
+        <button type="button" class="studio-button studio-button--primary" @click="router.push('/admin/stories/new')">New story</button>
+      </div>
     </header>
 
     <section class="catalogue-tools studio-panel" aria-labelledby="catalogue-tools-title">
@@ -150,6 +151,8 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.catalogue-heading__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.6rem; }
+
 .catalogue-tools {
   display: grid;
   grid-template-columns: minmax(12rem, 1fr) minmax(11rem, 15rem) auto;
@@ -182,6 +185,7 @@ onBeforeUnmount(() => {
 .catalogue-error p { margin-top: 0.2rem; font-size: 0.88rem; }
 
 @media (max-width: 680px) {
+  .catalogue-heading__actions { width: 100%; display: grid; grid-template-columns: 1fr; }
   .catalogue-tools { grid-template-columns: 1fr; }
   .catalogue-tools__count { padding: 0; text-align: left; }
   .catalogue-error { align-items: stretch; flex-direction: column; }

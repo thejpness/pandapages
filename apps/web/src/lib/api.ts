@@ -756,6 +756,17 @@ export type AdminDraftUpsertResponse = {
   segmentCount: number; wordCount: number; chapterCount: number;
   renderedHtml: SafeRenderedStoryHTML; outcome: AdminDraftOutcome;
 };
+export type AdminEditionIngestOutcome = "created" | "reused";
+export type AdminEditionBundleInput = { editionKey: AdminStoryEditionKey; markdown: string };
+export type AdminEditionBundleUpsertRequest = {
+  slug: string; title: string; author?: string | null; language?: string | null;
+  sourceUrl?: string | null; rights?: JsonObject; editions: AdminEditionBundleInput[];
+};
+export type AdminEditionBundleResult = {
+  editionKey: AdminStoryEditionKey; versionId: string; version: number;
+  segmentCount: number; wordCount: number; chapterCount: number; outcome: AdminEditionIngestOutcome;
+};
+export type AdminEditionBundleUpsertResponse = { slug: string; results: AdminEditionBundleResult[] };
 export type AdminStoryStatus = "draft_only" | "published" | "published_with_draft" | "unpublished" | "repair_required";
 export type AdminVersionHealth = "ready" | "repair_required" | "unavailable";
 export type AdminVersionPointer = { versionId: string; version: number };
@@ -813,6 +824,7 @@ const adminEditionStatuses = new Set<AdminEditionStatus>(["empty", "draft_only",
 const adminSourceStatuses = new Set<AdminSourceStatus>(["missing", "ready", "repair_required"]);
 const adminVersionHealthValues = new Set<AdminVersionHealth>(["ready", "repair_required", "unavailable"]);
 const adminDraftOutcomes = new Set<AdminDraftOutcome>(["created_story", "created_version", "reused"]);
+const adminEditionIngestOutcomes = new Set<AdminEditionIngestOutcome>(["created", "reused"]);
 const adminSourceOutcomes = new Set<AdminSourceOutcome>(["created_source", "created_version", "reused"]);
 const adminUUIDPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -1078,6 +1090,19 @@ export function parseAdminDraftUpsertResponse(value: unknown): AdminDraftUpsertR
   if (!isPositiveSafeInteger(record.version) || !isNonNegativeInteger(record.segmentCount) || !isNonNegativeInteger(record.wordCount) || !isNonNegativeInteger(record.chapterCount) || typeof record.renderedHtml !== "string" || typeof record.outcome !== "string" || !adminDraftOutcomes.has(record.outcome as AdminDraftOutcome)) throw new Error("Invalid admin response");
   return { slug: parseAdminSlug(record.slug), editionKey: parseAdminEditionKey(record.editionKey), versionId: parseAdminUUID(record.versionId), version: record.version, segmentCount: record.segmentCount, wordCount: record.wordCount, chapterCount: record.chapterCount, renderedHtml: parseSafeRenderedStoryHTML(record.renderedHtml), outcome: record.outcome as AdminDraftOutcome };
 }
+function parseAdminEditionBundleResult(value: unknown): AdminEditionBundleResult {
+  const record = adminRecord(value);
+  if (!isPositiveSafeInteger(record.version) || !isNonNegativeInteger(record.segmentCount) || !isNonNegativeInteger(record.wordCount) || !isNonNegativeInteger(record.chapterCount) || typeof record.outcome !== "string" || !adminEditionIngestOutcomes.has(record.outcome as AdminEditionIngestOutcome)) throw new Error("Invalid admin response");
+  return { editionKey: parseAdminEditionKey(record.editionKey), versionId: parseAdminUUID(record.versionId), version: record.version, segmentCount: record.segmentCount, wordCount: record.wordCount, chapterCount: record.chapterCount, outcome: record.outcome as AdminEditionIngestOutcome };
+}
+export function parseAdminEditionBundleUpsertResponse(value: unknown): AdminEditionBundleUpsertResponse {
+  const record = adminRecord(value);
+  if (!Array.isArray(record.results)) throw new Error("Invalid admin response");
+  const results = record.results.map(parseAdminEditionBundleResult);
+  assertCanonicalEditionOrder(results);
+  if (new Set(results.map((item) => item.versionId)).size !== results.length) throw new Error("Invalid admin response");
+  return { slug: parseAdminSlug(record.slug), results };
+}
 export function parseAdminStoryStatusResponse(value: unknown): AdminStoryStatusResponse {
   const record = adminRecord(value); if (!isNonNegativeInteger(record.versionCount) || !isRFC3339Timestamp(record.updatedAt)) throw new Error("Invalid admin response");
   const editionKey = parseAdminEditionKey(record.editionKey); if (editionKey !== "classic") throw new Error("Invalid admin response");
@@ -1092,6 +1117,9 @@ export async function adminPreview(payload: AdminPreviewRequest, signal?: AbortS
 }
 export async function adminDraftUpsertStory(payload: AdminDraftUpsertRequest): Promise<AdminDraftUpsertResponse> {
   return parseAdminDraftUpsertResponse(await request<unknown>("/api/v1/admin/stories/draft", { method: "POST", body: JSON.stringify(payload) }));
+}
+export async function adminIngestEditionBundle(payload: AdminEditionBundleUpsertRequest): Promise<AdminEditionBundleUpsertResponse> {
+  return parseAdminEditionBundleUpsertResponse(await request<unknown>("/api/v1/admin/stories/editions/ingest", { method: "POST", body: JSON.stringify(payload) }));
 }
 export async function adminListStories(signal?: AbortSignal): Promise<AdminStoriesListResponse> {
   return parseAdminStoriesListResponse(await request<unknown>("/api/v1/admin/stories", { signal }));

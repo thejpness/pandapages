@@ -19,6 +19,7 @@ import (
 
 type Store interface {
 	AdminDraftUpsert(accountID string, req model.AdminDraftUpsertRequest) (model.AdminDraftUpsertResponse, error)
+	AdminEditionBundleUpsert(accountID string, req model.AdminEditionBundleUpsertRequest) (model.AdminEditionBundleUpsertResponse, error)
 	AdminPublishStory(accountID string, slug string, versionID string) (model.AdminStoryStatusResponse, error)
 	AdminUnpublish(accountID string, slug string) (model.AdminStoryStatusResponse, error)
 	AdminPreview(req model.AdminPreviewRequest) (model.AdminPreviewResponse, error)
@@ -130,6 +131,33 @@ func New(cfg Config, store Store) http.Handler {
 			}
 			slog.Error("admin story draft failed")
 			writeErr(w, http.StatusInternalServerError, "draft_failed", "story draft could not be saved")
+			return
+		}
+
+		noStore(w)
+		writeJSON(w, http.StatusOK, out)
+	}))
+
+	// POST /api/v1/admin/stories/editions/ingest
+	mux.HandleFunc("POST /api/v1/admin/stories/editions/ingest", withAdmin(func(w http.ResponseWriter, r *http.Request) {
+		var body model.AdminEditionBundleUpsertRequest
+		if err := decodeJSON(w, r, &body); err != nil {
+			writeDecodeError(w, err)
+			return
+		}
+
+		out, err := store.AdminEditionBundleUpsert(accountIDFromCtx(r), body)
+		if err != nil {
+			var validationErr *model.AdminValidationError
+			switch {
+			case errors.As(err, &validationErr):
+				writeIssues(w, http.StatusBadRequest, "edition_ingest_invalid", "Five-edition bundle is invalid", validationErr.Issues)
+			case errors.Is(err, model.ErrAdminVersionRepairRequired):
+				writeErr(w, http.StatusConflict, "edition_ingest_repair_required", "a stored edition version requires repair")
+			default:
+				slog.Error("admin five-edition ingest failed")
+				writeErr(w, http.StatusInternalServerError, "edition_ingest_failed", "five-edition bundle could not be saved")
+			}
 			return
 		}
 

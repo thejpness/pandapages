@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import { loadTypeScript } from './helpers/typescript-module.mjs'
+
+const keys=['classic','confident-readers','growing-readers','story-explorers','little-listeners']
+const ids=['11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','33333333-3333-4333-8333-333333333333','44444444-4444-4444-8444-444444444444','55555555-5555-4555-8555-555555555555']
+async function loadAPI(){return(await loadTypeScript('../src/lib/api.ts',import.meta.url,(value)=>value.replaceAll('import.meta.env.VITE_API_BASE',"''"))).module}
+function response(body,status=200){return new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json'}})}
+function bundleResponse(){return{slug:'five-edition-story',results:keys.map((editionKey,index)=>({editionKey,versionId:ids[index],version:index+1,segmentCount:2,wordCount:8+index,chapterCount:index%2,outcome:index===4?'reused':'created'}))}}
+
+test('five-edition ingest response requires exactly the canonical ordered slots',async()=>{const api=await loadAPI();const parsed=api.parseAdminEditionBundleUpsertResponse(bundleResponse());assert.deepEqual(parsed.results.map((item)=>item.editionKey),keys);assert.equal(parsed.results[4].outcome,'reused');const missing=bundleResponse();missing.results.pop();assert.throws(()=>api.parseAdminEditionBundleUpsertResponse(missing),/Invalid admin response/);const reordered=bundleResponse();[reordered.results[0],reordered.results[1]]=[reordered.results[1],reordered.results[0]];assert.throws(()=>api.parseAdminEditionBundleUpsertResponse(reordered),/Invalid admin response/);const invalid=bundleResponse();invalid.results[0].outcome='published';assert.throws(()=>api.parseAdminEditionBundleUpsertResponse(invalid),/Invalid admin response/)})
+
+test('five-edition ingest wrapper posts one bundle and never calls publication',async(t)=>{const originalFetch=globalThis.fetch;t.after(()=>{globalThis.fetch=originalFetch});let request;globalThis.fetch=async(url,init)=>{request={url:String(url),init};return response(bundleResponse())};const api=await loadAPI();const payload={slug:'five-edition-story',title:'Five Edition Story',author:null,language:'en-GB',sourceUrl:null,rights:{label:'Public domain'},editions:keys.map((editionKey)=>({editionKey,markdown:`# Five Edition Story\n\n${editionKey}\n`}))};const result=await api.adminIngestEditionBundle(payload);assert.equal(result.results.length,5);assert.equal(request.url,'/api/v1/admin/stories/editions/ingest');assert.equal(request.init.method,'POST');assert.equal(request.init.credentials,'omit');assert.deepEqual(JSON.parse(String(request.init.body)),payload);assert.doesNotMatch(request.url,/publish|unpublish|reader/)})
