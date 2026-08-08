@@ -191,7 +191,7 @@ test.describe('reader profile lifecycle', () => {
     await expect.poll(() => page.evaluate(() => window.localStorage.getItem('pandapages.selected-reader-profile-id'))).toBeNull()
   })
 
-  test('a no-PIN reader enters memory-only child mode and can explicitly return to parent mode', async ({ page }) => {
+  test('a no-PIN reader enters reader mode and can explicitly return to account mode', async ({ page }) => {
     const api = new ProfilesApiMock(page)
     api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false }]
     await api.install()
@@ -205,6 +205,41 @@ test.describe('reader profile lifecycle', () => {
     await page.getByRole('button', { name: 'Leave reader mode' }).click()
     await expect(page).toHaveURL('/profiles')
     await expect(page.getByRole('button', { name: 'Mina Selected' })).toBeVisible()
+  })
+
+  test('a no-PIN reader restores reader mode after reload and direct Library navigation', async ({ page }) => {
+    const api = new ProfilesApiMock(page)
+    api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false }]
+    await api.install()
+
+    await page.goto('/profiles')
+    await page.getByRole('button', { name: 'Mina Selected' }).click()
+    await expect(page).toHaveURL('/library')
+    await expect(page.getByRole('button', { name: 'Leave reader mode' })).toBeVisible()
+
+    await page.reload()
+    await expect(page).toHaveURL('/library')
+    await expect(page.getByRole('button', { name: 'Leave reader mode' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Parent options' })).toHaveCount(0)
+
+    await page.getByRole('button', { name: 'Leave reader mode' }).click()
+    await expect(page).toHaveURL('/profiles')
+    await page.goto('/library')
+    await expect(page).toHaveURL('/library')
+    await expect(page.getByRole('button', { name: 'Leave reader mode' })).toBeVisible()
+  })
+
+  test('Story Studio is discoverable to account owners only', async ({ page, auth }) => {
+    const api = new ProfilesApiMock(page)
+    api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false }]
+    await api.install()
+
+    await page.goto('/profiles')
+    await expect(page.getByRole('button', { name: 'Story Studio' })).toBeVisible()
+
+    auth.setRole('adult')
+    await page.reload()
+    await expect(page.getByRole('button', { name: 'Story Studio' })).toHaveCount(0)
   })
 
   test('a protected reader requires its PIN and never persists it or its unlock', async ({ page }) => {

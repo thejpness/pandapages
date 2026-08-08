@@ -8,7 +8,7 @@ import {
   ProfileContextError,
   currentReaderProfileContext,
 } from "./lib/profile-context";
-import { isChildMode, isChildModeFor } from "./lib/reader-mode";
+import { enterChildMode, isChildMode, isChildModeFor } from "./lib/reader-mode";
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -112,9 +112,12 @@ router.beforeEach(async (to) => {
     const context = await currentReaderProfileContext();
     if (
       to.matched.some((route) => route.meta.requiresChildMode) &&
-      context.profile.pinEnabled &&
       !isChildModeFor(context.profile.id)
     ) {
+      if (!context.profile.pinEnabled) {
+        enterChildMode(context.profile.id);
+        return true;
+      }
       return { path: "/profiles", query: { next: to.fullPath } };
     }
     return true;
