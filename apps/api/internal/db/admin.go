@@ -654,6 +654,43 @@ func stringValueFromMap(values map[string]any, key string) string {
 	return value
 }
 
+func adminDraftEditionKey(req model.AdminDraftUpsertRequest) (model.AdminStoryEditionKey, error) {
+	if req.EditionKey == nil || strings.TrimSpace(string(*req.EditionKey)) == "" {
+		return model.AdminStoryEditionClassic, nil
+	}
+	key := model.AdminStoryEditionKey(strings.TrimSpace(string(*req.EditionKey)))
+	if !model.ValidAdminStoryEditionKey(key) {
+		return "", &model.AdminValidationError{Issues: []model.AdminValidationIssue{{
+			Field: "editionKey", Code: "invalid", Message: "Choose a supported reading edition",
+		}}}
+	}
+	return key, nil
+}
+
+func updateStoryDraftCompatibility(
+	ctx context.Context,
+	tx *sql.Tx,
+	storyID string,
+	editionKey model.AdminStoryEditionKey,
+	versionID string,
+) error {
+	if editionKey == model.AdminStoryEditionClassic {
+		_, err := tx.ExecContext(ctx, `
+			UPDATE stories
+			SET draft_version_id = $2,
+			    updated_at = now()
+			WHERE id = $1
+		`, storyID, versionID)
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `
+		UPDATE stories
+		SET updated_at = now()
+		WHERE id = $1
+	`, storyID)
+	return err
+}
+
 // AdminDraftUpsert is account-scoped. Body hashes retain their historical role
 // as idempotency candidate keys, but reuse succeeds only when the complete
 // locked immutable version still matches the canonical incoming story.
@@ -663,6 +700,10 @@ func (s *Store) AdminDraftUpsert(accountID string, req model.AdminDraftUpsertReq
 		return model.AdminDraftUpsertResponse{}, fmt.Errorf("account required")
 	}
 
+	editionKey, err := adminDraftEditionKey(req)
+	if err != nil {
+		return model.AdminDraftUpsertResponse{}, err
+	}
 	ing, err := canonicalAdminStoryInput(req)
 	if err != nil {
 		return model.AdminDraftUpsertResponse{}, err
@@ -705,7 +746,7 @@ func (s *Store) AdminDraftUpsert(accountID string, req model.AdminDraftUpsertReq
 		return model.AdminDraftUpsertResponse{}, err
 	}
 
-	classicEditionID, err := ensureClassicEdition(ctx, tx, storyID)
+	editionID, err := ensureStoryEdition(ctx, tx, storyID, editionKey)
 	if err != nil {
 		return model.AdminDraftUpsertResponse{}, err
 	}
@@ -723,7 +764,7 @@ func (s *Store) AdminDraftUpsert(accountID string, req model.AdminDraftUpsertReq
 		  AND (content_hash = $3 OR markdown = $4)
 		ORDER BY version ASC, id ASC
 		FOR UPDATE
-	`, storyID, classicEditionID, ing.ContentHash, ing.Markdown)
+	`, storyID, editionID, ing.ContentHash, ing.Markdown)
 	if err != nil {
 		return model.AdminDraftUpsertResponse{}, err
 	}
@@ -771,18 +812,12 @@ func (s *Store) AdminDraftUpsert(accountID string, req model.AdminDraftUpsertReq
 			return model.AdminDraftUpsertResponse{}, fmt.Errorf("%w", model.ErrAdminVersionRepairRequired)
 		}
 
-		// Keep the new edition-owned pointer and the temporary story-level
-		// compatibility pointer coherent in the same transaction.
-		if err := setEditionDraftPointer(ctx, tx, classicEditionID, existingVersionID); err != nil {
+		// The requested edition owns its draft pointer. Only Classic mirrors that
+		// pointer onto stories.draft_version_id for the existing Reader contract.
+		if err := setEditionDraftPointer(ctx, tx, editionID, existingVersionID); err != nil {
 			return model.AdminDraftUpsertResponse{}, err
 		}
-		_, err = tx.ExecContext(ctx, `
-			UPDATE stories
-			SET draft_version_id=$2,
-			    updated_at=now()
-			WHERE id=$1
-		`, storyID, existingVersionID)
-		if err != nil {
+		if err := updateStoryDraftCompatibility(ctx, tx, storyID, editionKey, existingVersionID); err != nil {
 			return model.AdminDraftUpsertResponse{}, err
 		}
 
@@ -814,6 +849,7 @@ func (s *Store) AdminDraftUpsert(accountID string, req model.AdminDraftUpsertReq
 			StoryID:        storyID,
 			StoryVersionID: existingVersionID,
 			Slug:           ing.Slug,
+			EditionKey:     editionKey,
 			VersionID:      existingVersionID,
 			Version:        storedVersion.Version,
 			SegmentsCount:  storedVersion.SegmentCount,
@@ -842,7 +878,7 @@ func (s *Store) AdminDraftUpsert(accountID string, req model.AdminDraftUpsertReq
 		)
 		VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7)
 		RETURNING id
-	`, storyID, classicEditionID, nextVersion, string(frontmatterJSON), ing.Markdown, ing.RenderedHTML, ing.ContentHash).Scan(&versionID)
+	`, storyID, editionID, nextVersion, string(frontmatterJSON), ing.Markdown, ing.RenderedHTML, ing.ContentHash).Scan(&versionID)
 	if err != nil {
 		return model.AdminDraftUpsertResponse{}, err
 	}
@@ -956,18 +992,12 @@ func (s *Store) AdminDraftUpsert(accountID string, req model.AdminDraftUpsertReq
 		}
 	}
 
-	// Update the edition-owned draft pointer and the temporary story-level
-	// compatibility pointer only. Publication remains a separate endpoint.
-	if err := setEditionDraftPointer(ctx, tx, classicEditionID, versionID); err != nil {
+	// Update the requested edition's draft pointer. Classic alone mirrors the
+	// pointer onto the temporary story-level compatibility contract.
+	if err := setEditionDraftPointer(ctx, tx, editionID, versionID); err != nil {
 		return model.AdminDraftUpsertResponse{}, err
 	}
-	_, err = tx.ExecContext(ctx, `
-		UPDATE stories
-		SET draft_version_id=$2,
-		    updated_at=now()
-		WHERE id=$1
-	`, storyID, versionID)
-	if err != nil {
+	if err := updateStoryDraftCompatibility(ctx, tx, storyID, editionKey, versionID); err != nil {
 		return model.AdminDraftUpsertResponse{}, err
 	}
 
@@ -1004,6 +1034,7 @@ func (s *Store) AdminDraftUpsert(accountID string, req model.AdminDraftUpsertReq
 		StoryID:        storyID,
 		StoryVersionID: versionID,
 		Slug:           ing.Slug,
+		EditionKey:     editionKey,
 		VersionID:      versionID,
 		Version:        nextVersion,
 		SegmentsCount:  len(ing.Segments),

@@ -46,6 +46,7 @@ type inspectedAdminStory struct {
 	Row      adminStoryRow
 	Summary  model.AdminStorySummary
 	Versions []model.AdminVersionSummary
+	Editions []model.AdminEditionDetail
 }
 
 func (s *Store) AdminListStories(accountID string) (model.AdminStoriesListResponse, error) {
@@ -131,59 +132,17 @@ func (s *Store) AdminGetStory(accountID, slug string) (model.AdminStoryDetailRes
 	return adminStoryDetail(inspected), nil
 }
 
-func (s *Store) AdminGetVersionSource(accountID, slug, versionID string) (model.AdminVersionSourceResponse, error) {
-	accountID = strings.TrimSpace(accountID)
-	slug = strings.TrimSpace(slug)
-	versionID = strings.TrimSpace(versionID)
-	if !accountIDRe.MatchString(accountID) || storyingest.ValidateSlug(slug) != nil || !accountIDRe.MatchString(versionID) {
-		return model.AdminVersionSourceResponse{}, fmt.Errorf("%w", model.ErrAdminStoryNotFound)
-	}
-
-	ctx, cancel := s.ctx()
-	defer cancel()
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
-	if err != nil {
-		return model.AdminVersionSourceResponse{}, err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	story, err := loadAdminStory(ctx, tx, accountID, slug, false)
-	if err != nil {
-		return model.AdminVersionSourceResponse{}, err
-	}
-	snapshot, err := inspectStoredReaderVersion(ctx, tx, story.ID, versionID, story.Slug)
-	if errors.Is(err, sql.ErrNoRows) {
-		return model.AdminVersionSourceResponse{}, fmt.Errorf("%w", model.ErrAdminStoryNotFound)
-	}
-	if errors.Is(err, errStoredVersionInvalid) {
-		return model.AdminVersionSourceResponse{}, fmt.Errorf("%w", model.ErrAdminVersionRepairRequired)
-	}
-	if err != nil {
-		return model.AdminVersionSourceResponse{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return model.AdminVersionSourceResponse{}, err
-	}
-
-	return model.AdminVersionSourceResponse{
-		Slug:         story.Slug,
-		VersionID:    versionID,
-		Version:      snapshot.Version,
-		Title:        snapshot.Frontmatter.Title,
-		Author:       snapshot.Frontmatter.Author,
-		Language:     snapshot.Frontmatter.Language,
-		Rights:       cloneJSONMap(snapshot.Frontmatter.Rights),
-		SourceURL:    cloneString(snapshot.Frontmatter.SourceURL),
-		Markdown:     snapshot.Markdown,
-		RenderedHTML: snapshot.RenderedHTML,
-		SegmentCount: snapshot.SegmentCount,
-		WordCount:    snapshot.WordCount,
-		ChapterCount: snapshot.ChapterCount,
-		CreatedAt:    snapshot.CreatedAt.UTC().Format(time.RFC3339Nano),
-		IsDraft:      equalOptionalID(story.DraftVersionID, versionID),
-		IsPublished:  story.IsPublished && equalOptionalID(story.PublishedVersionID, versionID),
-		Health:       model.AdminVersionHealthReady,
-	}, nil
+func (s *Store) AdminGetVersionSource(
+	accountID string,
+	slug string,
+	versionID string,
+) (model.AdminVersionSourceResponse, error) {
+	return s.AdminGetEditionVersionSource(
+		accountID,
+		slug,
+		model.AdminStoryEditionClassic,
+		versionID,
+	)
 }
 
 type adminStoryScanner interface {
@@ -230,123 +189,7 @@ func loadAdminStory(ctx context.Context, tx *sql.Tx, accountID, slug string, loc
 }
 
 func inspectAdminStory(ctx context.Context, tx *sql.Tx, story adminStoryRow) (inspectedAdminStory, error) {
-	rows, err := tx.QueryContext(ctx, `
-		SELECT id, version, created_at
-		FROM story_versions
-		WHERE story_id = $1
-		ORDER BY version DESC, id ASC
-	`, story.ID)
-	if err != nil {
-		return inspectedAdminStory{}, err
-	}
-	type versionRow struct {
-		ID        string
-		Version   int64
-		CreatedAt time.Time
-	}
-	versionRows := make([]versionRow, 0, 8)
-	for rows.Next() {
-		var version versionRow
-		if err := rows.Scan(&version.ID, &version.Version, &version.CreatedAt); err != nil {
-			_ = rows.Close()
-			return inspectedAdminStory{}, err
-		}
-		versionRows = append(versionRows, version)
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return inspectedAdminStory{}, err
-	}
-	if err := rows.Close(); err != nil {
-		return inspectedAdminStory{}, err
-	}
-
-	versions := make([]inspectedAdminVersion, 0, len(versionRows))
-	byID := make(map[string]inspectedAdminVersion, len(versionRows))
-	repairRequired := false
-	for _, version := range versionRows {
-		versionNumber := positiveVersion(version.Version)
-		inspected := inspectedAdminVersion{Summary: model.AdminVersionSummary{
-			VersionID:   version.ID,
-			Version:     versionNumber,
-			CreatedAt:   version.CreatedAt.UTC().Format(time.RFC3339Nano),
-			IsDraft:     equalOptionalID(story.DraftVersionID, version.ID),
-			IsPublished: story.IsPublished && equalOptionalID(story.PublishedVersionID, version.ID),
-			Health:      model.AdminVersionHealthRepairRequired,
-		}}
-		inspection, validationErr := inspectAdminVersion(ctx, tx, story.ID, version.ID)
-		switch {
-		case validationErr == nil:
-			inspected.Inspection = inspection
-			inspected.Summary.Version = inspection.Version
-			inspected.Summary.SegmentCount = inspection.SegmentCount
-			inspected.Summary.WordCount = inspection.WordCount
-			inspected.Summary.ChapterCount = inspection.ChapterCount
-			inspected.Summary.Health = model.AdminVersionHealthReady
-		case errors.Is(validationErr, errStoredVersionInvalid):
-			repairRequired = true
-		case errors.Is(validationErr, sql.ErrNoRows):
-			inspected.Summary.Health = model.AdminVersionHealthUnavailable
-			repairRequired = true
-		default:
-			return inspectedAdminStory{}, validationErr
-		}
-		if version.Version <= 0 || int64(versionNumber) != version.Version {
-			repairRequired = true
-			inspected.Summary.Health = model.AdminVersionHealthRepairRequired
-		}
-		versions = append(versions, inspected)
-		byID[version.ID] = inspected
-	}
-
-	draftPointer, draftValid := adminPointer(story.DraftVersionID, byID)
-	publishedPointer, publishedValid := adminPointer(story.PublishedVersionID, byID)
-	if !draftValid || !publishedValid ||
-		(story.IsPublished && story.PublishedVersionID == nil) ||
-		(!story.IsPublished && story.PublishedVersionID != nil) ||
-		len(versions) == 0 {
-		repairRequired = true
-	}
-
-	metadata := selectAdminMetadata(story, versions, byID)
-	if metadata == nil {
-		repairRequired = true
-	}
-	status := adminStoryStatus(story, repairRequired)
-	title := "Story requires repair"
-	language := "und"
-	var author *string
-	var sourceURL *string
-	rights := map[string]any{}
-	if metadata != nil {
-		title = metadata.Title
-		author = cloneString(metadata.Author)
-		language = metadata.Language
-		rights = cloneJSONMap(metadata.Rights)
-		sourceURL = cloneString(metadata.SourceURL)
-	}
-
-	publicVersions := make([]model.AdminVersionSummary, 0, len(versions))
-	for _, version := range versions {
-		publicVersions = append(publicVersions, version.Summary)
-	}
-	return inspectedAdminStory{
-		Row: story,
-		Summary: model.AdminStorySummary{
-			Slug:             story.Slug,
-			Title:            title,
-			Author:           author,
-			Language:         language,
-			Rights:           rights,
-			SourceURL:        sourceURL,
-			Status:           status,
-			PublishedVersion: publishedPointer,
-			DraftVersion:     draftPointer,
-			VersionCount:     len(versions),
-			UpdatedAt:        story.UpdatedAt.UTC().Format(time.RFC3339Nano),
-		},
-		Versions: publicVersions,
-	}, nil
+	return inspectAdminStoryByEdition(ctx, tx, story)
 }
 
 func inspectAdminVersion(
@@ -554,12 +397,14 @@ func adminStoryDetail(story inspectedAdminStory) model.AdminStoryDetailResponse 
 		CreatedAt:        story.Row.CreatedAt.UTC().Format(time.RFC3339Nano),
 		UpdatedAt:        summary.UpdatedAt,
 		Versions:         story.Versions,
+		Editions:         story.Editions,
 	}
 }
 
 func adminStoryStatusResponse(story inspectedAdminStory) model.AdminStoryStatusResponse {
 	return model.AdminStoryStatusResponse{
 		Slug:             story.Summary.Slug,
+		EditionKey:       model.AdminStoryEditionClassic,
 		Status:           story.Summary.Status,
 		PublishedVersion: story.Summary.PublishedVersion,
 		DraftVersion:     story.Summary.DraftVersion,

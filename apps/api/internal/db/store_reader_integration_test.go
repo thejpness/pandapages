@@ -153,6 +153,163 @@ func TestReaderStoreIntegration(t *testing.T) {
 		)
 	}
 
+	t.Run("edition-aware drafts stay isolated from the Classic Reader contract", func(t *testing.T) {
+		const editionSlug = "edition-aware-reader-contract"
+		editionMarkdown := "# Edition-aware contract\n\nSame immutable body in two reading editions.\n"
+
+		classicDraft, err := store.AdminDraftUpsert(readerAccountA, model.AdminDraftUpsertRequest{
+			Slug:     editionSlug,
+			Title:    "Edition-aware contract",
+			Author:   &author,
+			Language: &language,
+			Markdown: editionMarkdown,
+		})
+		if err != nil {
+			t.Fatalf("create Classic edition draft: %v", err)
+		}
+		if classicDraft.EditionKey != model.AdminStoryEditionClassic || classicDraft.Version != 1 {
+			t.Fatalf("Classic draft = %#v", classicDraft)
+		}
+		if _, err := store.AdminPublishStory(readerAccountA, editionSlug, classicDraft.VersionID); err != nil {
+			t.Fatalf("publish Classic edition: %v", err)
+		}
+
+		growing := model.AdminStoryEditionGrowingReaders
+		growingDraft, err := store.AdminDraftUpsert(readerAccountA, model.AdminDraftUpsertRequest{
+			Slug:       editionSlug,
+			EditionKey: &growing,
+			Title:      "Edition-aware contract",
+			Author:     &author,
+			Language:   &language,
+			Markdown:   editionMarkdown,
+		})
+		if err != nil {
+			t.Fatalf("create Growing Readers draft: %v", err)
+		}
+		if growingDraft.EditionKey != growing ||
+			growingDraft.Version != 2 ||
+			growingDraft.Outcome != model.AdminDraftOutcomeCreatedVersion {
+			t.Fatalf("Growing Readers draft = %#v", growingDraft)
+		}
+
+		reusedGrowing, err := store.AdminDraftUpsert(readerAccountA, model.AdminDraftUpsertRequest{
+			Slug:       editionSlug,
+			EditionKey: &growing,
+			Title:      "Edition-aware contract",
+			Author:     &author,
+			Language:   &language,
+			Markdown:   editionMarkdown,
+		})
+		if err != nil {
+			t.Fatalf("reuse Growing Readers draft: %v", err)
+		}
+		if reusedGrowing.Outcome != model.AdminDraftOutcomeReused ||
+			reusedGrowing.VersionID != growingDraft.VersionID ||
+			reusedGrowing.Version != 2 {
+			t.Fatalf("reused Growing Readers draft = %#v", reusedGrowing)
+		}
+
+		detail, err := store.AdminGetStory(readerAccountA, editionSlug)
+		if err != nil {
+			t.Fatalf("get edition-aware story detail: %v", err)
+		}
+		if detail.Status != model.AdminStoryStatusPublished ||
+			detail.VersionCount != 1 ||
+			len(detail.Versions) != 1 ||
+			detail.Versions[0].VersionID != classicDraft.VersionID ||
+			detail.Versions[0].EditionKey != model.AdminStoryEditionClassic {
+			t.Fatalf("Classic compatibility detail = %#v", detail)
+		}
+
+		keys := model.AdminStoryEditionKeys()
+		if len(detail.Editions) != len(keys) {
+			t.Fatalf("edition slot count = %d, want %d", len(detail.Editions), len(keys))
+		}
+		var classicEdition, growingEdition *model.AdminEditionDetail
+		for index := range detail.Editions {
+			edition := &detail.Editions[index]
+			if edition.EditionKey != keys[index] {
+				t.Fatalf("edition order[%d] = %q, want %q", index, edition.EditionKey, keys[index])
+			}
+			switch edition.EditionKey {
+			case model.AdminStoryEditionClassic:
+				classicEdition = edition
+			case model.AdminStoryEditionGrowingReaders:
+				growingEdition = edition
+			default:
+				if edition.Status != model.AdminEditionStatusEmpty ||
+					edition.VersionCount != 0 ||
+					len(edition.Versions) != 0 {
+					t.Fatalf("empty edition slot = %#v", edition)
+				}
+			}
+		}
+		if classicEdition == nil ||
+			classicEdition.Status != model.AdminEditionStatusPublished ||
+			classicEdition.VersionCount != 1 ||
+			classicEdition.PublishedVersion == nil ||
+			classicEdition.PublishedVersion.VersionID != classicDraft.VersionID {
+			t.Fatalf("Classic edition detail = %#v", classicEdition)
+		}
+		if growingEdition == nil ||
+			growingEdition.Status != model.AdminEditionStatusDraftOnly ||
+			growingEdition.VersionCount != 1 ||
+			growingEdition.DraftVersion == nil ||
+			growingEdition.DraftVersion.VersionID != growingDraft.VersionID ||
+			len(growingEdition.Versions) != 1 ||
+			growingEdition.Versions[0].EditionKey != growing {
+			t.Fatalf("Growing Readers edition detail = %#v", growingEdition)
+		}
+
+		if _, err := store.AdminGetVersionSource(readerAccountA, editionSlug, growingDraft.VersionID); !errors.Is(err, model.ErrAdminStoryNotFound) {
+			t.Fatalf("legacy Classic source followed Growing Readers version: %v", err)
+		}
+		growingSource, err := store.AdminGetEditionVersionSource(
+			readerAccountA,
+			editionSlug,
+			growing,
+			growingDraft.VersionID,
+		)
+		if err != nil {
+			t.Fatalf("get Growing Readers source: %v", err)
+		}
+		if growingSource.EditionKey != growing ||
+			growingSource.VersionID != growingDraft.VersionID ||
+			!growingSource.IsDraft ||
+			growingSource.IsPublished {
+			t.Fatalf("Growing Readers source = %#v", growingSource)
+		}
+
+		if _, err := store.AdminPublishStory(readerAccountA, editionSlug, growingDraft.VersionID); !errors.Is(err, model.ErrAdminPublishNotFound) {
+			t.Fatalf("legacy Classic publish accepted Growing Readers version: %v", err)
+		}
+
+		readerStory, err := store.ReaderStory(readerAccountA, editionSlug)
+		if err != nil {
+			t.Fatalf("read Classic story after Growing Readers draft: %v", err)
+		}
+		if readerStory.Version != 1 {
+			t.Fatalf("Reader followed non-Classic draft: version %d", readerStory.Version)
+		}
+
+		library, err := store.Library(readerAccountA)
+		if err != nil {
+			t.Fatalf("read Library after Growing Readers draft: %v", err)
+		}
+		found := false
+		for _, item := range library.Items {
+			if item.Slug == editionSlug {
+				found = true
+				if item.PublishedVersion != 1 {
+					t.Fatalf("Library followed non-Classic draft: %#v", item)
+				}
+			}
+		}
+		if !found {
+			t.Fatal("Classic published story disappeared from Library")
+		}
+	})
+
 	accountBDraft, err := store.AdminDraftUpsert(readerAccountB, model.AdminDraftUpsertRequest{
 		Slug:     readerSlug,
 		Title:    "Account B isolated story",
@@ -410,9 +567,18 @@ func TestReaderStoreIntegration(t *testing.T) {
 			t.Fatalf("prepare retained-version unpublished state: %v", err)
 		}
 		retained, err := store.AdminGetStory(readerAccountA, unpublishSlug)
-		if err != nil || retained.Status != model.AdminStoryStatusUnpublished ||
-			retained.VersionCount != 1 || retained.DraftVersion != nil || retained.PublishedVersion != nil {
-			t.Fatalf("retained-version unpublished detail/error = %#v / %v", retained, err)
+		if err != nil || retained.Status != model.AdminStoryStatusDraftOnly ||
+			retained.VersionCount != 1 || retained.DraftVersion == nil ||
+			retained.DraftVersion.VersionID != unpublishDraft.VersionID ||
+			retained.PublishedVersion != nil {
+			t.Fatalf("edition-authoritative retained-version detail/error = %#v / %v", retained, err)
+		}
+		if len(retained.Editions) != len(model.AdminStoryEditionKeys()) ||
+			retained.Editions[0].EditionKey != model.AdminStoryEditionClassic ||
+			retained.Editions[0].Status != model.AdminEditionStatusDraftOnly ||
+			retained.Editions[0].DraftVersion == nil ||
+			retained.Editions[0].DraftVersion.VersionID != unpublishDraft.VersionID {
+			t.Fatalf("Classic edition stopped being authoritative after story pointer drift: %#v", retained.Editions)
 		}
 	})
 
