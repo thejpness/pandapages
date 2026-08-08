@@ -21,12 +21,14 @@ function versionSummary(
   versionId: string,
   version: number,
   options: {
+    editionKey?: 'classic' | 'confident-readers' | 'growing-readers' | 'story-explorers' | 'little-listeners'
     isDraft?: boolean
     isPublished?: boolean
     health?: 'ready' | 'repair_required' | 'unavailable'
   } = {},
 ) {
   return {
+    editionKey: options.editionKey ?? 'classic',
     versionId,
     version,
     createdAt: timestamp,
@@ -37,6 +39,35 @@ function versionSummary(
     chapterCount: 1,
     health: options.health ?? 'ready',
   }
+}
+
+const editionKeys = [
+  'classic',
+  'confident-readers',
+  'growing-readers',
+  'story-explorers',
+  'little-listeners',
+] as const
+
+function editionSlots(
+  status:
+    | 'draft_only'
+    | 'published'
+    | 'published_with_draft'
+    | 'unpublished'
+    | 'repair_required',
+  publishedVersion: { versionId: string; version: number } | null,
+  draftVersion: { versionId: string; version: number } | null,
+  versionCount: number,
+) {
+  return editionKeys.map((editionKey) => ({
+    editionKey,
+    status: editionKey === 'classic' ? status : 'empty',
+    publishedVersion: editionKey === 'classic' ? publishedVersion : null,
+    draftVersion: editionKey === 'classic' ? draftVersion : null,
+    versionCount: editionKey === 'classic' ? versionCount : 0,
+    updatedAt: editionKey === 'classic' ? timestamp : null,
+  }))
 }
 
 function summary(
@@ -64,6 +95,13 @@ function summary(
     draftVersion: draft ? { versionId: versionTwo, version: 2 } : null,
     versionCount: options.versionCount ?? (status === 'published_with_draft' ? 2 : 1),
     updatedAt: timestamp,
+    source: { status: 'missing', currentVersion: null, versionCount: 0, updatedAt: null },
+    editions: editionSlots(
+      status,
+      published ? { versionId: versionOne, version: 1 } : null,
+      draft ? { versionId: versionTwo, version: 2 } : null,
+      options.versionCount ?? (status === 'published_with_draft' ? 2 : 1),
+    ),
   }
 }
 
@@ -72,6 +110,19 @@ type TestVersionSummary = ReturnType<typeof versionSummary>
 type TestStoryDetail = TestStorySummary & {
   createdAt: string
   versions: TestVersionSummary[]
+  editions: Array<TestStorySummary['editions'][number] & { versions: TestVersionSummary[] }>
+}
+
+function withDetail(item: TestStorySummary, versions: TestVersionSummary[]): TestStoryDetail {
+  return {
+    ...item,
+    createdAt: timestamp,
+    versions,
+    editions: item.editions.map((edition) => ({
+      ...edition,
+      versions: edition.editionKey === 'classic' ? versions : [],
+    })),
+  }
 }
 
 class StudioAPI {
@@ -99,40 +150,24 @@ class StudioAPI {
   details = new Map<string, TestStoryDetail>([
     [
       'panda-tale',
-      {
-        ...this.stories[0],
-        createdAt: timestamp,
-        versions: [
-          versionSummary(versionTwo, 2, { isDraft: true }),
-          versionSummary(versionOne, 1, { isPublished: true }),
-        ],
-      },
+      withDetail(this.stories[0], [
+        versionSummary(versionTwo, 2, { isDraft: true }),
+        versionSummary(versionOne, 1, { isPublished: true }),
+      ]),
     ],
     [
       'quiet-moon',
-      {
-        ...this.stories[1],
-        createdAt: timestamp,
-        versions: [versionSummary(versionTwo, 2, { isDraft: true })],
-      },
+      withDetail(this.stories[1], [versionSummary(versionTwo, 2, { isDraft: true })]),
     ],
     [
       'old-oak',
-      {
-        ...this.stories[2],
-        createdAt: timestamp,
-        versions: [versionSummary(versionOne, 1)],
-      },
+      withDetail(this.stories[2], [versionSummary(versionOne, 1)]),
     ],
     [
       'repair-story',
-      {
-        ...this.stories[3],
-        createdAt: timestamp,
-        versions: [
-          versionSummary(versionOne, 1, { health: 'repair_required' }),
-        ],
-      },
+      withDetail(this.stories[3], [
+        versionSummary(versionOne, 1, { health: 'repair_required' }),
+      ]),
     ],
   ])
 
@@ -170,6 +205,7 @@ class StudioAPI {
     if (!detail || !version) return null
     return {
       slug,
+      editionKey: version.editionKey,
       versionId: id,
       version: version.version,
       title: detail.title,
@@ -303,6 +339,10 @@ class StudioAPI {
         const reused = existing.draftVersion
         await this.fulfill(route, {
           slug,
+          editionKey:
+          typeof input.editionKey === 'string'
+            ? input.editionKey
+            : 'classic',
           versionId: reused.versionId,
           version: reused.version,
           segmentCount: 3,
@@ -335,13 +375,22 @@ class StudioAPI {
             })) as TestVersionSummary[]),
           ]
         : [versionSummary(resultId, resultVersion, { isDraft: true })]
-      const detail = { ...item, createdAt: timestamp, versions }
+      const detail = withDetail(item, versions)
+      const classicEdition = detail.editions[0]
+      classicEdition.status = detail.status
+      classicEdition.draftVersion = detail.draftVersion
+      classicEdition.publishedVersion = detail.publishedVersion
+      classicEdition.versionCount = versions.length
       this.details.set(slug, detail)
       const index = this.stories.findIndex((candidate) => candidate.slug === slug)
       if (index >= 0) this.stories[index] = item
       else this.stories.unshift(item)
       await this.fulfill(route, {
         slug,
+        editionKey:
+          typeof input.editionKey === 'string'
+            ? input.editionKey
+            : 'classic',
         versionId: resultId,
         version: resultVersion,
         segmentCount: 3,
@@ -353,9 +402,13 @@ class StudioAPI {
       return
     }
 
-    const versionMatch = /^\/api\/v1\/admin\/stories\/([^/]+)\/versions\/([^/]+)$/.exec(path)
+    const versionMatch = /^\/api\/v1\/admin\/stories\/([^/]+)\/editions\/([^/]+)\/versions\/([^/]+)$/.exec(path)
     if (versionMatch && method === 'GET') {
-      const source = this.source(decodeURIComponent(versionMatch[1]), versionMatch[2])
+      const source = this.source(decodeURIComponent(versionMatch[1]), versionMatch[3])
+      if (source && source.editionKey !== decodeURIComponent(versionMatch[2])) {
+        await this.fail(route, { status: 404, code: 'version_not_found', message: 'story version was not found' })
+        return
+      }
       if (!source || source.health !== 'ready') {
         await this.fail(route, {
           status: source ? 409 : 404,
@@ -387,10 +440,16 @@ class StudioAPI {
       for (const version of versions) version.isPublished = version.versionId === id
       detail.publishedVersion = { versionId: id, version: selected.version }
       detail.status = detail.draftVersion?.versionId === id ? 'published' : 'published_with_draft'
+      const classic = detail.editions[0]
+      classic.publishedVersion = detail.publishedVersion
+      classic.draftVersion = detail.draftVersion
+      classic.status = detail.status
+      for (const version of classic.versions) version.isPublished = version.versionId === id
       const item = this.stories.find((candidate) => candidate.slug === slug)
       if (item) Object.assign(item, detail)
       await this.fulfill(route, {
         slug,
+        editionKey: 'classic',
         status: detail.status,
         publishedVersion: detail.publishedVersion,
         draftVersion: detail.draftVersion,
@@ -411,10 +470,16 @@ class StudioAPI {
       for (const version of detail.versions) version.isPublished = false
       detail.publishedVersion = null
       detail.status = detail.draftVersion ? 'draft_only' : 'unpublished'
+      const classic = detail.editions[0]
+      classic.publishedVersion = null
+      classic.draftVersion = detail.draftVersion
+      classic.status = detail.status
+      for (const version of classic.versions) version.isPublished = false
       const item = this.stories.find((candidate) => candidate.slug === slug)
       if (item) Object.assign(item, detail)
       await this.fulfill(route, {
         slug,
+        editionKey: 'classic',
         status: detail.status,
         publishedVersion: null,
         draftVersion: detail.draftVersion,
@@ -682,10 +747,10 @@ test('saving creates an initial immutable draft without publishing or opening Re
   await page.goto('/admin/stories/new')
   await page.getByLabel('Title').fill('New Panda Story')
   await page.getByLabel('Markdown').fill('# New Panda Story\n\nA new beginning.\n')
-  await page.getByRole('button', { name: 'Save draft', exact: true }).first().click()
+  await page.getByRole('button', { name: 'Save Classic draft', exact: true }).first().click()
 
-  await expect(page).toHaveURL(/\/admin\/stories\/new-panda-story\?saved=created_story&version=1$/)
-  await expect(page.getByText('Story created as draft version 1.')).toBeVisible()
+  await expect(page).toHaveURL(/\/admin\/stories\/new-panda-story\?saved=created_story&version=1&edition=classic$/)
+  await expect(page.getByText('Story created with Classic draft version 1.')).toBeVisible()
   expect(api.count('POST', '/api/v1/admin/stories/draft')).toBe(1)
   expect(api.requests.some((request) => request.path.endsWith('/publish'))).toBe(false)
   expect(api.requests.some((request) => request.path.startsWith('/api/v1/reader/'))).toBe(false)
@@ -700,15 +765,15 @@ test('existing version opens read-only as a source and reports created versus re
   await page.goto(`/admin/stories/panda-tale/edit?fromVersion=${versionTwo}`)
   await expect(page.getByRole('heading', { level: 1, name: 'Edit The Panda Tale' })).toBeVisible()
   await expect(page.getByLabel('Slug')).toHaveAttribute('readonly', '')
-  await expect(page.getByText('Starting from version 2.')).toBeVisible()
+  await expect(page.getByText('Starting from Classic version 2.')).toBeVisible()
   await page.getByLabel('Markdown').fill('# The Panda Tale\n\nA genuinely new version.\n')
-  await page.getByRole('button', { name: 'Save draft', exact: true }).first().click()
-  await expect(page.getByText('Draft version 3 created.')).toBeVisible()
+  await page.getByRole('button', { name: 'Save Classic draft', exact: true }).first().click()
+  await expect(page.getByText('Classic draft version 3 created.')).toBeVisible()
 
   api.draftOutcome = 'reused'
   await page.goto(`/admin/stories/panda-tale/edit?fromVersion=${versionThree}`)
-  await page.getByRole('button', { name: 'Save draft', exact: true }).first().click()
-  await expect(page.getByText('Existing healthy version 3 reused.')).toBeVisible()
+  await page.getByRole('button', { name: 'Save Classic draft', exact: true }).first().click()
+  await expect(page.getByText('Existing healthy Classic version 3 reused.')).toBeVisible()
 })
 
 test('repair-required save conflict and repair summaries disable unsafe actions', async ({
@@ -724,7 +789,7 @@ test('repair-required save conflict and repair summaries disable unsafe actions'
   await page.goto('/admin/stories/new')
   await page.getByLabel('Title').fill('Repair Candidate')
   await page.getByLabel('Markdown').fill('# Repair Candidate\n\nText.\n')
-  await page.getByRole('button', { name: 'Save draft', exact: true }).first().click()
+  await page.getByRole('button', { name: 'Save Classic draft', exact: true }).first().click()
   await expect(page.getByRole('alert').getByText('Needs attention')).toBeVisible()
   await expect(page.getByText('Unsaved changes')).toBeVisible()
 
@@ -737,7 +802,7 @@ test('repair-required save conflict and repair summaries disable unsafe actions'
     'background-color',
     'rgb(255, 242, 216)',
   )
-  await expect(page.getByRole('button', { name: 'Publish selected version' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Publish selected Classic version' })).toBeDisabled()
   await expect(page.getByText('This stored version cannot safely be reused or published.')).toBeVisible()
   expect(await seriousOrCriticalViolations(page)).toEqual([])
 })
@@ -749,17 +814,19 @@ test('publish is deliberate, retains history and exposes Reader only after succe
   await api.install(page)
   await page.goto('/admin/stories/panda-tale')
   await expect(page.locator('.detail-overview')).toBeVisible()
+  await expect(page.locator('.edition-card')).toHaveCount(5)
+  await expect(page.getByRole('heading', { name: 'Five-edition workspace' })).toBeVisible()
   await expect(page.locator('.version-row')).toHaveCount(2)
   expect(await seriousOrCriticalViolations(page)).toEqual([])
   await page.getByLabel('Select version 2 for publication').check()
-  await page.getByRole('button', { name: 'Publish selected version' }).click()
+  await page.getByRole('button', { name: 'Publish selected Classic version' }).click()
   const dialog = page.getByRole('dialog', { name: 'Publish this version?' })
   await expect(dialog.getByText('Version 1 is currently published.')).toBeVisible()
   await expect(dialog.getByText(/Existing historical versions and reading progress are retained/)).toBeVisible()
   expect(await seriousOrCriticalViolations(page)).toEqual([])
   await dialog.getByRole('button', { name: 'Publish version' }).click()
-  await expect(page.getByText('Version 2 published. Readers can now open it.')).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Open published story' })).toBeVisible()
+  await expect(page.getByText('Classic version 2 published. Readers can now open it.')).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Open published Classic' })).toBeVisible()
   expect(api.count('POST', '/api/v1/admin/stories/panda-tale/publish')).toBe(1)
 })
 
@@ -771,15 +838,15 @@ test('unpublish removes Reader availability while retaining drafts and version h
   await page.goto('/admin/stories/panda-tale')
   await expect(page.locator('.version-row')).toHaveCount(2)
   const initialRows = await page.locator('.version-row').count()
-  await page.getByRole('button', { name: 'Unpublish' }).click()
+  await page.getByRole('button', { name: 'Unpublish Classic' }).click()
   const dialog = page.getByRole('dialog', { name: 'Unpublish this story?' })
   await expect(dialog.getByText(/Drafts, immutable versions and historical reading progress remain/)).toBeVisible()
   await expect(dialog).toHaveCSS('background-color', 'rgb(255, 254, 250)')
   expect(await seriousOrCriticalViolations(page)).toEqual([])
   await dialog.getByRole('button', { name: 'Unpublish story' }).click()
-  await expect(page.getByText(/Story unpublished/)).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Open published story' })).toBeHidden()
-  await expect(page.getByText('Version 2', { exact: true })).toBeVisible()
+  await expect(page.getByText(/Classic unpublished/)).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Open published Classic' })).toBeHidden()
+  await expect(page.locator('.version-row__number').filter({ hasText: /^v2$/ })).toBeVisible()
   expect(await page.locator('.version-row').count()).toBe(initialRows)
   expect(api.count('POST', '/api/v1/admin/stories/panda-tale/unpublish')).toBe(1)
 })
@@ -892,7 +959,7 @@ test('mobile and desktop editor layouts do not overflow', async ({ page }) => {
     content: 'html { font-size: 32px !important; }',
   })
   await expectNoHorizontalOverflow(page)
-  await expect(page.getByRole('button', { name: 'Save draft', exact: true }).last()).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Save Classic draft', exact: true }).last()).toBeVisible()
   expect(await seriousOrCriticalViolations(page)).toEqual([])
 })
 

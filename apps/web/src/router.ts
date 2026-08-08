@@ -81,6 +81,11 @@ export const router = createRouter({
           component: () => import("./views/admin/StoryStudioEditor.vue"),
         },
         {
+          path: "stories/:slug/source",
+          name: "admin-story-source",
+          component: () => import("./views/admin/StoryStudioSourceEditor.vue"),
+        },
+        {
           path: "stories/:slug",
           name: "admin-story-detail",
           component: () => import("./views/admin/StoryStudioDetail.vue"),

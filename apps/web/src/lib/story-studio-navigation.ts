@@ -1,12 +1,74 @@
 import type {
   AdminDraftOutcome,
+  AdminEditionDetail,
+  AdminEditionStatus,
+  AdminSourceOutcome,
+  AdminSourceStatus,
   AdminStoryDetail,
+  AdminStoryEditionKey,
   AdminStoryListItem,
   AdminStoryStatus,
   AdminVersionHealth,
   AdminVersionSummary,
   JsonObject,
 } from './api'
+
+export const storyEditionOrder: readonly AdminStoryEditionKey[] = [
+  'classic',
+  'confident-readers',
+  'growing-readers',
+  'story-explorers',
+  'little-listeners',
+]
+
+const editionLabels: Record<AdminStoryEditionKey, string> = {
+  classic: 'Classic',
+  'confident-readers': 'Confident Readers',
+  'growing-readers': 'Growing Readers',
+  'story-explorers': 'Story Explorers',
+  'little-listeners': 'Little Listeners',
+}
+const editionDescriptions: Record<AdminStoryEditionKey, string> = {
+  classic: 'The fullest Panda Pages adaptation and current Reader publication edition.',
+  'confident-readers': 'A substantial independent reading edition with streamlined scope.',
+  'growing-readers': 'A supported reading edition with reduced narrative complexity.',
+  'story-explorers': 'A shorter exploratory edition built around the core story journey.',
+  'little-listeners': 'The most compact read-aloud edition with the clearest narrative line.',
+}
+const editionStatusLabels: Record<AdminEditionStatus, string> = {
+  empty: 'Not started',
+  draft_only: 'Draft only',
+  published: 'Published',
+  published_with_draft: 'Published · New draft',
+  unpublished: 'Unpublished',
+  repair_required: 'Needs attention',
+}
+const sourceStatusLabels: Record<AdminSourceStatus, string> = {
+  missing: 'Source not added',
+  ready: 'Source ready',
+  repair_required: 'Source needs attention',
+}
+
+export function parseStoryEditionKey(value: unknown): AdminStoryEditionKey | null {
+  return typeof value === 'string' && storyEditionOrder.includes(value as AdminStoryEditionKey)
+    ? (value as AdminStoryEditionKey)
+    : null
+}
+export function storyEditionLabel(key: AdminStoryEditionKey): string { return editionLabels[key] }
+export function storyEditionDescription(key: AdminStoryEditionKey): string { return editionDescriptions[key] }
+export function editionStatusLabel(status: AdminEditionStatus): string { return editionStatusLabels[status] }
+export function sourceStatusLabel(status: AdminSourceStatus): string { return sourceStatusLabels[status] }
+export function editionPreferredVersion(edition: AdminEditionDetail): AdminVersionSummary | null {
+  for (const pointer of [edition.draftVersion, edition.publishedVersion]) {
+    if (!pointer) continue
+    const version = edition.versions.find((candidate) => candidate.versionId === pointer.versionId && candidate.health === 'ready')
+    if (version) return version
+  }
+  return edition.versions.find((version) => version.health === 'ready') ?? null
+}
+export function editionStartedCount(editions: readonly { status: AdminEditionStatus }[]): number {
+  return editions.filter((edition) => edition.status !== 'empty').length
+}
 
 function apiErrorStatus(error: unknown): number | undefined {
   if (!(error instanceof Error)) return undefined
@@ -79,7 +141,7 @@ export function versionCanSeedDraft(version: AdminVersionSummary): boolean {
 }
 
 export function versionCanPublish(version: AdminVersionSummary): boolean {
-  return version.health === 'ready' && !version.isPublished
+  return version.editionKey === 'classic' && version.health === 'ready' && !version.isPublished
 }
 
 export function storyCanUnpublish(story: AdminStoryDetail): boolean {
@@ -89,10 +151,18 @@ export function storyCanUnpublish(story: AdminStoryDetail): boolean {
 export function draftOutcomeMessage(
   outcome: AdminDraftOutcome,
   version: number,
+  editionKey: AdminStoryEditionKey,
 ): string {
-  if (outcome === 'created_story') return `Story created as draft version ${version}.`
-  if (outcome === 'created_version') return `Draft version ${version} created.`
-  return `Existing healthy version ${version} reused.`
+  const edition = storyEditionLabel(editionKey)
+  if (outcome === 'created_story') return `Story created with ${edition} draft version ${version}.`
+  if (outcome === 'created_version') return `${edition} draft version ${version} created.`
+  return `Existing healthy ${edition} version ${version} reused.`
+}
+
+export function sourceOutcomeMessage(outcome: AdminSourceOutcome, version: number): string {
+  if (outcome === 'created_source') return `Canonical source added as revision ${version}.`
+  if (outcome === 'created_version') return `Canonical source revision ${version} created.`
+  return `Existing canonical source revision ${version} restored as current.`
 }
 
 export function previewIsOutdated(

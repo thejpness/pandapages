@@ -1,320 +1,59 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import StoryCanonicalSourcePanel from '@/components/admin/story-studio/StoryCanonicalSourcePanel.vue'
+import StoryEditionWorkspace from '@/components/admin/story-studio/StoryEditionWorkspace.vue'
 import StoryPublishDialog from '@/components/admin/story-studio/StoryPublishDialog.vue'
 import StoryStatusBadge from '@/components/admin/story-studio/StoryStatusBadge.vue'
 import StoryStudioState from '@/components/admin/story-studio/StoryStudioState.vue'
 import StoryUnpublishDialog from '@/components/admin/story-studio/StoryUnpublishDialog.vue'
 import StoryVersionHistory from '@/components/admin/story-studio/StoryVersionHistory.vue'
-import {
-  adminGetStory,
-  adminPublishStory,
-  adminUnpublishStory,
-  type AdminStoryDetail,
-} from '@/lib/api'
-import {
-  draftOutcomeMessage,
-  projectStoryStudioError,
-  storyCanUnpublish,
-  storyRightsSummary,
-  versionCanPublish,
-  type StoryStudioError,
-} from '@/lib/story-studio-navigation'
+import { adminGetStory, adminPublishStory, adminUnpublishStory, type AdminEditionDetail, type AdminStoryDetail, type AdminStoryEditionKey } from '@/lib/api'
+import { draftOutcomeMessage, editionPreferredVersion, parseStoryEditionKey, projectStoryStudioError, sourceOutcomeMessage, storyCanUnpublish, storyEditionLabel, storyRightsSummary, versionCanPublish, type StoryStudioError } from '@/lib/story-studio-navigation'
 
-const route = useRoute()
-const router = useRouter()
-const story = ref<AdminStoryDetail | null>(null)
-const loading = ref(true)
-const error = ref<StoryStudioError | null>(null)
-const actionMessage = ref('')
-const selectedVersionId = ref<string | null>(null)
-const publishDialogOpen = ref(false)
-const unpublishDialogOpen = ref(false)
-const publishing = ref(false)
-const unpublishing = ref(false)
-let generation = 0
-let controller: AbortController | null = null
-
-const slug = computed(() => String(route.params.slug ?? ''))
-const selectedVersion = computed(
-  () =>
-    story.value?.versions.find(
-      (version) => version.versionId === selectedVersionId.value,
-    ) ?? null,
-)
-
-function selectDefaultVersion(detail: AdminStoryDetail) {
-  const preferred = [detail.draftVersion?.versionId, ...detail.versions.map((item) => item.versionId)]
-  selectedVersionId.value =
-    preferred.find((id) => {
-      const version = detail.versions.find((item) => item.versionId === id)
-      return version ? versionCanPublish(version) : false
-    }) ?? null
-}
-
-async function moveToSignIn() {
-  await router.replace({
-    path: '/account/login',
-    query: { next: `/admin/stories/${encodeURIComponent(slug.value)}` },
-  })
-}
-
-async function loadStory(preserve = false) {
-  controller?.abort()
-  controller = new AbortController()
-  const activeGeneration = ++generation
-  if (!preserve) loading.value = true
-  error.value = null
-  try {
-    const detail = await adminGetStory(slug.value, controller.signal)
-    if (activeGeneration !== generation) return
-    story.value = detail
-    selectDefaultVersion(detail)
-  } catch (caught) {
-    if (controller.signal.aborted || activeGeneration !== generation) return
-    const projected = projectStoryStudioError(caught)
-    error.value = projected
-    if (projected.kind === 'session') await moveToSignIn()
-  } finally {
-    if (activeGeneration === generation) loading.value = false
-  }
-}
-
-function editVersion(versionId: string) {
-  void router.push({
-    name: 'admin-story-edit',
-    params: { slug: slug.value },
-    query: { fromVersion: versionId },
-  })
-}
-
-function editPreferredVersion() {
-  const detail = story.value
-  if (!detail) return
-  const preferred =
-    detail.versions.find(
-      (version) => version.versionId === detail.draftVersion?.versionId && version.health === 'ready',
-    ) ??
-    detail.versions.find(
-      (version) => version.versionId === detail.publishedVersion?.versionId && version.health === 'ready',
-    ) ??
-    detail.versions.find((version) => version.health === 'ready')
-  if (preferred) editVersion(preferred.versionId)
-}
-
-async function publishSelected() {
-  const detail = story.value
-  const version = selectedVersion.value
-  if (!detail || !version || !versionCanPublish(version) || publishing.value) return
-  publishing.value = true
-  error.value = null
-  try {
-    const result = await adminPublishStory(detail.slug, version.versionId)
-    actionMessage.value = `Version ${result.publishedVersion?.version ?? version.version} published. Readers can now open it.`
-    publishDialogOpen.value = false
-    await loadStory(true)
-  } catch (caught) {
-    const projected = projectStoryStudioError(caught)
-    error.value = projected
-    publishDialogOpen.value = false
-    if (projected.kind === 'session') await moveToSignIn()
-  } finally {
-    publishing.value = false
-  }
-}
-
-async function unpublish() {
-  const detail = story.value
-  if (!detail || !storyCanUnpublish(detail) || unpublishing.value) return
-  unpublishing.value = true
-  error.value = null
-  try {
-    await adminUnpublishStory(detail.slug)
-    actionMessage.value = 'Story unpublished. Drafts, versions and reading progress were retained.'
-    unpublishDialogOpen.value = false
-    await loadStory(true)
-  } catch (caught) {
-    const projected = projectStoryStudioError(caught)
-    error.value = projected
-    unpublishDialogOpen.value = false
-    if (projected.kind === 'session') await moveToSignIn()
-  } finally {
-    unpublishing.value = false
-  }
-}
-
-watch(
-  () => route.fullPath,
-  () => {
-    actionMessage.value = ''
-    const outcome = route.query.saved
-    const version = Number(route.query.version)
-    if (
-      (outcome === 'created_story' ||
-        outcome === 'created_version' ||
-        outcome === 'reused') &&
-      Number.isSafeInteger(version) &&
-      version > 0
-    ) {
-      actionMessage.value = draftOutcomeMessage(outcome, version)
-    }
-    void loadStory()
-  },
-  { immediate: true },
-)
-
-onBeforeUnmount(() => {
-  generation += 1
-  controller?.abort()
-})
+const route=useRoute(); const router=useRouter(); const story=ref<AdminStoryDetail|null>(null); const loading=ref(true); const error=ref<StoryStudioError|null>(null); const actionMessage=ref(''); const activeEditionKey=ref<AdminStoryEditionKey>('classic'); const selectedVersionId=ref<string|null>(null); const publishDialogOpen=ref(false); const unpublishDialogOpen=ref(false); const publishing=ref(false); const unpublishing=ref(false); let generation=0; let controller:AbortController|null=null
+const slug=computed(()=>String(route.params.slug??''))
+const activeEdition=computed<AdminEditionDetail|null>(()=>story.value?.editions.find((edition)=>edition.editionKey===activeEditionKey.value)??null)
+const selectedVersion=computed(()=>activeEdition.value?.versions.find((version)=>version.versionId===selectedVersionId.value)??null)
+const activeEditionLabel=computed(()=>storyEditionLabel(activeEditionKey.value))
+function selectDefaultVersion(){ const edition=activeEdition.value; if(!edition||edition.editionKey!=='classic'){selectedVersionId.value=null;return} selectedVersionId.value=edition.versions.find((version)=>versionCanPublish(version))?.versionId??null }
+function selectEdition(key:AdminStoryEditionKey){ activeEditionKey.value=key; selectDefaultVersion() }
+async function moveToSignIn(){await router.replace({path:'/account/login',query:{next:`/admin/stories/${encodeURIComponent(slug.value)}`}})}
+async function loadStory(preserve=false){controller?.abort();controller=new AbortController();const activeGeneration=++generation;if(!preserve)loading.value=true;error.value=null;try{const detail=await adminGetStory(slug.value,controller.signal);if(activeGeneration!==generation)return;story.value=detail;const requested=parseStoryEditionKey(route.query.edition);if(requested)activeEditionKey.value=requested;if(!detail.editions.some((edition)=>edition.editionKey===activeEditionKey.value))activeEditionKey.value='classic';selectDefaultVersion()}catch(caught){if(controller.signal.aborted||activeGeneration!==generation)return;const projected=projectStoryStudioError(caught);error.value=projected;if(projected.kind==='session')await moveToSignIn()}finally{if(activeGeneration===generation)loading.value=false}}
+function editEdition(key:AdminStoryEditionKey){const detail=story.value;const edition=detail?.editions.find((item)=>item.editionKey===key);if(!detail||!edition)return;const preferred=editionPreferredVersion(edition);void router.push({name:'admin-story-edit',params:{slug:detail.slug},query:{edition:key,...(preferred?{fromVersion:preferred.versionId}:{})}})}
+function editVersion(versionId:string){void router.push({name:'admin-story-edit',params:{slug:slug.value},query:{edition:activeEditionKey.value,fromVersion:versionId}})}
+function editSource(){void router.push({name:'admin-story-source',params:{slug:slug.value}})}
+async function publishSelected(){const detail=story.value;const version=selectedVersion.value;if(!detail||activeEditionKey.value!=='classic'||!version||!versionCanPublish(version)||publishing.value)return;publishing.value=true;error.value=null;try{const result=await adminPublishStory(detail.slug,version.versionId);actionMessage.value=`Classic version ${result.publishedVersion?.version??version.version} published. Readers can now open it.`;publishDialogOpen.value=false;await loadStory(true)}catch(caught){const projected=projectStoryStudioError(caught);error.value=projected;publishDialogOpen.value=false;if(projected.kind==='session')await moveToSignIn()}finally{publishing.value=false}}
+async function unpublish(){const detail=story.value;if(!detail||!storyCanUnpublish(detail)||unpublishing.value)return;unpublishing.value=true;error.value=null;try{await adminUnpublishStory(detail.slug);actionMessage.value='Classic unpublished. Drafts, versions and reading progress were retained.';unpublishDialogOpen.value=false;await loadStory(true)}catch(caught){const projected=projectStoryStudioError(caught);error.value=projected;unpublishDialogOpen.value=false;if(projected.kind==='session')await moveToSignIn()}finally{unpublishing.value=false}}
+watch(()=>route.fullPath,()=>{actionMessage.value='';const savedEdition=parseStoryEditionKey(route.query.edition)??'classic';const outcome=route.query.saved;const version=Number(route.query.version);if((outcome==='created_story'||outcome==='created_version'||outcome==='reused')&&Number.isSafeInteger(version)&&version>0){actionMessage.value=draftOutcomeMessage(outcome,version,savedEdition);activeEditionKey.value=savedEdition}const sourceOutcome=route.query.sourceSaved;const sourceVersion=Number(route.query.sourceVersion);if((sourceOutcome==='created_source'||sourceOutcome==='created_version'||sourceOutcome==='reused')&&Number.isSafeInteger(sourceVersion)&&sourceVersion>0)actionMessage.value=sourceOutcomeMessage(sourceOutcome,sourceVersion);void loadStory()},{immediate:true})
+onBeforeUnmount(()=>{generation+=1;controller?.abort()})
 </script>
-
 <template>
   <div>
-    <StoryStudioState
-      v-if="loading && !story"
-      kind="loading"
-      title="Opening story"
-      message="Loading metadata and immutable version history."
-    />
-    <StoryStudioState
-      v-else-if="error && !story"
-      :kind="error.kind === 'repair' ? 'repair' : error.kind === 'forbidden' ? 'forbidden' : 'error'"
-      :title="error.title"
-      :message="error.message"
-      :action-label="error.retryable ? 'Try again' : 'Return to stories'"
-      @action="error.retryable ? loadStory() : router.push('/admin/stories')"
-    />
+    <StoryStudioState v-if="loading && !story" kind="loading" title="Opening story" message="Loading canonical source and five reading editions." />
+    <StoryStudioState v-else-if="error && !story" :kind="error.kind === 'repair' ? 'repair' : error.kind === 'forbidden' ? 'forbidden' : 'error'" :title="error.title" :message="error.message" :action-label="error.retryable ? 'Try again' : 'Return to stories'" @action="error.retryable ? loadStory() : router.push('/admin/stories')" />
     <template v-else-if="story">
-      <header class="studio-page-heading">
-        <div>
-          <p class="studio-page-heading__eyebrow">Story details</p>
-          <h1>{{ story.title }}</h1>
-          <p class="studio-page-heading__summary">
-            <span v-if="story.author">{{ story.author }} · </span>{{ story.slug }}
-          </p>
-        </div>
-        <StoryStatusBadge :status="story.status" />
-      </header>
-
+      <header class="studio-page-heading"><div><p class="studio-page-heading__eyebrow">Story workspace</p><h1>{{ story.title }}</h1><p class="studio-page-heading__summary"><span v-if="story.author">{{ story.author }} · </span>{{ story.slug }}</p></div><StoryStatusBadge :status="story.status" /></header>
       <p v-if="actionMessage" class="detail-message" role="status">{{ actionMessage }}</p>
-      <div v-if="error" class="detail-error" role="alert">
-        <div><strong>{{ error.title }}</strong><p>{{ error.message }}</p></div>
-        <button v-if="error.retryable" type="button" class="studio-button studio-button--quiet" @click="loadStory(true)">Try again</button>
+      <div v-if="error" class="detail-error" role="alert"><div><strong>{{ error.title }}</strong><p>{{ error.message }}</p></div><button v-if="error.retryable" type="button" class="studio-button studio-button--quiet" @click="loadStory(true)">Try again</button></div>
+      <section v-if="story.status === 'repair_required' || story.source.status === 'repair_required' || story.editions.some((edition) => edition.status === 'repair_required')" class="repair-banner" aria-labelledby="repair-title"><div aria-hidden="true">!</div><span><h2 id="repair-title">Needs attention</h2><p>One stored source or edition cannot be reused safely. Healthy edition versions remain available independently.</p></span></section>
+      <div class="detail-top-grid">
+        <section class="studio-panel detail-overview" aria-labelledby="story-overview-title"><div class="detail-overview__heading"><h2 id="story-overview-title">Story identity</h2><code>{{ story.slug }}</code></div><dl><div><dt>Language</dt><dd>{{ story.language }}</dd></div><div><dt>Rights</dt><dd>{{ storyRightsSummary(story.rights) }}</dd></div><div><dt>Classic published</dt><dd>{{ story.publishedVersion ? `v${story.publishedVersion.version}` : 'Not published' }}</dd></div><div><dt>Reading editions</dt><dd>5 canonical slots</dd></div><div v-if="story.sourceUrl"><dt>Source reference</dt><dd><a :href="story.sourceUrl" rel="noreferrer" target="_blank">Open reference</a></dd></div></dl><div class="detail-overview__links"><a v-if="story.publishedVersion" class="studio-button studio-button--quiet" :href="`/read/${encodeURIComponent(story.slug)}`">Open published Classic</a><button type="button" class="studio-button studio-button--quiet" @click="router.push('/admin/stories')">← Return to stories</button></div></section>
+        <StoryCanonicalSourcePanel :source="story.source" @edit="editSource" />
       </div>
-
-      <section v-if="story.status === 'repair_required'" class="repair-banner" aria-labelledby="repair-title">
-        <div aria-hidden="true">!</div>
-        <span>
-          <h2 id="repair-title">Needs attention</h2>
-          <p>A stored version cannot be safely reused or published. Safe summaries remain available below; create a fresh version from a healthy source where possible.</p>
-        </span>
+      <div class="studio-panel detail-editions"><StoryEditionWorkspace :editions="story.editions" :active-key="activeEditionKey" @select="selectEdition" @edit="editEdition" /></div>
+      <section v-if="activeEdition" class="studio-panel active-edition" aria-labelledby="active-edition-title">
+        <div class="active-edition__heading"><div><p class="studio-page-heading__eyebrow">Selected edition</p><h2 id="active-edition-title">{{ activeEditionLabel }}</h2><p>{{ activeEdition.versionCount }} immutable {{ activeEdition.versionCount === 1 ? 'version' : 'versions' }}.</p></div><div class="active-edition__actions"><StoryStatusBadge :edition-status="activeEdition.status" /><button type="button" class="studio-button studio-button--primary" @click="editEdition(activeEdition.editionKey)">{{ activeEdition.status === 'empty' ? 'Create this edition' : 'Edit as new draft' }}</button></div></div>
+        <div v-if="activeEdition.editionKey === 'classic'" class="classic-release"><p>Classic is the only externally publishable Reader edition in the current release.</p><button type="button" class="studio-button studio-button--quiet" :disabled="!selectedVersion" @click="publishDialogOpen = true">Publish selected Classic version</button><button v-if="storyCanUnpublish(story)" type="button" class="studio-button classic-release__unpublish" @click="unpublishDialogOpen = true">Unpublish Classic</button></div>
+        <p v-else class="release-deferred">Publication for this edition is intentionally deferred until the release-semantics lifecycle. Saving here only creates edition-local immutable drafts.</p>
+        <div v-if="activeEdition.versions.length" class="detail-history"><StoryVersionHistory :versions="activeEdition.versions" :selected-version-id="selectedVersionId" :edition-label="activeEditionLabel" :allow-publish="activeEdition.editionKey === 'classic'" @select="selectedVersionId = $event" @edit="editVersion" /></div>
+        <div v-else class="active-edition__empty"><strong>{{ activeEditionLabel }} has not been authored yet.</strong><p>Create the first draft without affecting any other reading edition.</p></div>
       </section>
-
-      <div class="detail-grid">
-        <section class="studio-panel detail-overview" aria-labelledby="story-overview-title">
-          <div class="detail-overview__heading">
-            <h2 id="story-overview-title">Story overview</h2>
-            <code>{{ story.slug }}</code>
-          </div>
-          <dl>
-            <div><dt>Language</dt><dd>{{ story.language }}</dd></div>
-            <div><dt>Rights</dt><dd>{{ storyRightsSummary(story.rights) }}</dd></div>
-            <div><dt>Published</dt><dd>{{ story.publishedVersion ? `Version ${story.publishedVersion.version}` : 'Not published' }}</dd></div>
-            <div><dt>Current draft</dt><dd>{{ story.draftVersion ? `Version ${story.draftVersion.version}` : 'No current draft' }}</dd></div>
-            <div><dt>Total versions</dt><dd>{{ story.versionCount }}</dd></div>
-            <div v-if="story.sourceUrl"><dt>Source</dt><dd><a :href="story.sourceUrl" rel="noreferrer" target="_blank">Open source reference</a></dd></div>
-          </dl>
-        </section>
-
-        <aside class="studio-panel detail-actions" aria-labelledby="story-actions-title">
-          <h2 id="story-actions-title">Actions</h2>
-          <p>Saving and publishing are always separate decisions.</p>
-          <button type="button" class="studio-button studio-button--primary" :disabled="!story.versions.some((version) => version.health === 'ready')" @click="editPreferredVersion">
-            Edit as new draft
-          </button>
-          <button type="button" class="studio-button studio-button--quiet" :disabled="!selectedVersion" @click="publishDialogOpen = true">
-            Publish selected version
-          </button>
-          <a v-if="story.publishedVersion" class="studio-button studio-button--quiet" :href="`/read/${encodeURIComponent(story.slug)}`">Open published story</a>
-          <button v-if="story.publishedVersion" type="button" class="studio-button detail-actions__unpublish" @click="unpublishDialogOpen = true">Unpublish</button>
-          <button type="button" class="detail-actions__return" @click="router.push('/admin/stories')">← Return to stories</button>
-        </aside>
-      </div>
-
-      <div class="studio-panel detail-history">
-        <StoryVersionHistory
-          :versions="story.versions"
-          :selected-version-id="selectedVersionId"
-          @select="selectedVersionId = $event"
-          @edit="editVersion"
-        />
-      </div>
-
-      <StoryPublishDialog
-        :open="publishDialogOpen"
-        :title="story.title"
-        :version="selectedVersion?.version ?? null"
-        :current-published-version="story.publishedVersion?.version ?? null"
-        :busy="publishing"
-        @confirm="publishSelected"
-        @cancel="publishDialogOpen = false"
-      />
-      <StoryUnpublishDialog
-        :open="unpublishDialogOpen"
-        :title="story.title"
-        :busy="unpublishing"
-        @confirm="unpublish"
-        @cancel="unpublishDialogOpen = false"
-      />
+      <StoryPublishDialog :open="publishDialogOpen" :title="story.title" :version="selectedVersion?.version ?? null" :current-published-version="story.publishedVersion?.version ?? null" :busy="publishing" @confirm="publishSelected" @cancel="publishDialogOpen = false" />
+      <StoryUnpublishDialog :open="unpublishDialogOpen" :title="story.title" :busy="unpublishing" @confirm="unpublish" @cancel="unpublishDialogOpen = false" />
     </template>
   </div>
 </template>
-
 <style scoped>
-.detail-message,
-.detail-error,
-.repair-banner {
-  margin-bottom: 1rem;
-  border-radius: 0.9rem;
-  padding: 0.9rem 1rem;
-}
-
-.detail-message { border: 1px solid var(--panda-success); background: var(--panda-success-surface); color: var(--panda-success); }
-.detail-error { display: flex; align-items: center; justify-content: space-between; gap: 1rem; border: 1px solid var(--panda-danger); background: var(--panda-danger-surface); color: var(--panda-danger); }
-.detail-error p { margin-top: 0.2rem; }
-
-.repair-banner {
-  display: flex;
-  gap: 0.9rem;
-  border: 1px solid var(--panda-warning);
-  background: var(--panda-warning-surface);
-  color: var(--panda-warning);
-}
-
-.repair-banner > div { display: grid; flex: 0 0 2.5rem; height: 2.5rem; place-items: center; border: 1px solid currentColor; border-radius: var(--panda-radius-compact); background: var(--panda-paper-raised); font-weight: 800; }
-.repair-banner h2 { font-weight: 780; }
-.repair-banner p { margin-top: 0.25rem; line-height: 1.5; }
-
-.detail-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(16rem, 21rem); gap: 1rem; }
-.detail-overview__heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
-.detail-overview h2,
-.detail-actions h2 { font-family: var(--panda-serif); font-size: 1.2rem; font-weight: 650; }
-.detail-overview code { overflow-wrap: anywhere; color: var(--studio-muted); font-size: 0.75rem; }
-.detail-overview dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 1rem; gap: 1rem; }
-.detail-overview dt { color: var(--studio-muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; }
-.detail-overview dd { overflow-wrap: anywhere; margin-top: 0.25rem; font-weight: 650; }
-.detail-overview a { color: var(--panda-ink); font-weight: 700; text-decoration: underline; text-underline-offset: 0.2em; }
-
-.detail-actions { display: flex; flex-direction: column; gap: 0.7rem; }
-.detail-actions > p { margin-bottom: 0.25rem; color: var(--studio-muted); font-size: 0.85rem; line-height: 1.5; }
-.detail-actions__unpublish { border-color: var(--panda-warning); color: var(--panda-warning); }
-.detail-actions__return { min-height: 2.75rem; color: var(--studio-muted); text-align: left; }
-.detail-history { margin-top: 1rem; }
-
-@media (max-width: 760px) {
-  .detail-grid { grid-template-columns: 1fr; }
-  .detail-overview dl { grid-template-columns: 1fr; }
-  .detail-error { align-items: stretch; flex-direction: column; }
-}
+.detail-message,.detail-error,.repair-banner{margin-bottom:1rem;border-radius:.9rem;padding:.9rem 1rem}.detail-message{border:1px solid var(--panda-success);background:var(--panda-success-surface);color:var(--panda-success)}.detail-error{display:flex;align-items:center;justify-content:space-between;gap:1rem;border:1px solid var(--panda-danger);background:var(--panda-danger-surface);color:var(--panda-danger)}.detail-error p{margin-top:.2rem}.repair-banner{display:flex;gap:.9rem;border:1px solid var(--panda-warning);background:var(--panda-warning-surface);color:var(--panda-warning)}.repair-banner>div{display:grid;flex:0 0 2.5rem;height:2.5rem;place-items:center;border:1px solid currentColor;border-radius:var(--panda-radius-compact);background:var(--panda-paper-raised);font-weight:800}.repair-banner h2{font-weight:780}.repair-banner p{margin-top:.25rem;line-height:1.5}.detail-top-grid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(18rem,.65fr);gap:1rem}.detail-overview__heading{display:flex;align-items:center;justify-content:space-between;gap:1rem}.detail-overview h2{font-family:var(--panda-serif);font-size:1.2rem;font-weight:650}.detail-overview code{overflow-wrap:anywhere;color:var(--studio-muted);font-size:.75rem}.detail-overview dl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));margin-top:1rem;gap:1rem}.detail-overview dt{color:var(--studio-muted);font-size:.75rem;text-transform:uppercase;letter-spacing:.06em}.detail-overview dd{overflow-wrap:anywhere;margin-top:.25rem;font-weight:650}.detail-overview a{color:var(--panda-ink);font-weight:700;text-decoration:underline;text-underline-offset:.2em}.detail-overview__links{display:flex;flex-wrap:wrap;gap:.6rem;margin-top:1rem}.detail-editions,.active-edition{margin-top:1rem}.active-edition__heading{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem}.active-edition__heading h2{font-family:var(--panda-serif);font-size:1.45rem;font-weight:650}.active-edition__heading p:last-child{margin-top:.25rem;color:var(--studio-muted)}.active-edition__actions{display:flex;align-items:center;flex-wrap:wrap;justify-content:flex-end;gap:.6rem}.classic-release{display:flex;align-items:center;flex-wrap:wrap;gap:.7rem;margin-top:1rem;border-radius:var(--panda-radius-compact);background:var(--panda-mist);padding:.8rem}.classic-release p{flex:1 1 20rem;color:var(--studio-muted)}.classic-release__unpublish{border-color:var(--panda-warning);color:var(--panda-warning)}.release-deferred{margin-top:1rem;border-left:3px solid var(--panda-line-strong);padding-left:.8rem;color:var(--studio-muted);line-height:1.5}.detail-history{margin-top:1rem}.active-edition__empty{margin-top:1rem;border:1px dashed var(--studio-line-strong);border-radius:var(--panda-radius-card);padding:1rem}.active-edition__empty p{margin-top:.3rem;color:var(--studio-muted)}@media(max-width:780px){.detail-top-grid{grid-template-columns:1fr}.detail-overview dl{grid-template-columns:1fr}.detail-error,.active-edition__heading{align-items:stretch;flex-direction:column}.active-edition__actions{justify-content:flex-start}}
 </style>

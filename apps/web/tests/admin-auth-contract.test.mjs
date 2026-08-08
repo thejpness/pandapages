@@ -54,6 +54,7 @@ test('UTF-8 imported text is sent unchanged to the fixed draft path', async (t) 
     request = { url, init }
     return jsonResponse({
       slug: 'cafe-panda',
+      editionKey: 'classic',
       versionId: '11111111-1111-4111-8111-111111111111',
       version: 1,
       segmentCount: 2,
@@ -69,6 +70,7 @@ test('UTF-8 imported text is sent unchanged to the fixed draft path', async (t) 
   const markdown = '# Café Panda 🐼' + newline + newline + '“Olá”, said the panda. 你好。' + newline
   await api.adminDraftUpsertStory({
     slug: 'cafe-panda',
+    editionKey: 'classic',
     title: 'Café Panda 🐼',
     markdown,
   })
@@ -78,6 +80,7 @@ test('UTF-8 imported text is sent unchanged to the fixed draft path', async (t) 
   assert.equal(request.init.credentials, 'omit')
   assert.deepEqual(JSON.parse(String(request.init.body)), {
     slug: 'cafe-panda',
+    editionKey: 'classic',
     title: 'Café Panda 🐼',
     markdown,
   })
@@ -140,6 +143,7 @@ test('PWA caches static assets only and protected routes are split', async () =>
     './views/admin/StoryStudioList.vue',
     './views/admin/StoryStudioDetail.vue',
     './views/admin/StoryStudioEditor.vue',
+    './views/admin/StoryStudioSourceEditor.vue',
     './views/admin/AdminAI.vue',
   ]) {
     assert.match(routerSource, new RegExp(`import\\(["']${modulePath.replaceAll('.', '\\.')}["']\\)`))
