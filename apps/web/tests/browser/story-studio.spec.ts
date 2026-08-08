@@ -537,11 +537,32 @@ test('catalogue loads human statuses and supports deterministic search and filte
   expect(api.unhandled).toEqual([])
 })
 
-test('Story Studio returns to Parent Hub instead of entering reader mode', async ({
+test('owner can round-trip Parent Hub and Story Studio without entering reader mode', async ({
   page,
 }) => {
   const api = new StudioAPI()
-  await openCatalogue(page, api)
+  await api.install(page)
+
+  await page.goto('/profiles')
+  await expect(
+    page.getByRole('heading', { level: 1, name: 'Parent Hub' }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: /Story Studio/ }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'Leave reader mode' }),
+  ).toHaveCount(0)
+
+  await page.getByRole('button', { name: /Story Studio/ }).click()
+
+  await expect(page).toHaveURL('/admin/stories')
+  await expect(
+    page.getByRole('heading', { level: 1, name: 'Stories' }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'Parent Hub' }),
+  ).toBeVisible()
 
   await page.getByRole('button', { name: 'Parent Hub' }).click()
 
@@ -549,6 +570,12 @@ test('Story Studio returns to Parent Hub instead of entering reader mode', async
   await expect(
     page.getByRole('heading', { level: 1, name: 'Parent Hub' }),
   ).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'Start reading as Mina' }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'Leave reader mode' }),
+  ).toHaveCount(0)
   expect(api.unhandled).toEqual([])
 })
 
