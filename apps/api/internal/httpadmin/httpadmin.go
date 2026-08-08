@@ -26,6 +26,7 @@ type Store interface {
 	AdminListStories(accountID string) (model.AdminStoriesListResponse, error)
 	AdminGetStory(accountID string, slug string) (model.AdminStoryDetailResponse, error)
 	AdminGetVersionSource(accountID string, slug string, versionID string) (model.AdminVersionSourceResponse, error)
+	AdminGetEditionVersionSource(accountID string, slug string, editionKey model.AdminStoryEditionKey, versionID string) (model.AdminVersionSourceResponse, error)
 }
 
 const (
@@ -163,6 +164,32 @@ func New(cfg Config, store Store) http.Handler {
 		writeJSON(w, http.StatusOK, out)
 	}))
 
+	// GET /api/v1/admin/stories/{slug}/editions/{editionKey}/versions/{versionId}
+	mux.HandleFunc("GET /api/v1/admin/stories/{slug}/editions/{editionKey}/versions/{versionId}", withAdmin(func(w http.ResponseWriter, r *http.Request) {
+		slug := strings.TrimSpace(r.PathValue("slug"))
+		editionKey, ok := parseAdminStoryEditionKey(r.PathValue("editionKey"))
+		if !ok {
+			writeErr(w, http.StatusBadRequest, "edition_invalid", "reading edition is not supported")
+			return
+		}
+		versionID := strings.TrimSpace(r.PathValue("versionId"))
+		out, err := store.AdminGetEditionVersionSource(accountIDFromCtx(r), slug, editionKey, versionID)
+		if err != nil {
+			switch {
+			case errors.Is(err, model.ErrAdminStoryNotFound):
+				writeErr(w, http.StatusNotFound, "version_not_found", "story version was not found")
+			case errors.Is(err, model.ErrAdminVersionRepairRequired):
+				writeErr(w, http.StatusConflict, "version_repair_required", "story version requires repair")
+			default:
+				slog.Error("admin story edition version source failed")
+				writeErr(w, http.StatusInternalServerError, "version_failed", "story version unavailable")
+			}
+			return
+		}
+		noStore(w)
+		writeJSON(w, http.StatusOK, out)
+	}))
+
 	// GET /api/v1/admin/stories/{slug}/versions/{versionId}
 	mux.HandleFunc("GET /api/v1/admin/stories/{slug}/versions/{versionId}", withAdmin(func(w http.ResponseWriter, r *http.Request) {
 		slug := strings.TrimSpace(r.PathValue("slug"))
@@ -253,6 +280,11 @@ func New(cfg Config, store Store) http.Handler {
 }
 
 /* ------------------------------ helpers ------------------------------ */
+
+func parseAdminStoryEditionKey(raw string) (model.AdminStoryEditionKey, bool) {
+	key := model.AdminStoryEditionKey(strings.TrimSpace(raw))
+	return key, model.ValidAdminStoryEditionKey(key)
+}
 
 func adminKeyOK(got, want string) bool {
 	if got == "" || want == "" {

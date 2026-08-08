@@ -3,25 +3,44 @@ package db
 import (
 	"context"
 	"database/sql"
+
+	"pandapages/api/internal/model"
 )
 
-const classicStoryEditionKey = "classic"
+const classicStoryEditionKey = model.AdminStoryEditionClassic
 
-// ensureClassicEdition is the temporary compatibility bridge for the existing
-// single-edition admin contract. Migration 20 backfills all existing stories;
-// newly created stories receive their Classic edition explicitly here.
-func ensureClassicEdition(ctx context.Context, tx *sql.Tx, storyID string) (string, error) {
+func ensureStoryEdition(
+	ctx context.Context,
+	tx *sql.Tx,
+	storyID string,
+	editionKey model.AdminStoryEditionKey,
+) (string, error) {
+	if !model.ValidAdminStoryEditionKey(editionKey) {
+		return "", sql.ErrNoRows
+	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO story_editions (story_id, edition_key)
 		VALUES ($1, $2)
 		ON CONFLICT (story_id, edition_key) DO NOTHING
-	`, storyID, classicStoryEditionKey); err != nil {
+	`, storyID, editionKey); err != nil {
 		return "", err
 	}
-	return loadClassicEditionID(ctx, tx, storyID, true)
+	return loadStoryEditionID(ctx, tx, storyID, editionKey, true)
 }
 
-func loadClassicEditionID(ctx context.Context, tx *sql.Tx, storyID string, lock bool) (string, error) {
+// ensureClassicEdition remains the compatibility bridge for the existing
+// Classic-only publish/unpublish contract.
+func ensureClassicEdition(ctx context.Context, tx *sql.Tx, storyID string) (string, error) {
+	return ensureStoryEdition(ctx, tx, storyID, classicStoryEditionKey)
+}
+
+func loadStoryEditionID(
+	ctx context.Context,
+	tx *sql.Tx,
+	storyID string,
+	editionKey model.AdminStoryEditionKey,
+	lock bool,
+) (string, error) {
 	lockClause := ""
 	if lock {
 		lockClause = " FOR UPDATE"
@@ -33,8 +52,12 @@ func loadClassicEditionID(ctx context.Context, tx *sql.Tx, storyID string, lock 
 		FROM story_editions
 		WHERE story_id = $1
 		  AND edition_key = $2
-	`+lockClause, storyID, classicStoryEditionKey).Scan(&editionID)
+	`+lockClause, storyID, editionKey).Scan(&editionID)
 	return editionID, err
+}
+
+func loadClassicEditionID(ctx context.Context, tx *sql.Tx, storyID string, lock bool) (string, error) {
+	return loadStoryEditionID(ctx, tx, storyID, classicStoryEditionKey, lock)
 }
 
 func requireVersionInEdition(
@@ -62,9 +85,8 @@ func setEditionDraftPointer(ctx context.Context, tx *sql.Tx, editionID, versionI
 		SET draft_version_id = $2,
 		    updated_at = now()
 		WHERE id = $1
-		  AND edition_key = $3
 		RETURNING id
-	`, editionID, versionID, classicStoryEditionKey).Scan(&id)
+	`, editionID, versionID).Scan(&id)
 }
 
 func setEditionPublishedPointer(ctx context.Context, tx *sql.Tx, editionID, versionID string) error {

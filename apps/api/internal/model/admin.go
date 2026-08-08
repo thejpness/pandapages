@@ -3,13 +3,14 @@ package model
 import "fmt"
 
 type AdminStoryInput struct {
-	Slug      string         `json:"slug"`
-	Title     string         `json:"title"`
-	Author    *string        `json:"author"`
-	Markdown  string         `json:"markdown"`
-	Language  *string        `json:"language"`
-	SourceURL *string        `json:"sourceUrl"`
-	Rights    map[string]any `json:"rights"`
+	Slug       string                `json:"slug"`
+	EditionKey *AdminStoryEditionKey `json:"editionKey,omitempty"`
+	Title      string                `json:"title"`
+	Author     *string               `json:"author"`
+	Markdown   string                `json:"markdown"`
+	Language   *string               `json:"language"`
+	SourceURL  *string               `json:"sourceUrl"`
+	Rights     map[string]any        `json:"rights"`
 }
 
 // Preview and draft creation deliberately share one input contract and one
@@ -54,14 +55,15 @@ const (
 )
 
 type AdminDraftUpsertResponse struct {
-	Slug         string            `json:"slug"`
-	VersionID    string            `json:"versionId"`
-	Version      int               `json:"version"`
-	SegmentCount int               `json:"segmentCount"`
-	WordCount    int               `json:"wordCount"`
-	ChapterCount int               `json:"chapterCount"`
-	RenderedHTML string            `json:"renderedHtml"`
-	Outcome      AdminDraftOutcome `json:"outcome"`
+	Slug         string               `json:"slug"`
+	EditionKey   AdminStoryEditionKey `json:"editionKey"`
+	VersionID    string               `json:"versionId"`
+	Version      int                  `json:"version"`
+	SegmentCount int                  `json:"segmentCount"`
+	WordCount    int                  `json:"wordCount"`
+	ChapterCount int                  `json:"chapterCount"`
+	RenderedHTML string               `json:"renderedHtml"`
+	Outcome      AdminDraftOutcome    `json:"outcome"`
 
 	// These aliases keep existing Store-level tests and internal callers source
 	// compatible without exposing database story IDs or legacy field names.

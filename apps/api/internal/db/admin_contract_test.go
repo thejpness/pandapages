@@ -100,6 +100,40 @@ func TestCanonicalAdminStoryInputReturnsFiniteIssues(t *testing.T) {
 	}
 }
 
+func TestAdminDraftEditionKeyDefaultsAndRejectsUnknown(t *testing.T) {
+	key, err := adminDraftEditionKey(model.AdminDraftUpsertRequest{})
+	if err != nil || key != model.AdminStoryEditionClassic {
+		t.Fatalf("default edition = %q / %v", key, err)
+	}
+
+	growing := model.AdminStoryEditionGrowingReaders
+	key, err = adminDraftEditionKey(model.AdminDraftUpsertRequest{EditionKey: &growing})
+	if err != nil || key != growing {
+		t.Fatalf("explicit edition = %q / %v", key, err)
+	}
+
+	unknown := model.AdminStoryEditionKey("bedtime-ultra")
+	_, err = adminDraftEditionKey(model.AdminDraftUpsertRequest{EditionKey: &unknown})
+	var validationErr *model.AdminValidationError
+	if !errors.As(err, &validationErr) || len(validationErr.Issues) != 1 {
+		t.Fatalf("unknown edition error = %#v", err)
+	}
+	if issue := validationErr.Issues[0]; issue.Field != "editionKey" || issue.Code != "invalid" {
+		t.Fatalf("unknown edition issue = %#v", issue)
+	}
+
+	want := []model.AdminStoryEditionKey{
+		model.AdminStoryEditionClassic,
+		model.AdminStoryEditionConfidentReaders,
+		model.AdminStoryEditionGrowingReaders,
+		model.AdminStoryEditionStoryExplorers,
+		model.AdminStoryEditionLittleListeners,
+	}
+	if got := model.AdminStoryEditionKeys(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("canonical edition order = %#v, want %#v", got, want)
+	}
+}
+
 func TestImmutableAdminMetadataIncludesRightsAndRejectsMalformedUTF8(t *testing.T) {
 	rights := map[string]any{"label": "Public domain", "year": 1908}
 	output, err := storyingest.Ingest(storyingest.Input{

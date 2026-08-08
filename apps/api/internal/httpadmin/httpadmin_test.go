@@ -26,9 +26,12 @@ func (adminVerifier) Verify(_ context.Context, token string) (appidentity.Extern
 }
 
 type adminStore struct {
-	memberships []appidentity.Membership
-	listAccount string
-	listCalls   int
+	memberships        []appidentity.Membership
+	listAccount        string
+	listCalls          int
+	editionSourceCalls int
+	editionSourceKey   model.AdminStoryEditionKey
+	editionSourceID    string
 }
 
 func (s *adminStore) Identity(context.Context, appidentity.ExternalIdentity) (appidentity.Snapshot, error) {
@@ -56,6 +59,17 @@ func (*adminStore) AdminGetStory(string, string) (model.AdminStoryDetailResponse
 }
 func (*adminStore) AdminGetVersionSource(string, string, string) (model.AdminVersionSourceResponse, error) {
 	return model.AdminVersionSourceResponse{}, nil
+}
+func (s *adminStore) AdminGetEditionVersionSource(
+	_ string,
+	_ string,
+	editionKey model.AdminStoryEditionKey,
+	versionID string,
+) (model.AdminVersionSourceResponse, error) {
+	s.editionSourceCalls++
+	s.editionSourceKey = editionKey
+	s.editionSourceID = versionID
+	return model.AdminVersionSourceResponse{EditionKey: editionKey}, nil
 }
 
 func serveAdmin(t *testing.T, store *adminStore, account, token, key string) *httptest.ResponseRecorder {
@@ -106,5 +120,64 @@ func TestAdminUsesSelectedOwnerAccount(t *testing.T) {
 	response := serveAdmin(t, store, ownerAccount, "valid", "admin-key")
 	if response.Code != http.StatusOK || store.listAccount != ownerAccount || store.listCalls != 1 {
 		t.Fatalf("status/account/calls=%d/%s/%d", response.Code, store.listAccount, store.listCalls)
+	}
+}
+
+func TestAdminEditionVersionSourceUsesFiniteEditionPath(t *testing.T) {
+	store := &adminStore{memberships: []appidentity.Membership{{
+		AccountID: ownerAccount,
+		Role:      appidentity.RoleOwner,
+	}}}
+	handler := New(
+		Config{AdminKey: "admin-key", BearerAuthenticator: httpbearer.New(adminVerifier{}, store)},
+		store,
+	)
+	versionID := "11111111-1111-4111-8111-111111111111"
+
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/admin/stories/story/editions/growing-readers/versions/"+versionID,
+		nil,
+	)
+	request.Header.Set("Authorization", "Bearer valid")
+	request.Header.Set("X-PP-Account-ID", ownerAccount)
+	request.Header.Set("X-PP-Admin-Key", "admin-key")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK ||
+		store.editionSourceCalls != 1 ||
+		store.editionSourceKey != model.AdminStoryEditionGrowingReaders ||
+		store.editionSourceID != versionID {
+		t.Fatalf(
+			"valid edition source status/calls/key/id = %d/%d/%q/%q body=%s",
+			response.Code,
+			store.editionSourceCalls,
+			store.editionSourceKey,
+			store.editionSourceID,
+			response.Body.String(),
+		)
+	}
+
+	request = httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/admin/stories/story/editions/bedtime-ultra/versions/"+versionID,
+		nil,
+	)
+	request.Header.Set("Authorization", "Bearer valid")
+	request.Header.Set("X-PP-Account-ID", ownerAccount)
+	request.Header.Set("X-PP-Admin-Key", "admin-key")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest ||
+		!strings.Contains(response.Body.String(), `"code":"edition_invalid"`) ||
+		store.editionSourceCalls != 1 {
+		t.Fatalf(
+			"invalid edition source status/calls/body = %d/%d/%s",
+			response.Code,
+			store.editionSourceCalls,
+			response.Body.String(),
+		)
 	}
 }
