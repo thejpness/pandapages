@@ -63,9 +63,8 @@ func TestReaderStoreIntegration(t *testing.T) {
 		t.Fatalf("insert Reader accounts: %v", err)
 	}
 	if _, err := adminDB.Exec(`
-		INSERT INTO profiles (id, account_id, name, preferred_edition) VALUES
-			($1, $2, 'Reader A', 'classic'),
-			($3, $4, 'Reader C', 'little-listeners')
+		INSERT INTO profiles (id, account_id, name) VALUES
+			($1, $2, 'Reader A'), ($3, $4, 'Reader C')
 		ON CONFLICT (id) DO NOTHING
 	`, readerProfileA, readerAccountA, readerProfileC, readerAccountC); err != nil {
 		t.Fatalf("insert Reader profiles: %v", err)
