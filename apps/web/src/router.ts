@@ -39,7 +39,7 @@ export const router = createRouter({
     {
       path: "/profiles",
       component: () => import("./views/Profiles.vue"),
-      meta: { requiresAccount: true, parentOnly: true },
+      meta: { requiresAccount: true },
     },
     {
       path: "/profiles/new",
