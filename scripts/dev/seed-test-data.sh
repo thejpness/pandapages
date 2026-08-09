@@ -133,7 +133,7 @@ if ! database_state=$(
           || '|' || COALESCE((
             SELECT is_applied::text
             FROM goose_db_version
-            WHERE version_id = 25
+            WHERE version_id = 26
             ORDER BY id DESC
             LIMIT 1
           ), 'false');

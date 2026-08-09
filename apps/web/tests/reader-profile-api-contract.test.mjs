@@ -7,6 +7,7 @@ const profile = {
   id: '123e4567-e89b-42d3-a456-426614174300',
   name: 'Mina',
   pin_enabled: false,
+  preferred_edition: 'classic',
 }
 
 async function apiModule() {
@@ -40,8 +41,8 @@ test('profile management stays account scoped and sends bearer plus account cont
   }
   try {
     await api.listReaderProfiles()
-    await api.createReaderProfile('Mina')
-    await api.renameReaderProfile(profile.id, 'Mina Panda')
+    await api.createReaderProfile('Mina', 'little-listeners')
+    await api.renameReaderProfile(profile.id, 'Mina Panda', 'classic')
     await api.deleteReaderProfile(profile.id)
   } finally {
     globalThis.fetch = originalFetch
@@ -55,7 +56,15 @@ test('profile management stays account scoped and sends bearer plus account cont
   }
   assert.equal(requests[0].path, '/api/v1/profiles')
   assert.equal(requests[1].method, 'POST')
+  assert.deepEqual(JSON.parse(requests[1].body), {
+    name: 'Mina',
+    preferredEdition: 'little-listeners',
+  })
   assert.equal(requests[2].method, 'PATCH')
+  assert.deepEqual(JSON.parse(requests[2].body), {
+    name: 'Mina Panda',
+    preferredEdition: 'classic',
+  })
   assert.equal(requests[3].method, 'DELETE')
 })
 

@@ -527,7 +527,7 @@ grep -q 'OK.*00024_remove_legacy_story_source.sql' \
   "$test_root/full-up.out" "$test_root/full-up.err"
 grep -q 'OK.*00025_remove_legacy_default_bootstrap.sql' \
   "$test_root/full-up.out" "$test_root/full-up.err"
-assert_query '25|0|0|0' "$full_database" "
+assert_query '26|0|0|0' "$full_database" "
   SELECT
     (WITH latest AS (
       SELECT DISTINCT ON (version_id) version_id, is_applied
@@ -537,7 +537,7 @@ assert_query '25|0|0|0' "$full_database" "
     (SELECT count(*) FROM profiles),
     (SELECT count(*) FROM pg_constraint WHERE contype = 'f' AND NOT convalidated);
 " 'fresh full migration chain'
-printf 'ok 1 - a fresh database migrates through the current chain with no legacy bootstrap records at version 25\n'
+printf 'ok 1 - a fresh database migrates through the current chain with no legacy bootstrap records at version 26\n'
 
 create_database "$v14_database"
 run_goose "$v14_database" up-to 14 >"$test_root/v14-up.out" 2>"$test_root/v14-up.err"

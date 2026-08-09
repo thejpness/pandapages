@@ -8,7 +8,17 @@ import {
   test,
 } from './support/auth'
 
-type Profile = { id: string; name: string; pin_enabled: boolean }
+type Profile = {
+  id: string
+  name: string
+  pin_enabled: boolean
+  preferred_edition:
+    | 'classic'
+    | 'confident-readers'
+    | 'growing-readers'
+    | 'story-explorers'
+    | 'little-listeners'
+}
 const alternateAccountID = '123e4567-e89b-42d3-a456-426614174400'
 
 class ProfilesApiMock {
@@ -47,10 +57,15 @@ class ProfilesApiMock {
       return
     }
     if (request.method() === 'POST' && url.pathname === '/api/v1/profiles') {
-      const body = request.postDataJSON() as { name: string }
-      const profile = {
+      const body = request.postDataJSON() as {
+        name: string
+        preferredEdition: Profile['preferred_edition']
+      }
+      const profile: Profile = {
         id: fixtureProfileID.slice(0, -1) + String(this.profiles.length + 1),
-        name: body.name.trim(), pin_enabled: false,
+        name: body.name.trim(),
+        pin_enabled: false,
+        preferred_edition: body.preferredEdition,
       }
       this.profiles.push(profile)
       await this.respond(route, profile)
@@ -65,13 +80,18 @@ class ProfilesApiMock {
         return
       }
       if (request.method() === 'PATCH') {
-        profile.name = (request.postDataJSON() as { name: string }).name.trim()
+        const body = request.postDataJSON() as {
+          name: string
+          preferredEdition: Profile['preferred_edition']
+        }
+        profile.name = body.name.trim()
+        profile.preferred_edition = body.preferredEdition
         await this.respond(route, profile)
         return
       }
       if (action === 'pin' && request.method() === 'PUT') {
         profile.pin_enabled = true
-        await this.respond(route, { pin_enabled: true })
+        await this.respond(route, { pin_enabled: true, preferred_edition: 'classic' })
         return
       }
       if (action === 'pin' && request.method() === 'POST') {
@@ -89,7 +109,7 @@ class ProfilesApiMock {
       }
       if (action === 'pin' && request.method() === 'DELETE') {
         profile.pin_enabled = false
-        await this.respond(route, { pin_enabled: false })
+        await this.respond(route, { pin_enabled: false, preferred_edition: 'classic' })
         return
       }
       if (request.method() === 'DELETE') {
@@ -120,7 +140,7 @@ test.describe('reader profile lifecycle', () => {
 
   test('one profile is selected as a frontend convenience while management stays secondary', async ({ page }) => {
     const api = new ProfilesApiMock(page)
-    api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false }]
+    api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false, preferred_edition: 'classic' }]
     await api.install()
 
     await page.goto('/profiles')
@@ -129,15 +149,15 @@ test.describe('reader profile lifecycle', () => {
     await expect(page.getByText('Selected', { exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Start reading as Mina' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Manage reader' })).toHaveAttribute('aria-expanded', 'false')
-    await expect(page.getByRole('button', { name: 'Rename' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Edit reader' })).toHaveCount(0)
     await expect(page.locator('body')).not.toContainText(fixtureProfileID)
   })
 
   test('multiple profiles require a choice, and switching stores only the selected ID', async ({ page }) => {
     const api = new ProfilesApiMock(page)
     api.profiles = [
-      { id: fixtureProfileID, name: 'Mina', pin_enabled: false },
-      { id: fixtureProfileID.slice(0, -1) + '1', name: 'Ted', pin_enabled: false },
+      { id: fixtureProfileID, name: 'Mina', pin_enabled: false, preferred_edition: 'classic' },
+      { id: fixtureProfileID.slice(0, -1) + '1', name: 'Ted', pin_enabled: false, preferred_edition: 'classic' },
     ]
     await api.install()
 
@@ -179,17 +199,21 @@ test.describe('reader profile lifecycle', () => {
 
     await page.goto('/profiles')
     await page.getByLabel('New reader name').fill('  Ted  ')
+    await page.getByLabel('New reader reading level').selectOption('little-listeners')
     await page.getByRole('button', { name: 'Add reader' }).click()
     await expect(page).toHaveURL('/profiles')
     await expect(page.getByRole('heading', { level: 3, name: 'Ted' })).toBeVisible()
     await expect(page.getByText('Selected', { exact: true })).toBeVisible()
+    await expect(page.getByText('Reading level: Little Listeners')).toBeVisible()
 
     await page.getByRole('button', { name: 'Manage reader' }).click()
-    await page.getByRole('button', { name: 'Rename' }).click()
+    await page.getByRole('button', { name: 'Edit reader' }).click()
     await page.getByLabel('Reader name', { exact: true }).fill('Theo')
-    await page.getByRole('button', { name: 'Save name' }).click()
+    await page.getByLabel('Reading level', { exact: true }).selectOption('classic')
+    await page.getByRole('button', { name: 'Save reader' }).click()
     await expect(page.getByRole('heading', { level: 3, name: 'Theo' })).toBeVisible()
     await expect(page.getByText('Selected', { exact: true })).toBeVisible()
+    await expect(page.getByText('Reading level: Classic')).toBeVisible()
 
     await page.getByRole('button', { name: 'Delete' }).click()
     await expect(page.getByRole('alertdialog')).toBeVisible()
@@ -200,7 +224,7 @@ test.describe('reader profile lifecycle', () => {
 
   test('a no-PIN reader enters reader mode and can explicitly return to account mode', async ({ page }) => {
     const api = new ProfilesApiMock(page)
-    api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false }]
+    api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false, preferred_edition: 'classic' }]
     await api.install()
 
     await page.goto('/profiles')
@@ -217,7 +241,7 @@ test.describe('reader profile lifecycle', () => {
 
   test('reader mode contains parent and account SPA routes until it is explicitly left', async ({ page }) => {
     const api = new ProfilesApiMock(page)
-    api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false }]
+    api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false, preferred_edition: 'classic' }]
     await api.install()
 
     await page.goto('/profiles')
@@ -246,7 +270,7 @@ test.describe('reader profile lifecycle', () => {
 
   test('a no-PIN reader restores reader mode after reload and direct Library navigation', async ({ page }) => {
     const api = new ProfilesApiMock(page)
-    api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false }]
+    api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false, preferred_edition: 'classic' }]
     await api.install()
 
     await page.goto('/profiles')
@@ -268,7 +292,7 @@ test.describe('reader profile lifecycle', () => {
 
   test('Parent Hub exposes account controls and owner-only Story Studio', async ({ page, auth }) => {
     const api = new ProfilesApiMock(page)
-    api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false }]
+    api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false, preferred_edition: 'classic' }]
     await api.install()
 
     await page.goto('/profiles')
@@ -287,7 +311,7 @@ test.describe('reader profile lifecycle', () => {
 
   test('Parent Hub signs out through Supabase and clears reader selection', async ({ page }) => {
     const api = new ProfilesApiMock(page)
-    api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false }]
+    api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false, preferred_edition: 'classic' }]
     await api.install()
     let logoutCalls = 0
     await page.route('https://auth.invalid/auth/v1/logout**', async (route) => {
@@ -310,7 +334,7 @@ test.describe('reader profile lifecycle', () => {
 
   test('a protected reader requires its PIN and never persists it or its unlock', async ({ page }) => {
     const api = new ProfilesApiMock(page)
-    api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: true }]
+    api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: true, preferred_edition: 'classic' }]
     await api.install()
 
     await page.goto('/library')
@@ -335,7 +359,7 @@ test.describe('reader profile lifecycle', () => {
 
   test('PIN management supports set, remove, and a finite rate-limit message', async ({ page }) => {
     const api = new ProfilesApiMock(page)
-    api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false }]
+    api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false, preferred_edition: 'classic' }]
     await api.install()
 
     await page.goto('/profiles')

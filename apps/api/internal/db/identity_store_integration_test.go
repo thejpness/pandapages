@@ -125,8 +125,10 @@ func TestIdentityStoreIntegration(t *testing.T) {
 	const profileOne = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 	const profileTwo = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 	if _, err := admin.Exec(`
-		INSERT INTO profiles (id, account_id, name)
-		VALUES ($1, $2, 'Zoe'), ($3, $2, 'Ada')
+		INSERT INTO profiles (id, account_id, name, preferred_edition)
+		VALUES
+			($1, $2, 'Zoe', 'classic'),
+			($3, $2, 'Ada', 'growing-readers')
 	`, profileOne, wantAccount, profileTwo); err != nil {
 		t.Fatalf("insert explicit profile fixtures: %v", err)
 	}
@@ -152,18 +154,24 @@ func TestIdentityStoreIntegration(t *testing.T) {
 		t.Fatalf("cross-account profile lookup = %t, %v", exists, err)
 	}
 
-	createdProfile, err := stores[0].CreateProfile(wantAccount, "Milo")
-	if err != nil || createdProfile.ID == "" || createdProfile.Name != "Milo" {
+	createdProfile, err := stores[0].CreateProfile(wantAccount, "Milo", model.ReaderEditionLittleListeners)
+	if err != nil ||
+		createdProfile.ID == "" ||
+		createdProfile.Name != "Milo" ||
+		createdProfile.PreferredEdition != model.ReaderEditionLittleListeners {
 		t.Fatalf("create account-scoped profile = %#v, %v", createdProfile, err)
 	}
-	renamedProfile, err := stores[0].UpdateProfile(wantAccount, profileOne, "Mira")
-	if err != nil || renamedProfile.ID != profileOne || renamedProfile.Name != "Mira" {
+	renamedProfile, err := stores[0].UpdateProfile(wantAccount, profileOne, "Mira", model.ReaderEditionGrowingReaders)
+	if err != nil ||
+		renamedProfile.ID != profileOne ||
+		renamedProfile.Name != "Mira" ||
+		renamedProfile.PreferredEdition != model.ReaderEditionGrowingReaders {
 		t.Fatalf("rename account-scoped profile = %#v, %v", renamedProfile, err)
 	}
-	if _, err := stores[0].UpdateProfile(wantAccount, profileOne, "Ada"); !errors.Is(err, model.ErrProfileNameConflict) {
+	if _, err := stores[0].UpdateProfile(wantAccount, profileOne, "Ada", model.ReaderEditionClassic); !errors.Is(err, model.ErrProfileNameConflict) {
 		t.Fatalf("duplicate profile name error = %v", err)
 	}
-	if _, err := stores[0].UpdateProfile(foreignAccount, profileOne, "Elsewhere"); !errors.Is(err, sql.ErrNoRows) {
+	if _, err := stores[0].UpdateProfile(foreignAccount, profileOne, "Elsewhere", model.ReaderEditionClassic); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("cross-account profile update error = %v", err)
 	}
 

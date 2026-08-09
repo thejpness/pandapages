@@ -907,7 +907,7 @@ expect_seed_failure() {
   fi
 }
 
-printf '1..18\n'
+printf '1..19\n'
 
 run_goose up-to 24 >"$test_root/fresh-goose.out" 2>"$test_root/fresh-goose.err"
 grep -q 'OK.*00015_account_ownership_integrity.sql' \
@@ -978,13 +978,13 @@ assert_query '24|0' "
        WHERE table_schema='public' AND table_name='stories' AND column_name='source');
 " 'legacy story source reapplies cleanly'
 
-run_goose up >"$test_root/fresh-current-goose.out" 2>"$test_root/fresh-current-goose.err"
+run_goose up-to 25 >"$test_root/fresh-v25-goose.out" 2>"$test_root/fresh-v25-goose.err"
 grep -q 'OK.*00025_remove_legacy_default_bootstrap.sql' \
-  "$test_root/fresh-current-goose.out" "$test_root/fresh-current-goose.err"
+  "$test_root/fresh-v25-goose.out" "$test_root/fresh-v25-goose.err"
 assert_query '25|true' "
   SELECT version_id || '|' || is_applied
   FROM goose_db_version ORDER BY id DESC LIMIT 1;
-" 'fresh latest migration marker'
+" 'fresh migration-25 marker'
 
 if run_goose down-to 24 \
   >"$test_root/fresh-default-bootstrap-down.out" \
@@ -1005,6 +1005,178 @@ assert_query '25|0|0|0' "
          AND column_name='name'
          AND column_default IS NOT NULL);
 " 'fresh bootstrap retirement'
+
+# Lifecycle 7 migration 26 must upgrade a genuine v25 reader without requiring
+# the new column to have existed at profile creation time.
+psql_query "
+  INSERT INTO accounts (id, name)
+  VALUES (
+    '26000000-0000-4000-8000-000000000001',
+    'Lifecycle 7 migration fixture'
+  );
+
+  INSERT INTO profiles (id, account_id, name)
+  VALUES (
+    '26000000-0000-4000-8000-000000000011',
+    '26000000-0000-4000-8000-000000000001',
+    'Existing v25 reader'
+  );
+" >/dev/null
+
+run_goose up >"$test_root/profile-preference-upgrade.out" \
+  2>"$test_root/profile-preference-upgrade.err"
+grep -q 'OK.*00026_profile_preferred_edition.sql' \
+  "$test_root/profile-preference-upgrade.out" \
+  "$test_root/profile-preference-upgrade.err"
+
+assert_query '26|classic|NO|true|1|1' "
+  SELECT
+    (SELECT max(version_id) FROM goose_db_version WHERE is_applied) || '|' ||
+    (SELECT preferred_edition
+       FROM profiles
+       WHERE id = '26000000-0000-4000-8000-000000000011') || '|' ||
+    (SELECT is_nullable
+       FROM information_schema.columns
+       WHERE table_schema='public'
+         AND table_name='profiles'
+         AND column_name='preferred_edition') || '|' ||
+    (SELECT (column_default IS NULL)::text
+       FROM information_schema.columns
+       WHERE table_schema='public'
+         AND table_name='profiles'
+         AND column_name='preferred_edition') || '|' ||
+    (SELECT count(*)
+       FROM pg_constraint
+       WHERE conrelid='profiles'::regclass
+         AND conname='profiles_preferred_edition_check'
+         AND contype='c'
+         AND convalidated) || '|' ||
+    (SELECT count(*)
+       FROM profiles
+       WHERE id = '26000000-0000-4000-8000-000000000011'
+         AND preferred_edition='classic');
+" 'migration-26 v25 profile upgrade shape'
+
+psql_query "
+  INSERT INTO profiles (id, account_id, name, preferred_edition)
+  VALUES
+    (
+      '26000000-0000-4000-8000-000000000012',
+      '26000000-0000-4000-8000-000000000001',
+      'Confident fixture',
+      'confident-readers'
+    ),
+    (
+      '26000000-0000-4000-8000-000000000013',
+      '26000000-0000-4000-8000-000000000001',
+      'Growing fixture',
+      'growing-readers'
+    ),
+    (
+      '26000000-0000-4000-8000-000000000014',
+      '26000000-0000-4000-8000-000000000001',
+      'Explorer fixture',
+      'story-explorers'
+    ),
+    (
+      '26000000-0000-4000-8000-000000000015',
+      '26000000-0000-4000-8000-000000000001',
+      'Listener fixture',
+      'little-listeners'
+    );
+" >/dev/null
+
+assert_query '5|5' "
+  SELECT
+    count(*) || '|' || count(DISTINCT preferred_edition)
+  FROM profiles
+  WHERE account_id = '26000000-0000-4000-8000-000000000001';
+" 'all five canonical profile reading levels'
+
+if psql_query "
+  INSERT INTO profiles (id, account_id, name, preferred_edition)
+  VALUES (
+    '26000000-0000-4000-8000-000000000016',
+    '26000000-0000-4000-8000-000000000001',
+    'Invalid level fixture',
+    'not-a-reading-level'
+  );
+" >"$test_root/profile-preference-invalid.out" 2>&1; then
+  printf 'Migration 26 accepted an invalid profile reading level\n' >&2
+  exit 1
+fi
+grep -Fq 'profiles_preferred_edition_check' \
+  "$test_root/profile-preference-invalid.out"
+
+if psql_query "
+  INSERT INTO profiles (id, account_id, name)
+  VALUES (
+    '26000000-0000-4000-8000-000000000017',
+    '26000000-0000-4000-8000-000000000001',
+    'Missing level fixture'
+  );
+" >"$test_root/profile-preference-missing.out" 2>&1; then
+  printf 'Migration 26 allowed a new profile without an explicit reading level\n' >&2
+  exit 1
+fi
+
+if run_goose down-to 25 \
+  >"$test_root/profile-preference-down.out" \
+  2>"$test_root/profile-preference-down.err"; then
+  printf 'Profile reading-level migration unexpectedly rolled back\n' >&2
+  exit 1
+fi
+grep -Fq 'profile preferred edition migration is irreversible' \
+  "$test_root/profile-preference-down.err"
+assert_query '26|classic|5' "
+  SELECT
+    (SELECT max(version_id) FROM goose_db_version WHERE is_applied) || '|' ||
+    (SELECT preferred_edition
+       FROM profiles
+       WHERE id = '26000000-0000-4000-8000-000000000011') || '|' ||
+    (SELECT count(*)
+       FROM profiles
+       WHERE account_id = '26000000-0000-4000-8000-000000000001');
+" 'migration-26 irreversible preference preservation'
+printf 'ok 1 - migration 26 upgrades v25 readers to Classic, enforces five explicit levels, and refuses lossy rollback\n'
+
+# Rebuild from nothing so the pre-existing fresh-schema assertions independently
+# prove that 1 -> 26 creates no account or profile fixtures.
+reset_database
+run_goose up >"$test_root/fresh-current-goose.out" \
+  2>"$test_root/fresh-current-goose.err"
+grep -q 'OK.*00026_profile_preferred_edition.sql' \
+  "$test_root/fresh-current-goose.out" \
+  "$test_root/fresh-current-goose.err"
+assert_query '26|true|0|0|NO|true|1' "
+  SELECT
+    (SELECT version_id
+       FROM goose_db_version
+       ORDER BY id DESC
+       LIMIT 1) || '|' ||
+    (SELECT is_applied::text
+       FROM goose_db_version
+       ORDER BY id DESC
+       LIMIT 1) || '|' ||
+    (SELECT count(*) FROM accounts) || '|' ||
+    (SELECT count(*) FROM profiles) || '|' ||
+    (SELECT is_nullable
+       FROM information_schema.columns
+       WHERE table_schema='public'
+         AND table_name='profiles'
+         AND column_name='preferred_edition') || '|' ||
+    (SELECT (column_default IS NULL)::text
+       FROM information_schema.columns
+       WHERE table_schema='public'
+         AND table_name='profiles'
+         AND column_name='preferred_edition') || '|' ||
+    (SELECT count(*)
+       FROM pg_constraint
+       WHERE conrelid='profiles'::regclass
+         AND conname='profiles_preferred_edition_check'
+         AND contype='c'
+         AND convalidated);
+" 'fresh migration-26 schema contract'
 
 assert_query '0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0' "
   SELECT
@@ -1031,7 +1203,7 @@ assert_query 'false|0' "
     (SELECT count(*) FROM information_schema.columns
       WHERE table_schema='public' AND table_name='stories' AND column_name='work_id');
 " 'retired works scaffolding'
-printf 'ok 1 - fresh migrations reach version 25 with current schema only and no fixture content\n'
+printf 'ok 2 - fresh migrations reach version 26 with current schema only and no fixture content\n'
 
 assert_query '0|0|0' "
   SELECT
@@ -1039,7 +1211,7 @@ assert_query '0|0|0' "
     (SELECT count(*) FROM profiles),
     (SELECT count(*) FROM pg_constraint WHERE contype = 'f' AND NOT convalidated);
 " 'fresh identities and constraints'
-printf 'ok 2 - fresh current schema has no bootstrap identities and all foreign keys are validated\n'
+printf 'ok 3 - fresh current schema has no bootstrap identities and all foreign keys are validated\n'
 
 reset_database
 run_goose up-to 12 >"$test_root/pre-cleanup-goose.out" 2>"$test_root/pre-cleanup-goose.err"
@@ -1057,7 +1229,7 @@ assert_query '3|3|1|9|1|1|1|1|3|2|2' "
     (SELECT count(*) FROM contributors WHERE name IN ('Aesop','Mary Shelley')),
     (SELECT count(*) FROM story_contributors AS link JOIN stories AS story ON story.id = link.story_id WHERE story.slug IN ('the-fox-and-the-grapes','frankenstein-excerpt-ch1'));
 " 'historical fixture inventory'
-printf 'ok 3 - the real pre-cleanup migration path recreates the complete historical fixture set\n'
+printf 'ok 4 - the real pre-cleanup migration path recreates the complete historical fixture set\n'
 
 run_goose up-to 13 >"$test_root/exact-cleanup-goose.out" 2>"$test_root/exact-cleanup-goose.err"
 assert_query '0|0|0|0|0|0|0|0|0|0|0' "
@@ -1074,7 +1246,7 @@ assert_query '0|0|0|0|0|0|0|0|0|0|0' "
     (SELECT count(*) FROM contributors WHERE name IN ('Aesop','Mary Shelley')),
     (SELECT count(*) FROM story_contributors AS link JOIN stories AS story ON story.id = link.story_id WHERE story.slug IN ('the-fox-and-the-grapes','frankenstein-excerpt-ch1'));
 " 'exact historical fixture cleanup'
-printf 'ok 4 - an unchanged historical lifecycle is removed with versions, sections, segments, links, progress, and fixture profiles/jobs\n'
+printf 'ok 5 - an unchanged historical lifecycle is removed with versions, sections, segments, links, progress, and fixture profiles/jobs\n'
 
 reset_database
 run_goose up-to 12 >"$test_root/preservation-goose.out" 2>"$test_root/preservation-goose.err"
@@ -1376,7 +1548,7 @@ assert_query '1|1|3|1|1|1' "
     (SELECT count(*) FROM reading_progress AS progress JOIN stories AS story ON story.id = progress.story_id WHERE story.slug = 'the-fox-and-the-grapes'),
     (SELECT count(*) FROM story_versions AS version JOIN stories AS story ON story.id = version.story_id WHERE story.slug = 'the-fox-and-the-grapes' AND version.content_hash <> '2fb47f4013a00e9348fa92c2da31ee0688e3a8ef878fa4308646b1656c9adad4');
 " 'content-edited fixture preservation'
-printf 'ok 5 - content-only edits preserve the story, version, segments, contributor link, and progress\n'
+printf 'ok 6 - content-only edits preserve the story, version, segments, contributor link, and progress\n'
 
 assert_query '1|2|1|5|1|1|1' "
   SELECT
@@ -1388,7 +1560,7 @@ assert_query '1|2|1|5|1|1|1' "
     (SELECT count(*) FROM stories AS story JOIN story_versions AS version ON version.id = story.published_version_id WHERE story.slug = 'the-little-star-and-the-moon' AND version.version = 1),
     (SELECT count(*) FROM reading_progress AS progress JOIN stories AS story ON story.id = progress.story_id WHERE story.slug = 'the-little-star-and-the-moon' AND progress.story_version_id = 'e13e0000-0000-4000-8000-000000000101' AND round(progress.percent::numeric, 2) = 0.61);
 " 'additional draft preservation'
-printf 'ok 6 - an additional draft preserves both versions, every segment, both pointers, and progress\n'
+printf 'ok 7 - an additional draft preserves both versions, every segment, both pointers, and progress\n'
 
 assert_query '1|2|2|5|1|1|1|1' "
   SELECT
@@ -1401,7 +1573,7 @@ assert_query '1|2|2|5|1|1|1|1' "
     (SELECT count(*) FROM story_contributors AS link JOIN stories AS story ON story.id = link.story_id WHERE story.slug = 'frankenstein-excerpt-ch1'),
     (SELECT count(*) FROM reading_progress AS progress JOIN stories AS story ON story.id = progress.story_id WHERE story.slug = 'frankenstein-excerpt-ch1' AND progress.story_version_id = 'e13e0000-0000-4000-8000-000000000201' AND round(progress.percent::numeric, 2) = 0.72);
 " 'republished fixture preservation'
-printf 'ok 7 - a republished additional version preserves the whole story lifecycle and progress\n'
+printf 'ok 8 - a republished additional version preserves the whole story lifecycle and progress\n'
 
 assert_query '1|1|1|1|1|1|1|1|1|1|1|1|1|1' "
   SELECT
@@ -1420,7 +1592,7 @@ assert_query '1|1|1|1|1|1|1|1|1|1|1|1|1|1' "
     (SELECT count(*) FROM contributors WHERE name = 'Aesop'),
     (SELECT count(*) FROM story_contributors WHERE story_id = 'a11e0000-0000-4000-8000-000000000010');
 " 'upgrade preservation'
-printf 'ok 8 - shared account/catalogue rows and unrelated stories, settings, progress, and jobs are preserved\n'
+printf 'ok 9 - shared account/catalogue rows and unrelated stories, settings, progress, and jobs are preserved\n'
 
 run_goose down-to 12 >"$test_root/cleanup-down.out" 2>"$test_root/cleanup-down.err"
 run_goose up-to 13 >"$test_root/cleanup-rerun.out" 2>"$test_root/cleanup-rerun.err"
@@ -1431,7 +1603,7 @@ assert_query '3|1|1|1' "
     (SELECT count(*) FROM profile_settings WHERE profile_id = 'a11e0000-0000-4000-8000-000000000001'),
     (SELECT count(*) FROM reading_progress WHERE story_id = 'a11e0000-0000-4000-8000-000000000010');
 " 'cleanup rerun'
-printf 'ok 9 - non-restoring rollback and cleanup rerun preserve ambiguous stories idempotently\n'
+printf 'ok 10 - non-restoring rollback and cleanup rerun preserve ambiguous stories idempotently\n'
 
 run_goose up-to 14 >"$test_root/reader2-upgrade.out" 2>"$test_root/reader2-upgrade.err"
 assert_query '0|0' "
@@ -1442,7 +1614,7 @@ assert_query '0|0' "
          AND table_name = 'story_segments'
          AND column_name = 'locator');
 " 'Reader 2 fixture boundary'
-printf 'ok 10 - Reader 2 upgrade resets beta progress and removes the obsolete segment locator\n'
+printf 'ok 11 - Reader 2 upgrade resets beta progress and removes the obsolete segment locator\n'
 
 run_goose up-to 15 \
   >"$test_root/account-integrity-upgrade.out" 2>"$test_root/account-integrity-upgrade.err"
@@ -1478,7 +1650,7 @@ expect_seed_failure malformed-invocation \
     PP_TEST_SEED_DATABASE="$database" \
     PP_TEST_SEED_CONTAINER="$postgres_container" \
     "$seed_script" --unknown
-printf 'ok 11 - seed command fails closed for acknowledgement, target, Docker, service, and invocation errors\n'
+printf 'ok 12 - seed command fails closed for acknowledgement, target, Docker, service, and invocation errors\n'
 
 # Migration 21 intentionally refuses to guess how legacy Works data maps to
 # canonical source text. This historical-preservation database still contains
@@ -1626,7 +1798,10 @@ psql_query "
 " >/dev/null
 
 run_goose up >"$test_root/current-seed-default-bootstrap-upgrade.out" 2>"$test_root/current-seed-default-bootstrap-upgrade.err"
-assert_query '25|1|1|1|1|1' "
+grep -q 'OK.*00026_profile_preferred_edition.sql' \
+  "$test_root/current-seed-default-bootstrap-upgrade.out" \
+  "$test_root/current-seed-default-bootstrap-upgrade.err"
+assert_query '26|1|1|1|1|1|2' "
   SELECT
     (SELECT max(version_id) FROM goose_db_version WHERE is_applied) || '|' ||
     (SELECT count(*) FROM profiles WHERE id = 'a11e0000-0000-4000-8000-000000000001') || '|' ||
@@ -1637,8 +1812,20 @@ assert_query '25|1|1|1|1|1' "
        WHERE table_schema='public'
          AND table_name='accounts'
          AND column_name='name'
-         AND column_default IS NULL);
-" 'repurposed Default bootstrap explicit preservation'
+         AND column_default IS NULL) || '|' ||
+    (SELECT count(*)
+       FROM profiles
+       WHERE id IN (
+         'a11e0000-0000-4000-8000-000000000001',
+         (
+           SELECT id
+           FROM profiles
+           WHERE name = 'Preserved historical reader'
+           LIMIT 1
+         )
+       )
+         AND preferred_edition = 'classic');
+" 'repurposed Default bootstrap explicit preservation through migration 26'
 
 env \
   PP_ALLOW_TEST_SEED=1 \
@@ -1649,7 +1836,7 @@ grep -q '^test_seed=installed progress=absent target=local_or_disposable$' "$tes
 assert_query '1|1|1|1|1|2|6|0|0|0' "
   SELECT
     (SELECT count(*) FROM accounts WHERE id = 'f17e0000-0000-4000-8000-000000000001' AND name = 'TEST ONLY — Reader Fixture Account'),
-    (SELECT count(*) FROM profiles WHERE id = 'f17e0000-0000-4000-8000-000000000002' AND account_id = 'f17e0000-0000-4000-8000-000000000001' AND name = 'TEST ONLY — Reader'),
+    (SELECT count(*) FROM profiles WHERE id = 'f17e0000-0000-4000-8000-000000000002' AND account_id = 'f17e0000-0000-4000-8000-000000000001' AND name = 'TEST ONLY — Reader' AND preferred_edition = 'classic'),
     (SELECT count(*) FROM contributors WHERE id = 'f17e0000-0000-4000-8000-000000000004'),
     (SELECT count(*) FROM stories WHERE id = 'f17e0000-0000-4000-8000-000000000010' AND is_published),
     (SELECT count(*) FROM story_versions WHERE id = 'f17e0000-0000-4000-8000-000000000011'),
@@ -1659,7 +1846,7 @@ assert_query '1|1|1|1|1|2|6|0|0|0' "
     (SELECT count(*) FROM story_sources WHERE story_id = 'f17e0000-0000-4000-8000-000000000010'),
     (SELECT count(*) FROM story_source_versions WHERE story_id = 'f17e0000-0000-4000-8000-000000000010');
 " 'explicit seed inventory'
-printf 'ok 12 - explicit seed installs deterministic published UTF-8 chapter/segment fixtures without progress\n'
+printf 'ok 13 - explicit seed installs deterministic published UTF-8 chapter/segment fixtures without progress\n'
 
 assert_query '6|3|3|2|2|2|6|3|3|t|## Chapter Two — 世界|t|星の光 shimmered over the quiet water. 🐼|t|t' "
   SELECT
@@ -1686,7 +1873,7 @@ assert_query '6|3|3|2|2|2|6|3|3|t|## Chapter Two — 世界|t|星の光 shimmere
   WHERE heading.story_version_id = 'f17e0000-0000-4000-8000-000000000011'
     AND heading.ordinal = 5;
 " 'explicit fixture ingestion segment shape'
-printf 'ok 13 - canonical keys, kinds, chapter propagation, and six independent fixture segments match ingestion\n'
+printf 'ok 14 - canonical keys, kinds, chapter propagation, and six independent fixture segments match ingestion\n'
 
 api_environment="$test_root/api.env"
 {
@@ -1737,7 +1924,7 @@ done
   printf 'Fixture API did not become healthy\n' >&2
   exit 1
 }
-printf 'ok 14 - the signed-session coherent Reader endpoint returns six UTF-8 segments without internal content\n'
+printf 'ok 15 - the signed-session coherent Reader endpoint returns six UTF-8 segments without internal content\n'
 
 docker rm --force "$api_container" >/dev/null
 
@@ -1766,7 +1953,7 @@ assert_query '1|1|6|2|4|0.35|0.6' "
     (SELECT locator->'segment'->>'offset' FROM reading_progress WHERE story_id = 'f17e0000-0000-4000-8000-000000000010'),
     (SELECT percent FROM reading_progress WHERE story_id = 'f17e0000-0000-4000-8000-000000000010');
 " 'seed idempotency and opt-in progress'
-printf 'ok 15 - repeated seed and valid Locator v2 progress requests are idempotent and opt-in only\n'
+printf 'ok 16 - repeated seed and valid Locator v2 progress requests are idempotent and opt-in only\n'
 
 env \
   PP_ALLOW_TEST_SEED=1 \
@@ -1799,7 +1986,7 @@ env \
   PP_TEST_SEED_DATABASE="$database" \
   PP_TEST_SEED_CONTAINER="$postgres_container" \
   "$seed_script" --remove >/dev/null
-printf 'ok 16 - fixture removal and recreation touch only fixed test IDs and preserve unrelated data\n'
+printf 'ok 17 - fixture removal and recreation touch only fixed test IDs and preserve unrelated data\n'
 
 controlled_suffix="$$-controlled"
 controlled_prefix="pandapages-fixture-integration-$controlled_suffix"
@@ -1839,7 +2026,7 @@ verify_no_labeled_resources "$controlled_label" 'controlled child'
   printf 'Controlled fixture migration failure status = %s, want 37\n' "$controlled_status" >&2
   exit 1
 }
-grep -q '^1\.\.18$' "$controlled_stdout"
+grep -q '^1\.\.19$' "$controlled_stdout"
 grep -q 'Fixture integration failed at line .* (status 37)' "$controlled_stderr"
 grep -q 'fresh-goose.err .*redacted' "$controlled_stderr"
 grep -q 'Controlled fixture migration failure for harness regression (status 37)' "$controlled_stderr"
@@ -2426,12 +2613,12 @@ if grep -RFq "$controlled_diagnostic_secret" "$controlled_root" ||
   exit 1
 fi
 
-printf 'ok 17 - controlled failures preserve status and redacted diagnostics while abnormal children and Docker query failures clean up fail-closed\n'
+printf 'ok 18 - controlled failures preserve status and redacted diagnostics while abnormal children and Docker query failures clean up fail-closed\n'
 
 cleanup
 trap - EXIT ERR HUP INT TERM
 verify_no_labeled_resources "$run_label" 'fixture integration'
 verify_no_labeled_resources "$controlled_label" 'controlled child'
 [[ ! -e "$test_root" ]]
-printf 'ok 18 - disposable containers, network, volume, credentials, and artifacts are removed\n'
+printf 'ok 19 - disposable containers, network, volume, credentials, and artifacts are removed\n'
 printf 'postgresql_fixtures_integration=passed\n'

@@ -35,6 +35,7 @@ DELETE FROM profiles AS profile
 WHERE profile.id = 'f17e0000-0000-4000-8000-000000000002'
   AND profile.account_id = 'f17e0000-0000-4000-8000-000000000001'
   AND profile.name = 'TEST ONLY — Reader'
+  AND profile.preferred_edition = 'classic'
   AND profile.pin_hash IS NULL
   AND profile.pin_failed_attempts = 0
   AND profile.pin_lock_until IS NULL

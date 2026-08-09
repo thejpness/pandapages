@@ -168,10 +168,32 @@ export async function logout(): Promise<void> {
 
 /* ------------------------ Reader profiles ----------------------- */
 
+// Story Studio established the canonical five reading-edition keys. Reader
+// profiles consume that same finite vocabulary rather than defining another.
+export const adminStoryEditionKeys = [
+  "classic",
+  "confident-readers",
+  "growing-readers",
+  "story-explorers",
+  "little-listeners",
+] as const;
+export type AdminStoryEditionKey = (typeof adminStoryEditionKeys)[number];
+
+export const readerEditionKeys = adminStoryEditionKeys;
+export type ReaderEditionKey = AdminStoryEditionKey;
+
+export function isReaderEditionKey(value: unknown): value is ReaderEditionKey {
+  return (
+    typeof value === "string" &&
+    (readerEditionKeys as readonly string[]).includes(value)
+  );
+}
+
 export type ReaderProfile = Readonly<{
   id: string;
   name: string;
   pinEnabled: boolean;
+  preferredEdition: ReaderEditionKey;
 }>;
 
 const canonicalUUIDPattern =
@@ -182,6 +204,7 @@ function parseReaderProfile(value: unknown): ReaderProfile {
   const id = value.id;
   const name = value.name;
   const pinEnabled = value.pin_enabled;
+  const preferredEdition = value.preferred_edition;
   if (
     typeof id !== "string" ||
     !canonicalUUIDPattern.test(id) ||
@@ -189,11 +212,12 @@ function parseReaderProfile(value: unknown): ReaderProfile {
     name.length === 0 ||
     name.length > 80 ||
     name.trim() !== name ||
-    typeof pinEnabled !== "boolean"
+    typeof pinEnabled !== "boolean" ||
+    !isReaderEditionKey(preferredEdition)
   ) {
     throw new Error("Invalid reader profile response");
   }
-  return Object.freeze({ id, name, pinEnabled });
+  return Object.freeze({ id, name, pinEnabled, preferredEdition });
 }
 
 function parseReaderProfiles(value: unknown): readonly ReaderProfile[] {
@@ -203,8 +227,11 @@ function parseReaderProfiles(value: unknown): readonly ReaderProfile[] {
   return Object.freeze(value.profiles.map(parseReaderProfile));
 }
 
-function profilePayload(name: string): string {
-  return JSON.stringify({ name });
+function profilePayload(
+  name: string,
+  preferredEdition: ReaderEditionKey,
+): string {
+  return JSON.stringify({ name, preferredEdition });
 }
 
 export async function listReaderProfiles(
@@ -215,11 +242,14 @@ export async function listReaderProfiles(
   );
 }
 
-export async function createReaderProfile(name: string): Promise<ReaderProfile> {
+export async function createReaderProfile(
+  name: string,
+  preferredEdition: ReaderEditionKey,
+): Promise<ReaderProfile> {
   return parseReaderProfile(
     await request<unknown>("/api/v1/profiles", {
       method: "POST",
-      body: profilePayload(name),
+      body: profilePayload(name, preferredEdition),
     }),
   );
 }
@@ -227,11 +257,12 @@ export async function createReaderProfile(name: string): Promise<ReaderProfile> 
 export async function renameReaderProfile(
   profileID: string,
   name: string,
+  preferredEdition: ReaderEditionKey,
 ): Promise<ReaderProfile> {
   return parseReaderProfile(
     await request<unknown>(`/api/v1/profiles/${encodeURIComponent(profileID)}`, {
       method: "PATCH",
-      body: profilePayload(name),
+      body: profilePayload(name, preferredEdition),
     }),
   );
 }
@@ -711,15 +742,6 @@ export async function getReaderStory(
 }
 
 /* ----------------------------- Admin ---------------------------- */
-
-export const adminStoryEditionKeys = [
-  "classic",
-  "confident-readers",
-  "growing-readers",
-  "story-explorers",
-  "little-listeners",
-] as const;
-export type AdminStoryEditionKey = (typeof adminStoryEditionKeys)[number];
 export type AdminEditionStatus = "empty" | "draft_only" | "published" | "published_with_draft" | "unpublished" | "repair_required";
 export type AdminSourceStatus = "missing" | "ready" | "repair_required";
 export type AdminSourceOutcome = "created_source" | "created_version" | "reused";

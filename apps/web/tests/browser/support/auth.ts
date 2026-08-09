@@ -6,7 +6,17 @@ export const fixturePrincipalID = '123e4567-e89b-12d3-a456-426614174100'
 export const fixtureProfileID = '123e4567-e89b-42d3-a456-426614174300'
 
 type Role = 'owner' | 'adult'
-export type BrowserProfile = { id: string; name: string; pin_enabled?: boolean }
+export type BrowserProfile = {
+  id: string
+  name: string
+  pin_enabled?: boolean
+  preferred_edition?:
+    | 'classic'
+    | 'confident-readers'
+    | 'growing-readers'
+    | 'story-explorers'
+    | 'little-listeners'
+}
 
 export type BrowserAuth = {
   accountID: string
@@ -54,7 +64,12 @@ export const test = base.extend<{ auth: BrowserAuth }>({
   auth: [async ({ page }, use) => {
     let memberships = [{ accountId: fixtureAccountID, accountName: 'My Panda Pages', role: 'owner' as Role }]
     let onboardingRequired = false
-    let profiles: BrowserProfile[] = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false }]
+    let profiles: BrowserProfile[] = [{
+      id: fixtureProfileID,
+      name: 'Mina',
+      pin_enabled: false,
+      preferred_edition: 'classic',
+    }]
     await installOfficialSession(page)
     await page.route('**/api/auth/**', async (route) => {
       const request = route.request()
@@ -78,7 +93,12 @@ export const test = base.extend<{ auth: BrowserAuth }>({
       expect(headers.cookie).toBeFalsy()
 
       if (request.method() === 'GET' && url.pathname === '/api/v1/profiles') {
-        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ profiles }) })
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+          profiles: profiles.map((profile) => ({
+            ...profile,
+            preferred_edition: profile.preferred_edition ?? 'classic',
+          })),
+        }) })
         return
       }
       await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: { code: 'not_found' } }) })
