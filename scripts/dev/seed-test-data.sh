@@ -12,7 +12,7 @@ development PostgreSQL service or an explicitly labelled disposable test
 container. Normal migrations never invoke this command.
 
 Options:
-  --with-progress  Install the reader fixture and one Default-profile progress row.
+  --with-progress  Install the reader fixture and one fixture-reader progress row.
   --remove         Remove only the deterministic explicit fixture IDs.
   --help           Show this help text.
 
@@ -133,7 +133,7 @@ if ! database_state=$(
           || '|' || COALESCE((
             SELECT is_applied::text
             FROM goose_db_version
-            WHERE version_id = 24
+            WHERE version_id = 25
             ORDER BY id DESC
             LIMIT 1
           ), 'false');

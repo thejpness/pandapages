@@ -8,8 +8,26 @@ BEGIN
     RAISE EXCEPTION 'test fixtures require the pandapages database';
   END IF;
 
-  IF NOT EXISTS (SELECT 1 FROM accounts) THEN
-    RAISE EXCEPTION 'test fixtures require a migrated default account';
+  IF EXISTS (
+    SELECT 1 FROM accounts
+    WHERE id = 'f17e0000-0000-4000-8000-000000000001'
+      AND name IS DISTINCT FROM 'TEST ONLY — Reader Fixture Account'
+  ) THEN
+    RAISE EXCEPTION 'fixed account fixture ID is already in unrelated use';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM profiles
+    WHERE id = 'f17e0000-0000-4000-8000-000000000002'
+      AND (
+        account_id IS DISTINCT FROM 'f17e0000-0000-4000-8000-000000000001'
+        OR name IS DISTINCT FROM 'TEST ONLY — Reader'
+        OR pin_hash IS NOT NULL
+        OR pin_failed_attempts <> 0
+        OR pin_lock_until IS NOT NULL
+      )
+  ) THEN
+    RAISE EXCEPTION 'fixed reader-profile fixture ID is already in unrelated use';
   END IF;
 
   IF EXISTS (
@@ -24,7 +42,8 @@ BEGIN
     SELECT 1 FROM stories
     WHERE id = 'f17e0000-0000-4000-8000-000000000010'
       AND (
-        slug IS DISTINCT FROM 'test-only-moonlit-cafe'
+        account_id IS DISTINCT FROM 'f17e0000-0000-4000-8000-000000000001'
+        OR slug IS DISTINCT FROM 'test-only-moonlit-cafe'
         OR title IS DISTINCT FROM 'TEST ONLY — Moonlit Café'
         OR author IS DISTINCT FROM 'Panda Pages Test Fixture'
         OR language IS DISTINCT FROM 'en-GB'
@@ -45,6 +64,21 @@ BEGIN
 END
 $$;
 
+INSERT INTO accounts (id, name)
+VALUES (
+  'f17e0000-0000-4000-8000-000000000001',
+  'TEST ONLY — Reader Fixture Account'
+)
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO profiles (id, account_id, name)
+VALUES (
+  'f17e0000-0000-4000-8000-000000000002',
+  'f17e0000-0000-4000-8000-000000000001',
+  'TEST ONLY — Reader'
+)
+ON CONFLICT (id) DO NOTHING;
+
 INSERT INTO contributors (id, name, sort_name)
 VALUES (
   'f17e0000-0000-4000-8000-000000000004',
@@ -55,25 +89,19 @@ ON CONFLICT (id) DO UPDATE SET
   name = EXCLUDED.name,
   sort_name = EXCLUDED.sort_name;
 
-WITH target_account AS (
-  SELECT id
-  FROM accounts
-  ORDER BY created_at ASC, id ASC
-  LIMIT 1
-)
 INSERT INTO stories (
   id, account_id, slug, title, author, is_published, language, rights
 )
-SELECT
+VALUES (
   'f17e0000-0000-4000-8000-000000000010',
-  target_account.id,
+  'f17e0000-0000-4000-8000-000000000001',
   'test-only-moonlit-cafe',
   'TEST ONLY — Moonlit Café',
   'Panda Pages Test Fixture',
   false,
   'en-GB',
   '{"license":"test-only","test_fixture":true}'::jsonb
-FROM target_account
+)
 ON CONFLICT (id) DO UPDATE SET
   account_id = EXCLUDED.account_id,
   slug = EXCLUDED.slug,

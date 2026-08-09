@@ -141,14 +141,14 @@ func TestIdentityStoreIntegration(t *testing.T) {
 		t.Fatalf("own profile lookup = %t, %v", exists, err)
 	}
 
-	var legacyAccount string
-	if err := admin.QueryRow(`SELECT id FROM accounts WHERE id <> $1 ORDER BY created_at, id LIMIT 1`, wantAccount).Scan(&legacyAccount); err != nil {
-		t.Fatalf("read pre-existing legacy account: %v", err)
+	const foreignAccount = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	if _, err := admin.Exec(`
+		INSERT INTO accounts (id, name)
+		VALUES ($1, 'Cross-account identity fixture')
+	`, foreignAccount); err != nil {
+		t.Fatalf("insert explicit cross-account fixture: %v", err)
 	}
-	if legacyAccount == wantAccount {
-		t.Fatal("onboarding reused the pre-existing account")
-	}
-	if exists, err := stores[0].ProfileExists(legacyAccount, profileOne); err != nil || exists {
+	if exists, err := stores[0].ProfileExists(foreignAccount, profileOne); err != nil || exists {
 		t.Fatalf("cross-account profile lookup = %t, %v", exists, err)
 	}
 
@@ -163,7 +163,7 @@ func TestIdentityStoreIntegration(t *testing.T) {
 	if _, err := stores[0].UpdateProfile(wantAccount, profileOne, "Ada"); !errors.Is(err, model.ErrProfileNameConflict) {
 		t.Fatalf("duplicate profile name error = %v", err)
 	}
-	if _, err := stores[0].UpdateProfile(legacyAccount, profileOne, "Elsewhere"); !errors.Is(err, sql.ErrNoRows) {
+	if _, err := stores[0].UpdateProfile(foreignAccount, profileOne, "Elsewhere"); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("cross-account profile update error = %v", err)
 	}
 
@@ -218,10 +218,10 @@ func TestIdentityStoreIntegration(t *testing.T) {
 		UPDATE profiles SET pin_failed_attempts=1, pin_hash=NULL
 		WHERE account_id=$1 AND id=$2
 	`, wantAccount, profileOne)
-	if err := stores[0].SetProfilePIN(legacyAccount, profileOne, encodedPIN); !errors.Is(err, sql.ErrNoRows) {
+	if err := stores[0].SetProfilePIN(foreignAccount, profileOne, encodedPIN); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("cross-account profile PIN set error = %v", err)
 	}
-	if err := stores[0].DeleteProfile(legacyAccount, profileOne); !errors.Is(err, sql.ErrNoRows) {
+	if err := stores[0].DeleteProfile(foreignAccount, profileOne); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("cross-account profile delete error = %v", err)
 	}
 	for _, id := range []string{profileOne, profileTwo, createdProfile.ID} {
@@ -253,7 +253,7 @@ func TestIdentityStoreIntegration(t *testing.T) {
 		assertConstraint(t, admin, "account_memberships_role_check", `
 			INSERT INTO account_memberships (principal_id, account_id, role)
 			VALUES ($1, $2, 'child')
-		`, wantPrincipal, legacyAccount)
+		`, wantPrincipal, foreignAccount)
 		assertConstraint(t, admin, "account_memberships_account_fkey", `
 			INSERT INTO account_memberships (principal_id, account_id, role)
 			VALUES ($1, 'ffffffff-ffff-4fff-8fff-ffffffffffff', 'adult')

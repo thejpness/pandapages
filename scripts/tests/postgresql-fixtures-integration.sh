@@ -909,7 +909,7 @@ expect_seed_failure() {
 
 printf '1..18\n'
 
-run_goose up >"$test_root/fresh-goose.out" 2>"$test_root/fresh-goose.err"
+run_goose up-to 24 >"$test_root/fresh-goose.out" 2>"$test_root/fresh-goose.err"
 grep -q 'OK.*00015_account_ownership_integrity.sql' \
   "$test_root/fresh-goose.out" "$test_root/fresh-goose.err"
 grep -q 'OK.*00016_identity_foundation.sql' \
@@ -921,7 +921,7 @@ grep -q 'OK.*00024_remove_legacy_story_source.sql' \
 assert_query '24|true' "
   SELECT version_id || '|' || is_applied
   FROM goose_db_version ORDER BY id DESC LIMIT 1;
-" 'fresh latest migration marker'
+" 'fresh migration-24 marker'
 assert_query 't' "
   SELECT bool_and(relation IS NOT NULL)
   FROM (VALUES
@@ -960,7 +960,8 @@ assert_query '0' "
 
 # Migration 24 is truthfully reversible because it refuses to discard any
 # non-empty source JSON. Prove the empty column can be restored and retired
-# again without changing application data.
+# again before the irreversible bootstrap retirement becomes the current Down
+# boundary.
 run_goose down-to 23 >/dev/null
 assert_query '23|1|0' "
   SELECT
@@ -969,13 +970,42 @@ assert_query '23|1|0' "
        WHERE table_schema='public' AND table_name='stories' AND column_name='source') || '|' ||
     (SELECT count(*) FROM stories WHERE source <> '{}'::jsonb);
 " 'legacy story source rollback restores only empty values'
-run_goose up >/dev/null
+run_goose up-to 24 >/dev/null
 assert_query '24|0' "
   SELECT
     (SELECT max(version_id) FROM goose_db_version WHERE is_applied) || '|' ||
     (SELECT count(*) FROM information_schema.columns
        WHERE table_schema='public' AND table_name='stories' AND column_name='source');
 " 'legacy story source reapplies cleanly'
+
+run_goose up >"$test_root/fresh-current-goose.out" 2>"$test_root/fresh-current-goose.err"
+grep -q 'OK.*00025_remove_legacy_default_bootstrap.sql' \
+  "$test_root/fresh-current-goose.out" "$test_root/fresh-current-goose.err"
+assert_query '25|true' "
+  SELECT version_id || '|' || is_applied
+  FROM goose_db_version ORDER BY id DESC LIMIT 1;
+" 'fresh latest migration marker'
+
+if run_goose down-to 24 \
+  >"$test_root/fresh-default-bootstrap-down.out" \
+  2>"$test_root/fresh-default-bootstrap-down.err"; then
+  printf 'Default bootstrap retirement unexpectedly rolled back\n' >&2
+  exit 1
+fi
+grep -Fq 'legacy Default bootstrap retirement is irreversible' \
+  "$test_root/fresh-default-bootstrap-down.err"
+assert_query '25|0|0|0' "
+  SELECT
+    (SELECT max(version_id) FROM goose_db_version WHERE is_applied) || '|' ||
+    (SELECT count(*) FROM accounts) || '|' ||
+    (SELECT count(*) FROM profiles) || '|' ||
+    (SELECT count(*) FROM information_schema.columns
+       WHERE table_schema='public'
+         AND table_name='accounts'
+         AND column_name='name'
+         AND column_default IS NOT NULL);
+" 'fresh bootstrap retirement'
+
 assert_query '0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0' "
   SELECT
     (SELECT count(*) FROM stories),
@@ -1001,15 +1031,15 @@ assert_query 'false|0' "
     (SELECT count(*) FROM information_schema.columns
       WHERE table_schema='public' AND table_name='stories' AND column_name='work_id');
 " 'retired works scaffolding'
-printf 'ok 1 - fresh migrations reach version 24 with current schema only and no fixture content\n'
+printf 'ok 1 - fresh migrations reach version 25 with current schema only and no fixture content\n'
 
-assert_query '1|1|0' "
+assert_query '0|0|0' "
   SELECT
     (SELECT count(*) FROM accounts),
-    (SELECT count(*) FROM profiles WHERE name = 'Default'),
+    (SELECT count(*) FROM profiles),
     (SELECT count(*) FROM pg_constraint WHERE contype = 'f' AND NOT convalidated);
-" 'fresh bootstrap and constraints'
-printf 'ok 2 - runtime bootstrap records and validated foreign keys remain intact\n'
+" 'fresh identities and constraints'
+printf 'ok 2 - fresh current schema has no bootstrap identities and all foreign keys are validated\n'
 
 reset_database
 run_goose up-to 12 >"$test_root/pre-cleanup-goose.out" 2>"$test_root/pre-cleanup-goose.err"
@@ -1539,7 +1569,7 @@ assert_query '23|1|1' "
 # database. The harness makes the explicit disposal decision that migration 24
 # refuses to make for a real deployment.
 psql_query "UPDATE stories SET source = '{}'::jsonb;" >/dev/null
-run_goose up >"$test_root/current-seed-story-source-upgrade.out" 2>"$test_root/current-seed-story-source-upgrade.err"
+run_goose up-to 24 >"$test_root/current-seed-story-source-upgrade.out" 2>"$test_root/current-seed-story-source-upgrade.err"
 assert_query '24|0' "
   SELECT
     (SELECT max(version_id) FROM goose_db_version WHERE is_applied) || '|' ||
@@ -1547,14 +1577,79 @@ assert_query '24|0' "
        WHERE table_schema='public' AND table_name='stories' AND column_name='source');
 " 'current legacy story source retirement'
 
+# The historical-preservation vector deliberately repurposed the migration-11
+# Default household with additional reader and story data. Migration 25 must
+# refuse to decide that those records are disposable.
+if run_goose up \
+  >"$test_root/current-seed-default-bootstrap-preflight.out" \
+  2>"$test_root/current-seed-default-bootstrap-preflight.err"; then
+  printf 'Default bootstrap retirement unexpectedly discarded repurposed data\n' >&2
+  exit 1
+fi
+grep -Fq 'legacy Default bootstrap retirement refused:' \
+  "$test_root/current-seed-default-bootstrap-preflight.err"
+assert_query '24|1|1' "
+  SELECT
+    (SELECT max(version_id) FROM goose_db_version WHERE is_applied) || '|' ||
+    (SELECT count(*) FROM profiles WHERE id = 'a11e0000-0000-4000-8000-000000000001') || '|' ||
+    (SELECT count(*) FROM stories WHERE id = 'a11e0000-0000-4000-8000-000000000010');
+" 'repurposed Default bootstrap fail-closed preservation'
+
+# This generated database is an explicit preservation test vector. Model the
+# operator decision by naming the retained historical household and reader,
+# without deleting or reassigning their data, then complete migration 25.
+psql_query "
+  WITH historical_account AS (
+    SELECT id, created_at
+    FROM accounts
+    ORDER BY created_at ASC, id ASC
+    LIMIT 1
+  )
+  UPDATE profiles AS profile
+  SET name = 'Preserved historical reader',
+      updated_at = now()
+  FROM historical_account AS account
+  WHERE profile.account_id = account.id
+    AND profile.name = 'Default'
+    AND profile.created_at < account.created_at;
+
+  UPDATE accounts
+  SET name = 'Preserved historical household',
+      updated_at = now()
+  WHERE id = (
+    SELECT id
+    FROM accounts
+    ORDER BY created_at ASC, id ASC
+    LIMIT 1
+  )
+    AND name = 'Default';
+" >/dev/null
+
+run_goose up >"$test_root/current-seed-default-bootstrap-upgrade.out" 2>"$test_root/current-seed-default-bootstrap-upgrade.err"
+assert_query '25|1|1|1|1|1' "
+  SELECT
+    (SELECT max(version_id) FROM goose_db_version WHERE is_applied) || '|' ||
+    (SELECT count(*) FROM profiles WHERE id = 'a11e0000-0000-4000-8000-000000000001') || '|' ||
+    (SELECT count(*) FROM stories WHERE id = 'a11e0000-0000-4000-8000-000000000010') || '|' ||
+    (SELECT count(*) FROM accounts WHERE name = 'Preserved historical household') || '|' ||
+    (SELECT count(*) FROM profiles WHERE name = 'Preserved historical reader') || '|' ||
+    (SELECT count(*) FROM information_schema.columns
+       WHERE table_schema='public'
+         AND table_name='accounts'
+         AND column_name='name'
+         AND column_default IS NULL);
+" 'repurposed Default bootstrap explicit preservation'
+
 env \
   PP_ALLOW_TEST_SEED=1 \
   PP_TEST_SEED_DATABASE="$database" \
   PP_TEST_SEED_CONTAINER="$postgres_container" \
   "$seed_script" >"$test_root/seed.out"
 grep -q '^test_seed=installed progress=absent target=local_or_disposable$' "$test_root/seed.out"
-assert_query '1|1|1|2|6|0|0|0' "
+assert_query '1|1|1|1|1|2|6|0|0|0' "
   SELECT
+    (SELECT count(*) FROM accounts WHERE id = 'f17e0000-0000-4000-8000-000000000001' AND name = 'TEST ONLY — Reader Fixture Account'),
+    (SELECT count(*) FROM profiles WHERE id = 'f17e0000-0000-4000-8000-000000000002' AND account_id = 'f17e0000-0000-4000-8000-000000000001' AND name = 'TEST ONLY — Reader'),
     (SELECT count(*) FROM contributors WHERE id = 'f17e0000-0000-4000-8000-000000000004'),
     (SELECT count(*) FROM stories WHERE id = 'f17e0000-0000-4000-8000-000000000010' AND is_published),
     (SELECT count(*) FROM story_versions WHERE id = 'f17e0000-0000-4000-8000-000000000011'),
@@ -1678,7 +1773,7 @@ env \
   PP_TEST_SEED_DATABASE="$database" \
   PP_TEST_SEED_CONTAINER="$postgres_container" \
   "$seed_script" --remove >/dev/null
-assert_query '0|0|0|0|0|0|0|1|0' "
+assert_query '0|0|0|0|0|0|0|0|0|1|0|1|1' "
   SELECT
     (SELECT count(*) FROM stories WHERE id = 'f17e0000-0000-4000-8000-000000000010'),
     (SELECT count(*) FROM story_versions WHERE id = 'f17e0000-0000-4000-8000-000000000011'),
@@ -1687,8 +1782,12 @@ assert_query '0|0|0|0|0|0|0|1|0' "
     (SELECT count(*) FROM contributors WHERE id = 'f17e0000-0000-4000-8000-000000000004'),
     (SELECT count(*) FROM reading_progress WHERE story_id = 'f17e0000-0000-4000-8000-000000000010'),
     (SELECT count(*) FROM story_contributors WHERE story_id = 'f17e0000-0000-4000-8000-000000000010'),
+    (SELECT count(*) FROM profiles WHERE id = 'f17e0000-0000-4000-8000-000000000002'),
+    (SELECT count(*) FROM accounts WHERE id = 'f17e0000-0000-4000-8000-000000000001'),
     (SELECT count(*) FROM stories WHERE id = 'a11e0000-0000-4000-8000-000000000010'),
-    (SELECT count(*) FROM reading_progress WHERE story_id = 'a11e0000-0000-4000-8000-000000000010');
+    (SELECT count(*) FROM reading_progress WHERE story_id = 'a11e0000-0000-4000-8000-000000000010'),
+    (SELECT count(*) FROM accounts WHERE name = 'Preserved historical household'),
+    (SELECT count(*) FROM profiles WHERE name = 'Preserved historical reader');
 " 'explicit fixture removal preservation'
 env \
   PP_ALLOW_TEST_SEED=1 \
