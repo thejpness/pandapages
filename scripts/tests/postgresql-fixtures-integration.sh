@@ -916,7 +916,9 @@ grep -q 'OK.*00016_identity_foundation.sql' \
   "$test_root/fresh-goose.out" "$test_root/fresh-goose.err"
 grep -q 'OK.*00023_remove_legacy_runtime_scaffolding.sql' \
   "$test_root/fresh-goose.out" "$test_root/fresh-goose.err"
-assert_query '23|true' "
+grep -q 'OK.*00024_remove_legacy_story_source.sql' \
+  "$test_root/fresh-goose.out" "$test_root/fresh-goose.err"
+assert_query '24|true' "
   SELECT version_id || '|' || is_applied
   FROM goose_db_version ORDER BY id DESC LIMIT 1;
 " 'fresh latest migration marker'
@@ -948,6 +950,32 @@ assert_query '1|1|1|1|1' "
     (to_regclass('public.generation_jobs') IS NULL)::int,
     (to_regtype('public.generation_status') IS NULL)::int;
 " 'fresh legacy runtime schema retirement'
+assert_query '0' "
+  SELECT count(*)
+  FROM information_schema.columns
+  WHERE table_schema='public'
+    AND table_name='stories'
+    AND column_name='source';
+" 'fresh legacy story source retirement'
+
+# Migration 24 is truthfully reversible because it refuses to discard any
+# non-empty source JSON. Prove the empty column can be restored and retired
+# again without changing application data.
+run_goose down-to 23 >/dev/null
+assert_query '23|1|0' "
+  SELECT
+    (SELECT max(version_id) FROM goose_db_version WHERE is_applied) || '|' ||
+    (SELECT count(*) FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='stories' AND column_name='source') || '|' ||
+    (SELECT count(*) FROM stories WHERE source <> '{}'::jsonb);
+" 'legacy story source rollback restores only empty values'
+run_goose up >/dev/null
+assert_query '24|0' "
+  SELECT
+    (SELECT max(version_id) FROM goose_db_version WHERE is_applied) || '|' ||
+    (SELECT count(*) FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='stories' AND column_name='source');
+" 'legacy story source reapplies cleanly'
 assert_query '0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0' "
   SELECT
     (SELECT count(*) FROM stories),
@@ -973,7 +1001,7 @@ assert_query 'false|0' "
     (SELECT count(*) FROM information_schema.columns
       WHERE table_schema='public' AND table_name='stories' AND column_name='work_id');
 " 'retired works scaffolding'
-printf 'ok 1 - fresh migrations reach version 23 with current schema only and no fixture content\n'
+printf 'ok 1 - fresh migrations reach version 24 with current schema only and no fixture content\n'
 
 assert_query '1|1|0' "
   SELECT
@@ -1475,7 +1503,7 @@ psql_query "
   DELETE FROM prompt_profiles;
 " >/dev/null
 
-run_goose up >"$test_root/current-seed-schema-upgrade.out" 2>"$test_root/current-seed-schema-upgrade.err"
+run_goose up-to 23 >"$test_root/current-seed-schema-upgrade.out" 2>"$test_root/current-seed-schema-upgrade.err"
 assert_query '23|true' "
   SELECT version_id || '|' || is_applied
   FROM goose_db_version ORDER BY id DESC LIMIT 1;
@@ -1488,6 +1516,36 @@ assert_query '1|1|1|1|1' "
     (to_regclass('public.generation_jobs') IS NULL)::int,
     (to_regtype('public.generation_status') IS NULL)::int;
 " 'current legacy runtime schema retirement'
+
+# Migration 24 likewise refuses to discard historical mutable source metadata.
+# This preservation vector intentionally still has non-empty stories.source.
+if run_goose up \
+  >"$test_root/current-seed-story-source-preflight.out" \
+  2>"$test_root/current-seed-story-source-preflight.err"; then
+  printf 'Legacy story source retirement unexpectedly discarded source metadata\n' >&2
+  exit 1
+fi
+grep -Fq 'legacy story source retirement refused:' \
+  "$test_root/current-seed-story-source-preflight.err"
+assert_query '23|1|1' "
+  SELECT
+    (SELECT max(version_id) FROM goose_db_version WHERE is_applied) || '|' ||
+    (SELECT count(*) FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='stories' AND column_name='source') || '|' ||
+    (EXISTS (SELECT 1 FROM stories WHERE source <> '{}'::jsonb))::int;
+" 'legacy story source fail-closed preservation'
+
+# These source JSON values belong only to this generated historical test
+# database. The harness makes the explicit disposal decision that migration 24
+# refuses to make for a real deployment.
+psql_query "UPDATE stories SET source = '{}'::jsonb;" >/dev/null
+run_goose up >"$test_root/current-seed-story-source-upgrade.out" 2>"$test_root/current-seed-story-source-upgrade.err"
+assert_query '24|0' "
+  SELECT
+    (SELECT max(version_id) FROM goose_db_version WHERE is_applied) || '|' ||
+    (SELECT count(*) FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='stories' AND column_name='source');
+" 'current legacy story source retirement'
 
 env \
   PP_ALLOW_TEST_SEED=1 \

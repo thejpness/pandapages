@@ -477,21 +477,13 @@ func (s *Store) AdminSourceUpsert(
 	if err != nil {
 		return model.AdminSourceUpsertResponse{}, err
 	}
-	legacySource := map[string]any{}
-	if source.SourceURL != nil {
-		legacySource["url"] = *source.SourceURL
-	}
-	legacySourceJSON, err := json.Marshal(legacySource)
-	if err != nil {
-		return model.AdminSourceUpsertResponse{}, err
-	}
 
 	var storyID string
 	if err := tx.QueryRowContext(ctx, `
 		INSERT INTO stories (
-			account_id, slug, title, author, language, rights, source
+			account_id, slug, title, author, language, rights
 		)
-		VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb)
+		VALUES ($1,$2,$3,$4,$5,$6::jsonb)
 		ON CONFLICT (account_id, slug) DO UPDATE SET
 			updated_at = stories.updated_at
 		RETURNING id
@@ -502,7 +494,6 @@ func (s *Store) AdminSourceUpsert(
 		source.Author,
 		source.Language,
 		string(rightsJSON),
-		string(legacySourceJSON),
 	).Scan(&storyID); err != nil {
 		return model.AdminSourceUpsertResponse{}, err
 	}

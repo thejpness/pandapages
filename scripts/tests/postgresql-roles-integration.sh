@@ -413,8 +413,8 @@ grep -Fq 'profile PIN security migration is irreversible' "$test_root/goose-prof
 
 run_goose goose-account-scope-up up
 account_scope_shape=$(psql_as "$migration_role" --tuples-only --no-align \
-  --command="SELECT (SELECT max(version_id) FROM goose_db_version WHERE is_applied) || '|' || (to_regclass('public.account_settings') IS NOT NULL)::int || '|' || (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='reading_progress' AND column_name='profile_id');")
-[[ "$account_scope_shape" == '23|0|1' ]]
+  --command="SELECT (SELECT max(version_id) FROM goose_db_version WHERE is_applied) || '|' || (to_regclass('public.account_settings') IS NOT NULL)::int || '|' || (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='reading_progress' AND column_name='profile_id') || '|' || (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='stories' AND column_name='source');")
+[[ "$account_scope_shape" == '24|0|1|0' ]]
 
 edition_backfill=$(psql_as "$application_role" --tuples-only --no-align \
   --command="
@@ -594,7 +594,7 @@ grep -Fq 'verification failed: application table privileges are incomplete or ex
 apply_policy
 verify_policy
 
-printf 'ok 12 - current story migrations and legacy retirement grant only approved runtime/backup access and verify fail-closed\n'
+printf 'ok 12 - current story migrations and cleanup retirement grant only approved runtime/backup access and verify fail-closed\n'
 
 if docker run --rm \
   --network "$source_network" \
