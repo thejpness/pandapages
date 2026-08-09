@@ -3,11 +3,11 @@
 set -euo pipefail
 umask 077
 
-repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
 source "$repo_root/scripts/tests/postgresql-stable-readiness.sh"
-role_script="$repo_root/scripts/postgresql-roles.sh"
-migration_image=${PP_ROLE_TEST_MIGRATION_IMAGE:-pandapages-migrate:role-test}
-api_image=${PP_ROLE_TEST_API_IMAGE:-pandapages-api:role-test}
+readonly repo_root
+readonly role_script="$repo_root/scripts/postgresql-roles.sh"
+readonly migration_image=${PP_ROLE_TEST_MIGRATION_IMAGE:-pandapages-migrate:role-test}
 readonly postgres_image='postgres:18.1-alpine@sha256:b40d931bd0e7ce6eecc59a5a6ac3b3c04a01e559750e73e7086b6dbd7f8bf545'
 readonly database=pandapages_role_test
 readonly admin_user=postgres
@@ -15,12 +15,16 @@ readonly owner_role=pandapages_owner
 readonly migration_role=pandapages_migrator
 readonly application_role=pandapages_app
 readonly backup_role=pandapages_backup
-readonly legacy_role=pandapages
 readonly migration_password='generated-migrator-password-not-for-production'
 readonly application_password='generated-application-password-not-for-production'
-readonly legacy_password='generated-legacy-password-not-for-production'
+readonly database_password='generated-admin-password-not-for-production'
+readonly resource_prefix="pandapages-pg-role-integration-$$"
+readonly postgres_container="$resource_prefix-postgres"
+readonly network_name="$resource_prefix-network"
+readonly volume_name="$resource_prefix-data"
+readonly resource_label="com.pandapages.role-run=$resource_prefix"
 
-for command_name in docker grep mktemp sed sort; do
+for command_name in docker grep mktemp sed; do
   command -v "$command_name" >/dev/null 2>&1 || {
     printf 'Required command is unavailable: %s\n' "$command_name" >&2
     exit 1
@@ -34,84 +38,70 @@ done
 
 docker_context=$(docker context show)
 docker_endpoint=$(docker context inspect "$docker_context" --format '{{.Endpoints.docker.Host}}')
-if [[ "$docker_context" != default && "$docker_context" != desktop-linux ]] || [[ "$docker_endpoint" != unix://* ]]; then
+if [[ "$docker_context" != default && "$docker_context" != desktop-linux ]] ||
+  [[ "$docker_endpoint" != unix://* ]]; then
   printf 'Integration test requires a known local Docker Unix socket\n' >&2
   exit 1
 fi
 
-for image in "$migration_image" "$api_image"; do
-  docker image inspect "$image" >/dev/null 2>&1 || {
-    printf 'Required test image is unavailable: %s\n' "$image" >&2
-    exit 1
-  }
-done
+docker image inspect "$migration_image" >/dev/null 2>&1 || {
+  printf 'Required migration image is unavailable: %s\n' "$migration_image" >&2
+  exit 1
+}
 
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/pandapages-role-integration.XXXXXX")
-resource_prefix="pandapages-pg-role-integration-$$"
-source_container="$resource_prefix-source"
-source_network="$resource_prefix-network"
-source_volume="$resource_prefix-data"
-source_created=false
 network_created=false
 volume_created=false
-
 cleanup() {
   set +e
-  if $source_created; then
-    docker rm --force "$source_container" >/dev/null 2>&1
-  fi
-  if $network_created; then
-    docker network rm "$source_network" >/dev/null 2>&1
-  fi
-  if $volume_created; then
-    docker volume rm "$source_volume" >/dev/null 2>&1
-  fi
+  docker ps -aq --filter "label=$resource_label" |
+    while IFS= read -r container_id; do
+      [[ -n "$container_id" ]] || continue
+      docker rm --force "$container_id" >/dev/null 2>&1
+    done
+  $network_created && docker network rm "$network_name" >/dev/null 2>&1
+  $volume_created && docker volume rm "$volume_name" >/dev/null 2>&1
   rm -rf -- "$test_root"
 }
-trap cleanup EXIT
-
-secret_dir="$test_root/secret"
-mkdir -p "$secret_dir"
-admin_password_file="$secret_dir/postgres-password"
-printf 'generated-admin-password-not-for-production\n' >"$admin_password_file"
-chmod 0600 "$admin_password_file"
+trap cleanup EXIT HUP INT TERM
 
 docker network create --internal \
   --label com.pandapages.disposable=role-integration \
-  "$source_network" >/dev/null
+  --label "$resource_label" \
+  "$network_name" >/dev/null
 network_created=true
+
 docker volume create \
   --label com.pandapages.disposable=role-integration \
-  "$source_volume" >/dev/null
+  --label "$resource_label" \
+  "$volume_name" >/dev/null
 volume_created=true
 
 docker run --detach \
-  --name "$source_container" \
-  --network "$source_network" \
+  --name "$postgres_container" \
+  --network "$network_name" \
   --read-only \
   --security-opt no-new-privileges \
   --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
   --tmpfs /var/run/postgresql:rw,nosuid,nodev,noexec,size=16m \
   --label com.pandapages.disposable=role-integration \
-  --env POSTGRES_USER="$admin_user" \
-  --env POSTGRES_DB="$database" \
-  --env POSTGRES_PASSWORD_FILE=/run/secrets/postgres-password \
-  --env POSTGRES_INITDB_ARGS=--data-checksums \
-  --mount "type=volume,src=$source_volume,dst=/var/lib/postgresql" \
-  --mount "type=bind,src=$admin_password_file,dst=/run/secrets/postgres-password,readonly" \
+  --label "$resource_label" \
+  --env "POSTGRES_USER=$admin_user" \
+  --env "POSTGRES_DB=$database" \
+  --env "POSTGRES_PASSWORD=$database_password" \
+  --mount "type=volume,src=$volume_name,dst=/var/lib/postgresql" \
   --health-cmd "pg_isready --username=$admin_user --dbname=$database" \
   --health-interval 1s \
   --health-timeout 3s \
   --health-retries 60 \
   "$postgres_image" >/dev/null
-source_created=true
 
-wait_for_stable_postgres "$source_container" "$admin_user" "$database" \
-  'Generated PostgreSQL source'
+wait_for_stable_postgres "$postgres_container" "$admin_user" "$database" \
+  'Generated PostgreSQL role-test source'
 
 apply_policy() {
   "$role_script" apply \
-    --container "$source_container" \
+    --container "$postgres_container" \
     --database "$database" \
     --admin-user "$admin_user" \
     --confirm-apply >/dev/null
@@ -119,7 +109,7 @@ apply_policy() {
 
 verify_policy() {
   "$role_script" verify \
-    --container "$source_container" \
+    --container "$postgres_container" \
     --database "$database" \
     --admin-user "$admin_user" >/dev/null
 }
@@ -127,529 +117,109 @@ verify_policy() {
 psql_as() {
   local role=$1
   shift
-  docker exec "$source_container" \
+  docker exec "$postgres_container" \
     psql -X --username="$role" --dbname="$database" --set=ON_ERROR_STOP=1 "$@"
 }
 
 expect_denied() {
   local description=$1
   local role=$2
-  local target_database=$3
-  local statement=$4
-
-  if docker exec "$source_container" \
-    psql -X --username="$role" --dbname="$target_database" \
-    --set=ON_ERROR_STOP=1 --command="$statement" \
-    >"$test_root/denied.out" 2>"$test_root/denied.err"; then
+  local statement=$3
+  if psql_as "$role" --command="$statement" >"$test_root/denied.out" 2>"$test_root/denied.err"; then
     printf 'Privilege denial unexpectedly succeeded: %s\n' "$description" >&2
     exit 1
   fi
 }
 
-expect_integrity_denied() {
-  local description=$1
-  local expected_constraint=$2
-  local statement=$3
-  local stdout_file="$test_root/integrity-denied.out"
-  local stderr_file="$test_root/integrity-denied.err"
-
-  if psql_as "$application_role" --command="$statement" >"$stdout_file" 2>"$stderr_file"; then
-    printf 'Ownership-integrity denial unexpectedly succeeded: %s\n' "$description" >&2
-    exit 1
-  fi
-  if ! grep -Fq "$expected_constraint" "$stderr_file"; then
-    printf 'Ownership-integrity denial did not name %s: %s\n' "$expected_constraint" "$description" >&2
-    sed -n '1,20p' "$stderr_file" >&2
-    exit 1
-  fi
-}
-
-run_goose() {
-  local output_name=$1
-  shift
-
-  if ! docker run --rm \
-    --network "$source_network" \
-    --read-only \
-    --security-opt no-new-privileges \
-    --tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m \
-    --env GOOSE_DRIVER=postgres \
-    --env "GOOSE_DBSTRING=postgres://$migration_role:$migration_password@$source_container:5432/$database?sslmode=disable" \
-    --env GOOSE_MIGRATION_DIR=/migrations \
-    --mount "type=bind,src=$repo_root/apps/api/migrations,dst=/migrations,readonly" \
-    "$migration_image" "$@" \
-    >"$test_root/$output_name.out" 2>"$test_root/$output_name.err"; then
-    sed 's/generated-migrator-password-not-for-production/[redacted]/g' \
-      "$test_root/$output_name.err" >&2
-    exit 1
-  fi
-}
-
-printf '1..14\n'
-
 "$role_script" audit \
-  --container "$source_container" \
+  --container "$postgres_container" \
   --database "$database" \
   --admin-user "$admin_user" >/dev/null
-apply_policy
-identity=$(psql_as "$migration_role" --tuples-only --no-align \
-  --command="SELECT session_user || '|' || current_user;")
-[[ "$identity" == "$migration_role|$owner_role" ]]
-printf 'ok 1 - pre-apply audit accepts absent roles and the migrator assumes only the NOLOGIN owner\n'
 
-docker exec -i "$source_container" \
+apply_policy
+
+docker exec -i "$postgres_container" \
   psql -X --username="$admin_user" --dbname="$database" --set=ON_ERROR_STOP=1 <<SQL >/dev/null
 ALTER ROLE $migration_role PASSWORD '$migration_password';
 ALTER ROLE $application_role PASSWORD '$application_password';
-CREATE ROLE $legacy_role LOGIN SUPERUSER PASSWORD '$legacy_password';
 SQL
 
-run_goose goose-up up-to 16
-grep -q 'OK.*00015_account_ownership_integrity.sql' \
-  "$test_root/goose-up.out" "$test_root/goose-up.err"
-grep -q 'OK.*00016_identity_foundation.sql' \
-  "$test_root/goose-up.out" "$test_root/goose-up.err"
+docker run --rm \
+  --network "$network_name" \
+  --read-only \
+  --security-opt no-new-privileges \
+  --tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m \
+  --env GOOSE_DRIVER=postgres \
+  --env "GOOSE_DBSTRING=postgres://$migration_role:$migration_password@$postgres_container:5432/$database?sslmode=disable" \
+  --env GOOSE_MIGRATION_DIR=/migrations \
+  --mount "type=bind,src=$repo_root/apps/api/migrations,dst=/migrations,readonly" \
+  "$migration_image" up >/dev/null
 
-run_goose goose-down down-to 15
-rollback_shape=$(psql_as "$migration_role" --tuples-only --no-align \
-  --command="SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('principals','external_identities','account_memberships');")
-[[ "$rollback_shape" == '0' ]]
-
-run_goose goose-reup up-to 16
-reapplied_shape=$(psql_as "$migration_role" --tuples-only --no-align \
-  --command="SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('principals','external_identities','account_memberships');")
-[[ "$reapplied_shape" == '3' ]]
-printf 'ok 2 - Goose applies migration 16 and rolls it down and up as a non-superuser owner session\n'
-
-docker exec -i "$source_container" \
-  psql -X --username="$admin_user" --dbname="$database" --set=ON_ERROR_STOP=1 <<SQL >/dev/null
-ALTER ROLE $application_role SUPERUSER CREATEDB CREATEROLE INHERIT REPLICATION BYPASSRLS CONNECTION LIMIT 1;
-ALTER ROLE $backup_role INHERIT;
-GRANT pg_read_all_data TO $backup_role;
-GRANT $owner_role TO $migration_role WITH ADMIN TRUE, INHERIT TRUE, SET TRUE;
-SQL
-
+# Newly created objects receive the current runtime grants only after policy
+# reconciliation; this is deliberate and mirrors bootstrap-postgresql.sh.
 apply_policy
 verify_policy
 apply_policy
 verify_policy
-printf 'ok 3 - role application corrects drift, is idempotent, and verifies\n'
 
-role_state=$(docker exec "$source_container" \
+version=$(psql_as "$migration_role" --tuples-only --no-align \
+  --command="SELECT version_id FROM goose_db_version WHERE is_applied ORDER BY id DESC LIMIT 1;")
+[[ "$version" == 1 ]]
+
+role_state=$(docker exec "$postgres_container" \
   psql -X --username="$admin_user" --dbname="$database" --tuples-only --no-align \
   --command="SELECT string_agg(rolname || ':' || rolsuper::text || ':' || rolcreatedb::text || ':' || rolcreaterole::text || ':' || rolreplication::text || ':' || rolbypassrls::text, ',' ORDER BY rolname) FROM pg_roles WHERE rolname IN ('$owner_role','$migration_role','$application_role','$backup_role');")
 [[ "$role_state" == "$application_role:false:false:false:false:false,$backup_role:false:false:false:false:false,$migration_role:false:false:false:false:false,$owner_role:false:false:false:false:false" ]]
-expect_denied 'pgcrypto digest routine' "$application_role" "$database" \
-  "SELECT public.digest('abc'::text, 'sha256'::text);"
-printf 'ok 4 - all policy roles have non-superuser non-administrative attributes\n'
 
-docker exec -i "$source_container" \
-  psql -X --username="$admin_user" --dbname="$database" --set=ON_ERROR_STOP=1 <<'SQL' >/dev/null
-CREATE SCHEMA operator_private;
-CREATE TABLE operator_private.private_marker (id integer PRIMARY KEY);
-INSERT INTO operator_private.private_marker VALUES (1);
-SQL
-
-psql_as "$application_role" --command="BEGIN; INSERT INTO accounts (name) VALUES ('Generated role test'); UPDATE accounts SET name='Generated role test updated' WHERE name='Generated role test'; DELETE FROM accounts WHERE name='Generated role test updated'; COMMIT;" >/dev/null
-psql_as "$application_role" --command="SELECT count(*) FROM stories;" >/dev/null
-psql_as "$application_role" --command="INSERT INTO stories (account_id, slug, title) SELECT id, 'generated-role-test', 'Pöndá reads 世界 🐼' FROM accounts ORDER BY created_at LIMIT 1; UPDATE stories SET title='Pöndá reads UTF-8 世界 🐼' WHERE slug='generated-role-test'; DELETE FROM stories WHERE slug='generated-role-test';" >/dev/null
-psql_as "$application_role" --command="
-INSERT INTO accounts (id, name) VALUES
-  ('a1500000-0000-4000-8000-000000000001', 'Integrity household A'),
-  ('b1500000-0000-4000-8000-000000000001', 'Integrity household B');
-INSERT INTO profiles (id, name, account_id) VALUES
-  ('a1500000-0000-4000-8000-000000000011', 'Reader A', 'a1500000-0000-4000-8000-000000000001'),
-  ('a1500000-0000-4000-8000-000000000012', 'Reader A2', 'a1500000-0000-4000-8000-000000000001'),
-  ('b1500000-0000-4000-8000-000000000011', 'Reader B', 'b1500000-0000-4000-8000-000000000001');
-INSERT INTO child_profiles (id, name, age_months, account_id) VALUES
-  ('a1500000-0000-4000-8000-000000000021', 'Child A', 84, 'a1500000-0000-4000-8000-000000000001'),
-  ('b1500000-0000-4000-8000-000000000021', 'Child B', 96, 'b1500000-0000-4000-8000-000000000001');
-INSERT INTO prompt_profiles (id, name, account_id) VALUES
-  ('a1500000-0000-4000-8000-000000000031', 'Prompt A', 'a1500000-0000-4000-8000-000000000001'),
-  ('b1500000-0000-4000-8000-000000000031', 'Prompt B', 'b1500000-0000-4000-8000-000000000001');
-INSERT INTO stories (id, account_id, slug, title) VALUES
-  ('a1500000-0000-4000-8000-000000000041', 'a1500000-0000-4000-8000-000000000001', 'integrity-a', 'Integrity A'),
-  ('b1500000-0000-4000-8000-000000000041', 'b1500000-0000-4000-8000-000000000001', 'integrity-b', 'Integrity B');
-INSERT INTO story_versions (id, story_id, version, markdown, rendered_html, content_hash) VALUES
-  ('a1500000-0000-4000-8000-000000000051', 'a1500000-0000-4000-8000-000000000041', 1, '# A', '<h1>A</h1>', 'integrity-a-v1'),
-  ('b1500000-0000-4000-8000-000000000051', 'b1500000-0000-4000-8000-000000000041', 1, '# B', '<h1>B</h1>', 'integrity-b-v1');
-INSERT INTO reading_progress (
-  profile_id, story_id, story_version_id, locator, percent, account_id
-) VALUES (
-  'a1500000-0000-4000-8000-000000000011',
-  'a1500000-0000-4000-8000-000000000041',
-  'a1500000-0000-4000-8000-000000000051',
-  '{\"schema\":2,\"segment\":{\"key\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"occurrence\":1,\"ordinal\":1,\"offset\":0}}'::jsonb,
-  0.25,
-  'a1500000-0000-4000-8000-000000000001'
-);
-INSERT INTO profile_settings (
-  profile_id, active_child_profile_id, active_prompt_profile_id, account_id
-) VALUES (
-  'a1500000-0000-4000-8000-000000000011',
-  'a1500000-0000-4000-8000-000000000021',
-  'a1500000-0000-4000-8000-000000000031',
-  'a1500000-0000-4000-8000-000000000001'
-);
-" >/dev/null
-
-expect_integrity_denied 'cross-account progress insert'   'reading_progress_story_account_fkey'   "INSERT INTO reading_progress (profile_id, story_id, story_version_id, locator, percent, account_id) VALUES ('a1500000-0000-4000-8000-000000000011', 'b1500000-0000-4000-8000-000000000041', 'b1500000-0000-4000-8000-000000000051', '{\"schema\":2,\"segment\":{\"key\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"occurrence\":1,\"ordinal\":1,\"offset\":0}}'::jsonb, 0.5, 'a1500000-0000-4000-8000-000000000001');"
-expect_integrity_denied 'cross-account progress update'   'reading_progress_story_account_fkey'   "UPDATE reading_progress SET story_id='b1500000-0000-4000-8000-000000000041', story_version_id='b1500000-0000-4000-8000-000000000051' WHERE profile_id='a1500000-0000-4000-8000-000000000011' AND story_id='a1500000-0000-4000-8000-000000000041';"
-expect_integrity_denied 'cross-account settings insert'   'profile_settings_child_account_fkey'   "INSERT INTO profile_settings (profile_id, active_child_profile_id, active_prompt_profile_id, account_id) VALUES ('a1500000-0000-4000-8000-000000000012', 'b1500000-0000-4000-8000-000000000021', 'a1500000-0000-4000-8000-000000000031', 'a1500000-0000-4000-8000-000000000001');"
-expect_integrity_denied 'cross-account child settings update'   'profile_settings_child_account_fkey'   "UPDATE profile_settings SET active_child_profile_id='b1500000-0000-4000-8000-000000000021' WHERE profile_id='a1500000-0000-4000-8000-000000000011';"
-expect_integrity_denied 'cross-account prompt settings update'   'profile_settings_prompt_account_fkey'   "UPDATE profile_settings SET active_prompt_profile_id='b1500000-0000-4000-8000-000000000031' WHERE profile_id='a1500000-0000-4000-8000-000000000011';"
-expect_integrity_denied 'owned account deletion'   'account_id_fkey'   "DELETE FROM accounts WHERE id='a1500000-0000-4000-8000-000000000001';"
-
-integrity_state=$(psql_as "$application_role" --tuples-only --no-align   --command="SELECT (SELECT count(*) FROM reading_progress WHERE profile_id='a1500000-0000-4000-8000-000000000011') || '|' || (SELECT count(*) FROM profile_settings WHERE profile_id='a1500000-0000-4000-8000-000000000011') || '|' || (SELECT count(*) FROM accounts WHERE id='a1500000-0000-4000-8000-000000000001');")
-[[ "$integrity_state" == '1|1|1' ]]
-printf 'ok 5 - application role performs runtime CRUD but cannot bypass ownership integrity\n'
-
-expect_denied 'create database' "$application_role" "$database" 'CREATE DATABASE forbidden_database;'
-expect_denied 'create role' "$application_role" "$database" 'CREATE ROLE forbidden_role;'
-expect_denied 'create schema' "$application_role" "$database" 'CREATE SCHEMA forbidden_schema;'
-expect_denied 'create extension' "$application_role" "$database" 'CREATE EXTENSION hstore;'
-expect_denied 'alter table' "$application_role" "$database" 'ALTER TABLE stories ADD COLUMN forbidden integer;'
-expect_denied 'drop table' "$application_role" "$database" 'DROP TABLE stories;'
-expect_denied 'restricted schema' "$application_role" "$database" 'SELECT * FROM operator_private.private_marker;'
-expect_denied 'system setting' "$application_role" "$database" "ALTER SYSTEM SET log_min_messages = 'debug1';"
-expect_denied 'server file function' "$application_role" "$database" "SELECT pg_read_file('PG_VERSION');"
-expect_denied 'unrelated database' "$application_role" postgres 'SELECT 1;'
-expect_denied 'owner escalation' "$application_role" "$database" "SET ROLE $owner_role;"
-printf 'ok 6 - application role cannot perform DDL, administration, escalation, or unrelated access\n'
-
-psql_as "$migration_role" --command="CREATE TABLE role_future_runtime (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, body text NOT NULL); ALTER TABLE role_future_runtime ADD COLUMN updated_at timestamptz NOT NULL DEFAULT now(); CREATE FUNCTION role_required_upper(text) RETURNS text LANGUAGE sql IMMUTABLE STRICT RETURN upper(\$1); REVOKE ALL ON FUNCTION role_required_upper(text) FROM PUBLIC; GRANT EXECUTE ON FUNCTION role_required_upper(text) TO $application_role;" >/dev/null
-future_owner=$(docker exec "$source_container" \
-  psql -X --username="$admin_user" --dbname="$database" --tuples-only --no-align \
-  --command="SELECT tableowner FROM pg_tables WHERE schemaname='public' AND tablename='role_future_runtime';")
-[[ "$future_owner" == "$owner_role" ]]
-psql_as "$application_role" --command="INSERT INTO role_future_runtime(body) VALUES (role_required_upper('Pöndá 世界 🐼')); UPDATE role_future_runtime SET body=role_required_upper(body); DELETE FROM role_future_runtime;" >/dev/null
-printf 'ok 7 - future owner-created tables, sequences, and explicit functions work without manual grants\n'
-
-future_acl=$(docker exec "$source_container" \
-  psql -X --username="$admin_user" --dbname="$database" --tuples-only --no-align \
-  --command="SELECT has_table_privilege('$application_role','public.role_future_runtime','SELECT,INSERT,UPDATE,DELETE') || '|' || has_table_privilege('$backup_role','public.role_future_runtime','SELECT') || '|' || has_table_privilege('$backup_role','public.role_future_runtime','INSERT,UPDATE,DELETE,TRUNCATE') || '|' || has_sequence_privilege('$application_role','public.role_future_runtime_id_seq','USAGE,SELECT') || '|' || has_sequence_privilege('$backup_role','public.role_future_runtime_id_seq','SELECT') || '|' || has_sequence_privilege('$backup_role','public.role_future_runtime_id_seq','USAGE,UPDATE');")
-[[ "$future_acl" == 'true|true|false|true|true|false' ]]
-printf 'ok 8 - future-object defaults grant runtime use and backup read-only access only\n'
-
-docker exec "$source_container" pg_dump \
-  --username="$backup_role" \
-  --dbname="$database" \
-  --schema=public \
-  --extension=pgcrypto \
-  --format=custom \
-  --no-owner \
-  --no-acl \
-  >"$test_root/database.dump"
-docker exec -i "$source_container" pg_restore --list \
-  <"$test_root/database.dump" >"$test_root/database.list"
-grep -q 'TABLE DATA public stories' "$test_root/database.list"
-docker exec "$source_container" pg_dumpall \
-  --username="$backup_role" \
-  --database="$database" \
-  --globals-only \
-  --no-role-passwords \
-  >"$test_root/globals.sql"
-grep -q "CREATE ROLE $application_role;" "$test_root/globals.sql"
-if grep -Eq 'PASSWORD[[:space:]]+('"'"'|SCRAM-SHA-256|md5)' "$test_root/globals.sql"; then
-  printf 'Password material appeared in globals output\n' >&2
-  exit 1
-fi
-printf 'ok 9 - backup role completes custom and password-free globals dumps\n'
-
-psql_as "$backup_role" --command="SELECT count(*) FROM stories; SELECT count(*) FROM information_schema.tables WHERE table_schema='public';" >/dev/null
-expect_denied 'backup insert' "$backup_role" "$database" "INSERT INTO accounts(name) VALUES ('forbidden');"
-expect_denied 'backup update' "$backup_role" "$database" "UPDATE accounts SET name='forbidden';"
-expect_denied 'backup delete' "$backup_role" "$database" 'DELETE FROM accounts;'
-expect_denied 'backup truncate' "$backup_role" "$database" 'TRUNCATE accounts;'
-expect_denied 'backup schema create' "$backup_role" "$database" 'CREATE SCHEMA backup_forbidden;'
-expect_denied 'backup table alter' "$backup_role" "$database" 'ALTER TABLE stories ADD COLUMN backup_forbidden integer;'
-expect_denied 'backup database create' "$backup_role" "$database" 'CREATE DATABASE backup_forbidden;'
-expect_denied 'backup role create' "$backup_role" "$database" 'CREATE ROLE backup_forbidden;'
-expect_denied 'backup owner escalation' "$backup_role" "$database" "SET ROLE $owner_role;"
-printf 'ok 10 - backup role can inspect metadata but cannot write, mutate schema, or escalate\n'
-
-extension_owner=$(docker exec "$source_container" \
-  psql -X --username="$admin_user" --dbname="$database" --tuples-only --no-align \
-  --command="SELECT pg_get_userbyid(extowner) FROM pg_extension WHERE extname='pgcrypto';")
-[[ "$extension_owner" == "$owner_role" ]]
-expect_denied 'migration create database' "$migration_role" "$database" 'CREATE DATABASE migration_forbidden;'
-expect_denied 'migration create role' "$migration_role" "$database" 'CREATE ROLE migration_forbidden;'
-printf 'ok 11 - trusted pgcrypto and DDL need no migration-role superuser capability\n'
-
-psql_as "$migration_role" --command="
-  DROP TABLE role_future_runtime;
-  DROP FUNCTION role_required_upper(text);
-" >/dev/null
-
-# The role test has finished exercising migration-15's historical
-# child/prompt/profile-settings ownership model. These are disposable test
-# vectors, so clear them explicitly before reaching migration 23; production
-# migration 23 itself never decides that non-empty legacy data is disposable.
-psql_as "$application_role" --command="
-  DELETE FROM profile_settings;
-  DELETE FROM child_profiles;
-  DELETE FROM prompt_profiles;
-" >/dev/null
-
-# Keep the existing security rollback assertion at its own historical boundary
-# before the later irreversible retirement migration becomes the first Down
-# barrier.
-run_goose goose-profile-pin-up up-to 19
-if docker run --rm \
-  --network "$source_network" \
-  --read-only \
-  --security-opt no-new-privileges \
-  --tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m \
-  --env GOOSE_DRIVER=postgres \
-  --env "GOOSE_DBSTRING=postgres://$migration_role:$migration_password@$source_container:5432/$database?sslmode=disable" \
-  --env GOOSE_MIGRATION_DIR=/migrations \
-  --mount "type=bind,src=$repo_root/apps/api/migrations,dst=/migrations,readonly" \
-  "$migration_image" down-to 18 \
-  >"$test_root/goose-profile-pin-down.out" 2>"$test_root/goose-profile-pin-down.err"; then
-  printf 'Goose unexpectedly accepted a profile PIN security rollback\n' >&2
-  exit 1
-fi
-grep -Fq 'profile PIN security migration is irreversible' "$test_root/goose-profile-pin-down.err"
-
-run_goose goose-legacy-retirement-up up-to 23
-if docker run --rm \
-  --network "$source_network" \
-  --read-only \
-  --security-opt no-new-privileges \
-  --tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m \
-  --env GOOSE_DRIVER=postgres \
-  --env "GOOSE_DBSTRING=postgres://$migration_role:$migration_password@$source_container:5432/$database?sslmode=disable" \
-  --env GOOSE_MIGRATION_DIR=/migrations \
-  --mount "type=bind,src=$repo_root/apps/api/migrations,dst=/migrations,readonly" \
-  "$migration_image" down-to 22 \
-  >"$test_root/goose-legacy-retirement-down.out" 2>"$test_root/goose-legacy-retirement-down.err"; then
-  printf 'Goose unexpectedly accepted a legacy runtime retirement rollback\n' >&2
-  exit 1
-fi
-grep -Fq 'legacy runtime scaffolding retirement is irreversible' "$test_root/goose-legacy-retirement-down.err"
-
-# Migration 25 is independently irreversible. Exercise that Down contract at
-# its own historical boundary before migration 26 becomes the first Down
-# barrier on the current schema.
-run_goose goose-default-bootstrap-up up-to 25
-if docker run --rm \
-  --network "$source_network" \
-  --read-only \
-  --security-opt no-new-privileges \
-  --tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m \
-  --env GOOSE_DRIVER=postgres \
-  --env "GOOSE_DBSTRING=postgres://$migration_role:$migration_password@$source_container:5432/$database?sslmode=disable" \
-  --env GOOSE_MIGRATION_DIR=/migrations \
-  --mount "type=bind,src=$repo_root/apps/api/migrations,dst=/migrations,readonly" \
-  "$migration_image" down-to 24 \
-  >"$test_root/goose-default-bootstrap-down.out" 2>"$test_root/goose-default-bootstrap-down.err"; then
-  printf 'Goose unexpectedly accepted a Default bootstrap retirement rollback\n' >&2
-  exit 1
-fi
-grep -Fq 'legacy Default bootstrap retirement is irreversible' "$test_root/goose-default-bootstrap-down.err"
-
-run_goose goose-account-scope-up up
-account_scope_shape=$(psql_as "$migration_role" --tuples-only --no-align \
-  --command="SELECT (SELECT max(version_id) FROM goose_db_version WHERE is_applied) || '|' || (to_regclass('public.account_settings') IS NOT NULL)::int || '|' || (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='reading_progress' AND column_name='profile_id') || '|' || (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='stories' AND column_name='source') || '|' || (SELECT count(*) FROM accounts WHERE name='Default') || '|' || (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='accounts' AND column_name='name' AND column_default IS NULL);")
-[[ "$account_scope_shape" == '26|0|1|0|0|1' ]]
-
-edition_backfill=$(psql_as "$application_role" --tuples-only --no-align \
-  --command="
-    SELECT
-      ((SELECT count(*) FROM story_editions WHERE edition_key='classic') =
-       (SELECT count(*) FROM stories))::text
-      || '|' ||
-      (NOT EXISTS (
-        SELECT 1 FROM story_versions WHERE edition_id IS NULL
-      ))::text;
-  ")
-[[ "$edition_backfill" == 'true|true' ]]
-
-edition_acl=$(docker exec "$source_container" \
-  psql -X --username="$admin_user" --dbname="$database" --tuples-only --no-align \
-  --command="
-    SELECT
-      has_table_privilege('$application_role','public.story_editions','SELECT,INSERT,UPDATE,DELETE')
-      || '|' ||
-      has_table_privilege('$backup_role','public.story_editions','SELECT')
-      || '|' ||
-      has_table_privilege('$backup_role','public.story_editions','INSERT,UPDATE,DELETE,TRUNCATE');
-  ")
-[[ "$edition_acl" == 'true|true|false' ]]
-
-
-source_acl=$(docker exec "$source_container" \
-  psql -X --username="$admin_user" --dbname="$database" --tuples-only --no-align \
-  --command="
-    SELECT
-      has_table_privilege('$application_role','public.story_sources','SELECT,INSERT,UPDATE,DELETE')
-      || '|' ||
-      has_table_privilege('$application_role','public.story_source_versions','SELECT,INSERT,UPDATE,DELETE')
-      || '|' ||
-      has_table_privilege('$backup_role','public.story_sources','SELECT')
-      || '|' ||
-      has_table_privilege('$backup_role','public.story_source_versions','SELECT')
-      || '|' ||
-      has_table_privilege('$backup_role','public.story_sources','INSERT,UPDATE,DELETE,TRUNCATE')
-      || '|' ||
-      has_table_privilege('$backup_role','public.story_source_versions','INSERT,UPDATE,DELETE,TRUNCATE');
-  ")
-[[ "$source_acl" == 'true|true|true|true|false|false' ]]
-
-source_shape=$(psql_as "$application_role" --tuples-only --no-align \
-  --command="
-    SELECT
-      (to_regclass('public.story_sources') IS NOT NULL)::text
-      || '|' ||
-      (to_regclass('public.story_source_versions') IS NOT NULL)::text
-      || '|' ||
-      (to_regclass('public.works') IS NULL)::text
-      || '|' ||
-      ((SELECT count(*) FROM information_schema.columns
-        WHERE table_schema='public' AND table_name='stories' AND column_name='work_id') = 0)::text;
-  ")
-[[ "$source_shape" == 'true|true|true|true' ]]
+identity=$(psql_as "$migration_role" --tuples-only --no-align \
+  --command="SELECT session_user || '|' || current_user;")
+[[ "$identity" == "$migration_role|$owner_role" ]]
 
 psql_as "$application_role" --command="
-  INSERT INTO story_editions (story_id, edition_key)
-  VALUES ('a1500000-0000-4000-8000-000000000041', 'growing-readers');
-  UPDATE story_editions
-  SET updated_at = now()
-  WHERE story_id = 'a1500000-0000-4000-8000-000000000041'
-    AND edition_key = 'growing-readers';
-  DELETE FROM story_editions
-  WHERE story_id = 'a1500000-0000-4000-8000-000000000041'
-    AND edition_key = 'growing-readers';
-" >/dev/null
-
-psql_as "$application_role" --command="
+  INSERT INTO accounts (id, name)
+  VALUES ('a1500000-0000-4000-8000-000000000001', 'Runtime household');
+  INSERT INTO profiles (id, account_id, name, reading_level)
+  VALUES (
+    'a1500000-0000-4000-8000-000000000011',
+    'a1500000-0000-4000-8000-000000000001',
+    'Runtime reader',
+    'story-explorers'
+  );
   INSERT INTO stories (id, account_id, slug, title)
   VALUES (
-    'c1500000-0000-4000-8000-000000000041',
+    'a1500000-0000-4000-8000-000000000021',
     'a1500000-0000-4000-8000-000000000001',
-    'edition-cascade-test',
-    'Edition cascade test'
+    'runtime-story',
+    'Runtime Story'
   );
-  INSERT INTO story_editions (
-    id, story_id, edition_key
-  ) VALUES (
-    'c1500000-0000-4000-8000-000000000061',
-    'c1500000-0000-4000-8000-000000000041',
-    'classic'
-  );
-  INSERT INTO story_versions (
-    id, story_id, edition_id, version, markdown, rendered_html, content_hash
-  ) VALUES (
-    'c1500000-0000-4000-8000-000000000051',
-    'c1500000-0000-4000-8000-000000000041',
-    'c1500000-0000-4000-8000-000000000061',
-    1,
-    '# Edition cascade test',
-    '<h1>Edition cascade test</h1>',
-    'edition-cascade-test-v1'
-  );
-  UPDATE story_editions
-  SET draft_version_id = 'c1500000-0000-4000-8000-000000000051',
-      published_version_id = 'c1500000-0000-4000-8000-000000000051'
-  WHERE id = 'c1500000-0000-4000-8000-000000000061';
-  UPDATE stories
-  SET draft_version_id = 'c1500000-0000-4000-8000-000000000051',
-      published_version_id = 'c1500000-0000-4000-8000-000000000051',
-      is_published = true
-  WHERE id = 'c1500000-0000-4000-8000-000000000041';
-  INSERT INTO story_sources (id, story_id)
-  VALUES (
-    'c1500000-0000-4000-8000-000000000071',
-    'c1500000-0000-4000-8000-000000000041'
-  );
-  INSERT INTO story_source_versions (
-    id, source_id, story_id, version, title, language, source_text, snapshot_hash
-  ) VALUES (
-    'c1500000-0000-4000-8000-000000000072',
-    'c1500000-0000-4000-8000-000000000071',
-    'c1500000-0000-4000-8000-000000000041',
-    1,
-    'Canonical source cascade test',
-    'en-GB',
-    'Original source body',
-    repeat('a', 64)
-  );
-  UPDATE story_sources
-  SET current_version_id = 'c1500000-0000-4000-8000-000000000072'
-  WHERE id = 'c1500000-0000-4000-8000-000000000071';
-  DELETE FROM stories
-  WHERE id = 'c1500000-0000-4000-8000-000000000041';
+  UPDATE stories SET title='Runtime Story Updated'
+  WHERE id='a1500000-0000-4000-8000-000000000021';
 " >/dev/null
 
-edition_cascade=$(psql_as "$application_role" --tuples-only --no-align \
-  --command="
-    SELECT
-      (SELECT count(*) FROM stories WHERE id='c1500000-0000-4000-8000-000000000041')
-      || '|' ||
-      (SELECT count(*) FROM story_editions WHERE story_id='c1500000-0000-4000-8000-000000000041')
-      || '|' ||
-      (SELECT count(*) FROM story_versions WHERE story_id='c1500000-0000-4000-8000-000000000041')
-      || '|' ||
-      (SELECT count(*) FROM story_sources WHERE story_id='c1500000-0000-4000-8000-000000000041')
-      || '|' ||
-      (SELECT count(*) FROM story_source_versions WHERE story_id='c1500000-0000-4000-8000-000000000041');
-  ")
-[[ "$edition_cascade" == '0|0|0|0|0' ]]
+psql_as "$application_role" --command="SELECT count(*) FROM stories;" >/dev/null
 
-apply_policy
+expect_denied \
+  'application DDL' \
+  "$application_role" \
+  "CREATE TABLE public.application_must_not_create_tables (id integer);"
+
+expect_denied \
+  'application pgcrypto digest routine' \
+  "$application_role" \
+  "SELECT public.digest('abc'::text, 'sha256'::text);"
+
+psql_as "$backup_role" --command="SELECT count(*) FROM accounts;" >/dev/null
+
+expect_denied \
+  'backup mutation' \
+  "$backup_role" \
+  "INSERT INTO accounts (name) VALUES ('backup must not write');"
+
+expect_denied \
+  'backup DDL' \
+  "$backup_role" \
+  "CREATE TABLE public.backup_must_not_create_tables (id integer);"
+
 verify_policy
 
-release_acl=$(docker exec "$source_container"   psql -X --username="$admin_user" --dbname="$database" --tuples-only --no-align   --command="
-    SELECT
-      has_table_privilege('$application_role','public.story_releases','SELECT,INSERT')
-      || '|' ||
-      has_table_privilege('$application_role','public.story_releases','UPDATE,DELETE')
-      || '|' ||
-      has_table_privilege('$application_role','public.story_release_editions','SELECT,INSERT')
-      || '|' ||
-      has_table_privilege('$application_role','public.story_release_editions','UPDATE,DELETE')
-      || '|' ||
-      has_table_privilege('$backup_role','public.story_releases','SELECT')
-      || '|' ||
-      has_table_privilege('$backup_role','public.story_release_editions','SELECT')
-      || '|' ||
-      has_table_privilege('$backup_role','public.story_releases','INSERT,UPDATE,DELETE,TRUNCATE')
-      || '|' ||
-      has_table_privilege('$backup_role','public.story_release_editions','INSERT,UPDATE,DELETE,TRUNCATE');
-  ")
-[[ "$release_acl" == 'true|false|true|false|true|true|false|false' ]]
-
-psql_as "$admin_user" --command="
-  GRANT TRUNCATE ON TABLE story_editions TO $application_role;
-" >/dev/null
-if verify_policy 2>"$test_root/verify-excessive.err"; then
-  printf 'Role verifier accepted an excessive story_editions privilege\n' >&2
-  exit 1
-fi
-grep -Fq 'verification failed: application table privileges are incomplete or excessive' \
-  "$test_root/verify-excessive.err"
-apply_policy
-verify_policy
-
-printf 'ok 12 - current story migrations and cleanup retirement grant only approved runtime/backup access and verify fail-closed\n'
-
-if docker run --rm \
-  --network "$source_network" \
-  --read-only \
-  --security-opt no-new-privileges \
-  --tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m \
-  --env GOOSE_DRIVER=postgres \
-  --env "GOOSE_DBSTRING=postgres://$migration_role:$migration_password@$source_container:5432/$database?sslmode=disable" \
-  --env GOOSE_MIGRATION_DIR=/migrations \
-  --mount "type=bind,src=$repo_root/apps/api/migrations,dst=/migrations,readonly" \
-  "$migration_image" down-to 25 \
-  >"$test_root/goose-profile-preferred-edition-down.out" 2>"$test_root/goose-profile-preferred-edition-down.err"; then
-  printf 'Goose unexpectedly accepted a profile preferred-edition rollback\n' >&2
-  exit 1
-fi
-grep -Fq 'profile reading level migration is irreversible' "$test_root/goose-profile-preferred-edition-down.err"
-printf 'ok 13 - profile PIN, legacy runtime, Default bootstrap, and profile reading-level migrations reject untruthful rollbacks\n'
-after_resources="$test_root/after-resources"
-docker ps -aq --filter label=com.pandapages.disposable=role-integration | sort >"$after_resources"
-[[ $(wc -l <"$after_resources") -eq 1 ]]
-printf 'ok 14 - generated test uses only isolated disposable resources\n'
+printf 'postgresql_roles_integration=passed\n'

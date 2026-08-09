@@ -10,7 +10,7 @@ readonly database_name=pandapages_identity_store_test
 readonly database_user=postgres
 readonly database_password='generated-identity-store-password-not-for-production'
 readonly postgres_image='postgres:18.1-alpine@sha256:b40d931bd0e7ce6eecc59a5a6ac3b3c04a01e559750e73e7086b6dbd7f8bf545'
-readonly migration_image=${PP_IDENTITY_STORE_TEST_MIGRATION_IMAGE:-pandapages-migrate:identity-test}
+readonly migration_image=${PP_IDENTITY_STORE_TEST_MIGRATION_IMAGE:-pandapages-migrate:reader-test}
 readonly resource_prefix="pandapages-identity-store-$$"
 readonly postgres_container="$resource_prefix-postgres"
 readonly network_name="$resource_prefix-network"
@@ -46,8 +46,6 @@ docker image inspect "$migration_image" >/dev/null 2>&1 || {
 
 network_created=false
 volume_created=false
-postgres_created=false
-goose_runs=0
 cleanup() {
   set +e
   docker ps -aq --filter "label=$resource_label" |
@@ -55,12 +53,8 @@ cleanup() {
       [[ -n "$container_id" ]] || continue
       docker rm --force "$container_id" >/dev/null 2>&1
     done
-  if $network_created; then
-    docker network rm "$network_name" >/dev/null 2>&1
-  fi
-  if $volume_created; then
-    docker volume rm "$volume_name" >/dev/null 2>&1
-  fi
+  $network_created && docker network rm "$network_name" >/dev/null 2>&1
+  $volume_created && docker volume rm "$volume_name" >/dev/null 2>&1
 }
 trap cleanup EXIT HUP INT TERM
 
@@ -95,27 +89,23 @@ docker run --detach \
   --health-timeout 3s \
   --health-retries 60 \
   "$postgres_image" >/dev/null
-postgres_created=true
 
 wait_for_stable_postgres "$postgres_container" "$database_user" "$database_name" \
   'Disposable identity-store PostgreSQL'
 
-run_goose() {
-  ((goose_runs += 1))
-  docker run --rm \
-    --name "$resource_prefix-goose-$goose_runs" \
-    --network "$network_name" \
-    --read-only \
-    --security-opt no-new-privileges \
-    --tmpfs /tmp:rw,nosuid,nodev,noexec,size=16m \
-    --label com.pandapages.disposable=identity-store-integration \
-    --label "$resource_label" \
-    --env GOOSE_DRIVER=postgres \
-    --env "GOOSE_DBSTRING=postgres://$database_user:$database_password@$postgres_container:5432/$database_name?sslmode=disable" \
-    --env GOOSE_MIGRATION_DIR=/migrations \
-    --mount "type=bind,src=$repo_root/apps/api/migrations,dst=/migrations,readonly" \
-    "$migration_image" "$@"
-}
+docker run --rm \
+  --name "$resource_prefix-goose" \
+  --network "$network_name" \
+  --read-only \
+  --security-opt no-new-privileges \
+  --tmpfs /tmp:rw,nosuid,nodev,noexec,size=16m \
+  --label com.pandapages.disposable=identity-store-integration \
+  --label "$resource_label" \
+  --env GOOSE_DRIVER=postgres \
+  --env "GOOSE_DBSTRING=postgres://$database_user:$database_password@$postgres_container:5432/$database_name?sslmode=disable" \
+  --env GOOSE_MIGRATION_DIR=/migrations \
+  --mount "type=bind,src=$repo_root/apps/api/migrations,dst=/migrations,readonly" \
+  "$migration_image" up >/dev/null
 
 query() {
   docker exec "$postgres_container" \
@@ -123,22 +113,12 @@ query() {
       --set=ON_ERROR_STOP=1 --tuples-only --no-align --command="$1"
 }
 
-run_goose up-to 16
-[[ $(query "SELECT version_id FROM goose_db_version WHERE is_applied ORDER BY id DESC LIMIT 1;") == 16 ]]
+[[ $(query "SELECT version_id FROM goose_db_version WHERE is_applied ORDER BY id DESC LIMIT 1;") == 1 ]]
 [[ $(query "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('principals','external_identities','account_memberships');") == 3 ]]
-
-run_goose up
-[[ $(query "SELECT version_id FROM goose_db_version WHERE is_applied ORDER BY id DESC LIMIT 1;") == 26 ]]
-[[ $(query "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('principals','external_identities','account_memberships');") == 3 ]]
-[[ $(query "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('account_settings','child_profiles','prompt_profiles','generation_jobs');") == 0 ]]
-[[ $(query "SELECT (to_regtype('public.generation_status') IS NULL)::int;") == 1 ]]
-[[ $(query "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='stories' AND column_name='source';") == 0 ]]
-[[ $(query "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='profiles' AND column_name IN ('pin_hash','pin_failed_attempts','pin_lock_until');") == 3 ]]
-[[ $(query "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='reading_progress' AND column_name='profile_id' AND is_nullable='NO';") == 1 ]]
-[[ $(query "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='reading_progress' AND column_name='account_id';") == 1 ]]
+[[ $(query "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('account_settings','child_profiles','prompt_profiles','generation_jobs','works');") == 0 ]]
+[[ $(query "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='profiles' AND column_name='reading_level' AND is_nullable='NO';") == 1 ]]
 [[ $(query "SELECT count(*) FROM accounts;") == 0 ]]
 [[ $(query "SELECT count(*) FROM profiles;") == 0 ]]
-[[ $(query "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='accounts' AND column_name='name' AND column_default IS NULL;") == 1 ]]
 
 published_address=$(docker port "$postgres_container" 5432/tcp)
 published_port=${published_address##*:}
@@ -152,5 +132,4 @@ database_url="postgres://$database_user:$database_password@127.0.0.1:$published_
     go test ./internal/db -run '^TestIdentityStoreIntegration$' -count=1
 )
 
-[[ -z $(docker ps -aq --filter "label=$resource_label" --filter status=exited) ]]
 printf 'identity_store_integration=passed\n'

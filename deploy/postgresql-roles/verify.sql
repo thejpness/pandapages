@@ -154,15 +154,11 @@ WHERE namespace.nspname = 'public'
 WITH runtime_table(name, immutable) AS (
   VALUES
     ('accounts', false),
-    ('account_settings', false),
     ('account_memberships', false),
-    ('child_profiles', false),
     ('contributors', false),
     ('external_identities', false),
     ('principals', false),
-    ('profile_settings', false),
     ('profiles', false),
-    ('prompt_profiles', false),
     ('reading_progress', false),
     ('stories', false),
     ('story_editions', false),
@@ -193,37 +189,13 @@ WITH runtime_table(name, immutable) AS (
     AND class.relkind IN ('r', 'p')
 )
 SELECT
-  count(*) = 12
-    + CASE WHEN to_regclass('public.child_profiles') IS NULL THEN 0 ELSE 1 END
-    + CASE WHEN to_regclass('public.prompt_profiles') IS NULL THEN 0 ELSE 1 END
-    + CASE WHEN to_regclass('public.profile_settings') IS NULL THEN 0 ELSE 1 END
-    + CASE WHEN to_regclass('public.account_settings') IS NULL THEN 0 ELSE 1 END
-    + CASE WHEN to_regclass('public.story_editions') IS NULL THEN 0 ELSE 1 END
-    + CASE WHEN to_regclass('public.story_sources') IS NULL THEN 0 ELSE 1 END
-    + CASE WHEN to_regclass('public.story_source_versions') IS NULL THEN 0 ELSE 1 END
-    + CASE WHEN to_regclass('public.story_releases') IS NULL THEN 0 ELSE 1 END
-    + CASE WHEN to_regclass('public.story_release_editions') IS NULL THEN 0 ELSE 1 END
-  AND CASE
-    WHEN COALESCE(
-      (SELECT max(version_id) FROM goose_db_version WHERE is_applied),
-      0
-    ) >= 23 THEN
-      to_regclass('public.child_profiles') IS NULL
-      AND to_regclass('public.prompt_profiles') IS NULL
-      AND to_regclass('public.profile_settings') IS NULL
-      AND to_regclass('public.account_settings') IS NULL
-      AND to_regclass('public.generation_jobs') IS NULL
-      AND to_regtype('public.generation_status') IS NULL
-    ELSE
-      to_regclass('public.child_profiles') IS NOT NULL
-      AND to_regclass('public.prompt_profiles') IS NOT NULL
-      AND to_regclass('public.generation_jobs') IS NOT NULL
-      AND to_regtype('public.generation_status') IS NOT NULL
-      AND (
-        (to_regclass('public.profile_settings') IS NULL)
-        <> (to_regclass('public.account_settings') IS NULL)
-      )
-  END
+  count(*) = 17
+  AND to_regclass('public.child_profiles') IS NULL
+  AND to_regclass('public.prompt_profiles') IS NULL
+  AND to_regclass('public.profile_settings') IS NULL
+  AND to_regclass('public.account_settings') IS NULL
+  AND to_regclass('public.generation_jobs') IS NULL
+  AND to_regtype('public.generation_status') IS NULL
   AND bool_and(
     oid IS NOT NULL
     AND can_select
@@ -244,6 +216,7 @@ FROM checked
   \warn 'verification failed: application table privileges are incomplete or excessive'
   SELECT 1 / 0;
 \endif
+
 
 SELECT count(*) = 1 AND bool_and(
   has_table_privilege(:'application_role', class.oid, 'SELECT')
@@ -270,15 +243,11 @@ WHERE namespace.nspname = 'public'
 WITH runtime_table(name) AS (
   VALUES
     ('accounts'),
-    ('account_settings'),
     ('account_memberships'),
-    ('child_profiles'),
     ('contributors'),
     ('external_identities'),
     ('principals'),
-    ('profile_settings'),
     ('profiles'),
-    ('prompt_profiles'),
     ('reading_progress'),
     ('stories'),
     ('story_editions'),
@@ -292,6 +261,7 @@ WITH runtime_table(name) AS (
     ('story_segments'),
     ('story_versions')
 )
+
 SELECT count(*) = 0 AS assertion
 FROM pg_class class
 JOIN pg_namespace namespace ON namespace.oid = class.relnamespace

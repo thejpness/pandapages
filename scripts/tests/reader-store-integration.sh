@@ -4,15 +4,18 @@ set -euo pipefail
 umask 077
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
+source "$repo_root/scripts/tests/postgresql-stable-readiness.sh"
 readonly repo_root
-readonly database_name='pandapages_reader_store_test'
-readonly database_user='postgres'
+readonly database_name=pandapages_reader_store_test
+readonly database_user=postgres
 readonly database_password='generated-reader-store-password-not-for-production'
-readonly postgres_image=${PP_READER_STORE_TEST_POSTGRES_IMAGE:-postgres:18.1-alpine}
+readonly postgres_image='postgres:18.1-alpine@sha256:b40d931bd0e7ce6eecc59a5a6ac3b3c04a01e559750e73e7086b6dbd7f8bf545'
 readonly migration_image=${PP_READER_STORE_TEST_MIGRATION_IMAGE:-pandapages-migrate:reader-test}
-readonly resource_prefix="pandapages-reader-store-test-$$"
-readonly container_name="$resource_prefix-postgres"
+readonly resource_prefix="pandapages-reader-store-$$"
+readonly postgres_container="$resource_prefix-postgres"
 readonly network_name="$resource_prefix-network"
+readonly volume_name="$resource_prefix-data"
+readonly resource_label="com.pandapages.reader-store-run=$resource_prefix"
 
 for command_name in docker go; do
   command -v "$command_name" >/dev/null 2>&1 || {
@@ -36,587 +39,98 @@ docker_endpoint=$(docker context inspect "$docker_context" --format '{{.Endpoint
   printf 'Docker must use a local Unix socket\n' >&2
   exit 1
 }
-
 docker image inspect "$migration_image" >/dev/null 2>&1 || {
   printf 'required migration image is unavailable: %s\n' "$migration_image" >&2
   exit 1
 }
 
-container_created=false
 network_created=false
-rollback_test_root=''
+volume_created=false
 cleanup() {
   set +e
-  if $container_created; then
-    docker rm --force "$container_name" >/dev/null 2>&1
-  fi
-  if $network_created; then
-    docker network rm "$network_name" >/dev/null 2>&1
-  fi
-  if [[ -n "$rollback_test_root" ]]; then
-    rm -rf -- "$rollback_test_root"
-  fi
+  docker ps -aq --filter "label=$resource_label" |
+    while IFS= read -r container_id; do
+      [[ -n "$container_id" ]] || continue
+      docker rm --force "$container_id" >/dev/null 2>&1
+    done
+  $network_created && docker network rm "$network_name" >/dev/null 2>&1
+  $volume_created && docker volume rm "$volume_name" >/dev/null 2>&1
 }
 trap cleanup EXIT HUP INT TERM
-trap 'printf "Reader Store integration failed at line %d\n" "$LINENO" >&2' ERR
 
 docker network create \
   --label com.pandapages.disposable=reader-store-integration \
+  --label "$resource_label" \
   "$network_name" >/dev/null
 network_created=true
 
-docker run --detach \
-  --name "$container_name" \
-  --network "$network_name" \
+docker volume create \
   --label com.pandapages.disposable=reader-store-integration \
+  --label "$resource_label" \
+  "$volume_name" >/dev/null
+volume_created=true
+
+docker run --detach \
+  --name "$postgres_container" \
+  --network "$network_name" \
+  --read-only \
+  --security-opt no-new-privileges \
+  --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
+  --tmpfs /var/run/postgresql:rw,nosuid,nodev,noexec,size=16m \
+  --label com.pandapages.disposable=reader-store-integration \
+  --label "$resource_label" \
   --env "POSTGRES_DB=$database_name" \
   --env "POSTGRES_USER=$database_user" \
   --env "POSTGRES_PASSWORD=$database_password" \
+  --mount "type=volume,src=$volume_name,dst=/var/lib/postgresql" \
   --publish 127.0.0.1::5432 \
   --health-cmd "pg_isready --username=$database_user --dbname=$database_name" \
   --health-interval 1s \
   --health-timeout 3s \
   --health-retries 60 \
   "$postgres_image" >/dev/null
-container_created=true
 
-health=starting
-for _ in {1..60}; do
-  health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_name")
-  [[ "$health" == healthy ]] && break
-  [[ "$health" != unhealthy ]] || {
-    printf 'disposable PostgreSQL became unhealthy\n' >&2
-    exit 1
-  }
-  sleep 1
-done
-[[ "$health" == healthy ]] || {
-  printf 'disposable PostgreSQL did not become healthy\n' >&2
-  exit 1
-}
+wait_for_stable_postgres "$postgres_container" "$database_user" "$database_name" \
+  'Disposable Reader-store PostgreSQL'
 
-psql_query() {
-  local statement=$1
-  docker exec "$container_name" \
+docker run --rm \
+  --name "$resource_prefix-goose" \
+  --network "$network_name" \
+  --read-only \
+  --security-opt no-new-privileges \
+  --tmpfs /tmp:rw,nosuid,nodev,noexec,size=16m \
+  --label com.pandapages.disposable=reader-store-integration \
+  --label "$resource_label" \
+  --env GOOSE_DRIVER=postgres \
+  --env "GOOSE_DBSTRING=postgres://$database_user:$database_password@$postgres_container:5432/$database_name?sslmode=disable" \
+  --env GOOSE_MIGRATION_DIR=/migrations \
+  --mount "type=bind,src=$repo_root/apps/api/migrations,dst=/migrations,readonly" \
+  "$migration_image" up >/dev/null
+
+query() {
+  docker exec "$postgres_container" \
     psql -X --username="$database_user" --dbname="$database_name" \
-      --set=ON_ERROR_STOP=1 --tuples-only --no-align --command="$statement"
+      --set=ON_ERROR_STOP=1 --tuples-only --no-align --command="$1"
 }
 
-assert_query() {
-  local expected=$1
-  local statement=$2
-  local description=$3
-  local actual
-  actual=$(psql_query "$statement")
-  [[ "$actual" == "$expected" ]] || {
-    printf '%s: expected %s, got %s\n' "$description" "$expected" "$actual" >&2
-    exit 1
-  }
-}
+[[ $(query "SELECT version_id FROM goose_db_version WHERE is_applied ORDER BY id DESC LIMIT 1;") == 1 ]]
+[[ $(query "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='story_segments' AND column_name='locator';") == 0 ]]
+[[ $(query "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='story_segments' AND column_name IN ('segment_kind','heading_level','content_key','content_occurrence','chapter_key','chapter_occurrence');") == 6 ]]
+[[ $(query "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='story_releases' AND column_name='migration_backfill';") == 0 ]]
+[[ $(query "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('story_editions','story_releases','story_release_editions','story_sources','story_source_versions','reading_progress');") == 6 ]]
 
-run_goose() {
-  docker run --rm \
-    --network "$network_name" \
-    --read-only \
-    --security-opt no-new-privileges \
-    --tmpfs /tmp:rw,nosuid,nodev,noexec,size=16m \
-    --env GOOSE_DRIVER=postgres \
-    --env "GOOSE_DBSTRING=postgres://$database_user:$database_password@$container_name:5432/$database_name?sslmode=disable" \
-    --env GOOSE_MIGRATION_DIR=/migrations \
-    --mount "type=bind,src=$repo_root/apps/api/migrations,dst=/migrations,readonly" \
-    "$migration_image" "$@"
-}
-
-expect_locator_rejected() {
-  local name=$1
-  local locator=$2
-  local output
-  if output=$(
-    docker exec -i "$container_name" \
-      psql -X --username="$database_user" --dbname="$database_name" \
-        --set=ON_ERROR_STOP=1 --set="locator=$locator" --file=- 2>&1 <<'SQL'
-UPDATE reading_progress AS progress
-SET locator = :'locator'::jsonb
-FROM stories AS story
-WHERE progress.story_id = story.id
-  AND story.slug = 'reader-2-migration-vector';
-SQL
-  ); then
-    printf 'database locator constraint accepted invalid case: %s\n' "$name" >&2
-    exit 1
-  fi
-  [[ "$output" == *reading_progress_reader_locator_v2_check* ]] || {
-    printf 'invalid locator case failed outside the v2 constraint: %s\n' "$name" >&2
-    exit 1
-  }
-}
-
-expect_sql_rejected() {
-  local name=$1
-  local expected_constraint=$2
-  local statement=$3
-  local output
-  if output=$(
-    docker exec "$container_name" \
-      psql -X --username="$database_user" --dbname="$database_name" \
-        --set=ON_ERROR_STOP=1 --command="$statement" 2>&1
-  ); then
-    printf 'database edition constraint accepted invalid case: %s\n' "$name" >&2
-    exit 1
-  fi
-  [[ "$output" == *"$expected_constraint"* ]] || {
-    printf 'edition case %s failed outside %s\n' "$name" "$expected_constraint" >&2
-    printf '%s\n' "$output" >&2
-    exit 1
-  }
-}
-
-run_goose up-to 13 >/dev/null
-
-docker exec -i "$container_name" \
-  psql -X --username="$database_user" --dbname="$database_name" \
-    --set=ON_ERROR_STOP=1 --file=- >/dev/null <<'SQL'
-BEGIN;
-
-WITH target_account AS (
-  SELECT id FROM accounts ORDER BY created_at, id LIMIT 1
-)
-INSERT INTO stories (id, account_id, slug, title, author, language, is_published)
-SELECT
-  'e2140000-0000-4000-8000-000000000001',
-  id,
-  'reader-2-migration-vector',
-  'Reader 2 migration vector',
-  'Test only',
-  'en-GB',
-  true
-FROM target_account;
-
-INSERT INTO story_versions (id, story_id, version, markdown, rendered_html, content_hash)
-VALUES (
-  'e2140000-0000-4000-8000-000000000002',
-  'e2140000-0000-4000-8000-000000000001',
-  1,
-  'migration vector',
-  '<p>migration vector</p>',
-  encode(digest('migration vector', 'sha256'), 'hex')
-);
-
-INSERT INTO story_segments (story_version_id, ordinal, locator, markdown, rendered_html, word_count)
-VALUES
-  ('e2140000-0000-4000-8000-000000000002', 1, '{"type":"heading","h":1,"index":0}', '# Café Panda 🐼', '<h1>Café Panda 🐼</h1>', 3),
-  ('e2140000-0000-4000-8000-000000000002', 2, '{"type":"para","n":1}', E'Line one\r\nLine two', '<p>Line one<br>Line two</p>', 4),
-  ('e2140000-0000-4000-8000-000000000002', 3, '{"type":"para","n":2}', E'Line one\nLine two', '<p>Line one<br>Line two</p>', 4),
-  ('e2140000-0000-4000-8000-000000000002', 4, '{"type":"heading","h":2,"index":1}', 'Same words', '<h2>Same words</h2>', 2),
-  ('e2140000-0000-4000-8000-000000000002', 5, '{"type":"para","n":3}', 'Same words', '<p>Same words</p>', 2),
-  ('e2140000-0000-4000-8000-000000000002', 6, '{"type":"heading","h":2,"index":2}', 'Same words', '<h2>Same words</h2>', 2),
-  ('e2140000-0000-4000-8000-000000000002', 7, '{"type":"heading","h":3,"index":3}', 'Same words', '<h3>Same words</h3>', 2);
-
-UPDATE stories
-SET draft_version_id = 'e2140000-0000-4000-8000-000000000002',
-    published_version_id = 'e2140000-0000-4000-8000-000000000002'
-WHERE id = 'e2140000-0000-4000-8000-000000000001';
-
-INSERT INTO reading_progress (profile_id, story_id, story_version_id, locator, percent)
-SELECT
-  profile.id,
-  story.id,
-  'e2140000-0000-4000-8000-000000000002',
-  '{"mode":"scroll","scrollY":420}',
-  0.42
-FROM stories AS story
-JOIN LATERAL (
-  SELECT id FROM profiles WHERE account_id = story.account_id ORDER BY created_at, id LIMIT 1
-) AS profile ON true
-WHERE story.id = 'e2140000-0000-4000-8000-000000000001';
-
-COMMIT;
-SQL
-
-assert_query '1' 'SELECT count(*) FROM reading_progress;' 'pre-migration Reader 1 progress'
-run_goose up-to 14 >/dev/null
-
-assert_query '0|0|7' "
-  SELECT
-    (SELECT count(*) FROM reading_progress),
-    (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'story_segments' AND column_name = 'locator'),
-    (SELECT count(*) FROM story_segments WHERE story_version_id = 'e2140000-0000-4000-8000-000000000002');
-" 'Reader 2 schema and progress reset'
-
-assert_query '3356355f7cdbea17f247fcd38f581fe42cea6d5b3f7965bd9122a6645cd68b71|015af1d8c2b2f0983b6c8cbc952f42dca6e0a2f379dfdb306fd6f34179f50f29|1|015af1d8c2b2f0983b6c8cbc952f42dca6e0a2f379dfdb306fd6f34179f50f29|2|85ec640a768ec54ad57c68d8e9e561a278f426c8f3c7ca7c71cafc9acb489787|5e92e2acdcf286b6d82be228f32aa1743e3a2912d4b5ee6d268a2d460d104942|2|2|3834b9971e0eb29227bb98f3dc156deb06e27c9b40f358b05c52f4df4e3449e8|2' "
-  SELECT
-    (SELECT content_key FROM story_segments WHERE story_version_id = 'e2140000-0000-4000-8000-000000000002' AND ordinal = 1),
-    (SELECT content_key FROM story_segments WHERE story_version_id = 'e2140000-0000-4000-8000-000000000002' AND ordinal = 2),
-    (SELECT content_occurrence FROM story_segments WHERE story_version_id = 'e2140000-0000-4000-8000-000000000002' AND ordinal = 2),
-    (SELECT content_key FROM story_segments WHERE story_version_id = 'e2140000-0000-4000-8000-000000000002' AND ordinal = 3),
-    (SELECT content_occurrence FROM story_segments WHERE story_version_id = 'e2140000-0000-4000-8000-000000000002' AND ordinal = 3),
-    (SELECT content_key FROM story_segments WHERE story_version_id = 'e2140000-0000-4000-8000-000000000002' AND ordinal = 4),
-    (SELECT content_key FROM story_segments WHERE story_version_id = 'e2140000-0000-4000-8000-000000000002' AND ordinal = 5),
-    (SELECT content_occurrence FROM story_segments WHERE story_version_id = 'e2140000-0000-4000-8000-000000000002' AND ordinal = 6),
-    (SELECT chapter_occurrence FROM story_segments WHERE story_version_id = 'e2140000-0000-4000-8000-000000000002' AND ordinal = 6),
-    (SELECT content_key FROM story_segments WHERE story_version_id = 'e2140000-0000-4000-8000-000000000002' AND ordinal = 7),
-    (SELECT chapter_occurrence FROM story_segments WHERE story_version_id = 'e2140000-0000-4000-8000-000000000002' AND ordinal = 7);
-" 'SQL and Go canonical key vectors and chapter occurrences'
-
-assert_query '3|4' "
-  SELECT
-    (SELECT count(*) FROM story_segments WHERE story_version_id = 'e2140000-0000-4000-8000-000000000002' AND ordinal < 4 AND chapter_key IS NULL AND chapter_occurrence IS NULL),
-    (SELECT count(*) FROM story_segments WHERE story_version_id = 'e2140000-0000-4000-8000-000000000002' AND ordinal >= 4 AND chapter_key = '85ec640a768ec54ad57c68d8e9e561a278f426c8f3c7ca7c71cafc9acb489787' AND chapter_occurrence IN (1, 2));
-" 'H2 chapter propagation'
-
-psql_query "
-  INSERT INTO reading_progress (profile_id, story_id, story_version_id, locator, percent)
-  SELECT
-    profile.id,
-    story.id,
-    version.id,
-    '{\"schema\":2,\"segment\":{\"key\":\"5e92e2acdcf286b6d82be228f32aa1743e3a2912d4b5ee6d268a2d460d104942\",\"occurrence\":1,\"ordinal\":5,\"offset\":0.35},\"chapter\":{\"key\":\"85ec640a768ec54ad57c68d8e9e561a278f426c8f3c7ca7c71cafc9acb489787\",\"occurrence\":1}}',
-    0.5
-  FROM stories AS story
-  JOIN story_versions AS version ON version.story_id = story.id AND version.version = 1
-  JOIN LATERAL (
-    SELECT id FROM profiles WHERE account_id = story.account_id ORDER BY created_at, id LIMIT 1
-  ) AS profile ON true
-  WHERE story.slug = 'reader-2-migration-vector';
-" >/dev/null
-
-expect_locator_rejected non-object '[]'
-expect_locator_rejected missing-schema '{"segment":{"key":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","occurrence":1,"ordinal":1,"offset":0}}'
-expect_locator_rejected missing-segment '{"schema":2}'
-expect_locator_rejected wrong-schema '{"schema":1,"segment":{"key":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","occurrence":1,"ordinal":1,"offset":0}}'
-expect_locator_rejected reader-one '{"mode":"scroll","scrollY":20}'
-expect_locator_rejected invalid-key '{"schema":2,"segment":{"key":"BAD","occurrence":1,"ordinal":1,"offset":0}}'
-expect_locator_rejected occurrence-string '{"schema":2,"segment":{"key":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","occurrence":"1","ordinal":1,"offset":0}}'
-expect_locator_rejected occurrence-zero '{"schema":2,"segment":{"key":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","occurrence":0,"ordinal":1,"offset":0}}'
-expect_locator_rejected ordinal-string '{"schema":2,"segment":{"key":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","occurrence":1,"ordinal":"1","offset":0}}'
-expect_locator_rejected ordinal-zero '{"schema":2,"segment":{"key":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","occurrence":1,"ordinal":0,"offset":0}}'
-expect_locator_rejected offset-string '{"schema":2,"segment":{"key":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","occurrence":1,"ordinal":1,"offset":"0.5"}}'
-expect_locator_rejected offset-low '{"schema":2,"segment":{"key":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","occurrence":1,"ordinal":1,"offset":-0.1}}'
-expect_locator_rejected offset-high '{"schema":2,"segment":{"key":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","occurrence":1,"ordinal":1,"offset":1.1}}'
-expect_locator_rejected partial-chapter '{"schema":2,"segment":{"key":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","occurrence":1,"ordinal":1,"offset":0},"chapter":{"key":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}'
-expect_locator_rejected invalid-chapter-key '{"schema":2,"segment":{"key":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","occurrence":1,"ordinal":1,"offset":0},"chapter":{"key":"BAD","occurrence":1}}'
-expect_locator_rejected chapter-occurrence-zero '{"schema":2,"segment":{"key":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","occurrence":1,"ordinal":1,"offset":0},"chapter":{"key":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","occurrence":0}}'
-expect_locator_rejected unknown-field '{"schema":2,"segment":{"key":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","occurrence":1,"ordinal":1,"offset":0},"extra":true}'
-
-psql_query 'DELETE FROM reading_progress;' >/dev/null
-run_goose down-to 13 >/dev/null
-assert_query '1|0|0' "
-  SELECT
-    (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'story_segments' AND column_name = 'locator'),
-    (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'story_segments' AND column_name = 'content_key'),
-    (SELECT count(*) FROM reading_progress);
-" 'Reader 2 Down limitation'
-run_goose up-to 14 >/dev/null
-assert_query '0|1|0' "
-  SELECT
-    (SELECT count(*) FROM reading_progress),
-    (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'story_segments' AND column_name = 'content_key'),
-    (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'story_segments' AND column_name = 'locator');
-" 'Reader 2 Down and Up rerun'
-
-# Migration 00017 keeps account-scoped rows, but their reader ownership is
-# unknowable. Seed one valid account-scoped-beta predecessor through the real
-# chain, then prove migration 00018 discards only that ambiguous progress.
-psql_query "
-  INSERT INTO reading_progress (profile_id, story_id, story_version_id, locator, percent)
-  SELECT
-    profile.id,
-    story.id,
-    version.id,
-    jsonb_build_object(
-      'schema', 2,
-      'segment', jsonb_build_object(
-        'key', '5e92e2acdcf286b6d82be228f32aa1743e3a2912d4b5ee6d268a2d460d104942',
-        'occurrence', 1, 'ordinal', 5, 'offset', 0.35
-      ),
-      'chapter', jsonb_build_object(
-        'key', '85ec640a768ec54ad57c68d8e9e561a278f426c8f3c7ca7c71cafc9acb489787',
-        'occurrence', 1
-      )
-    ),
-    0.5
-  FROM stories AS story
-  JOIN story_versions AS version ON version.story_id = story.id AND version.version = 1
-  JOIN LATERAL (
-    SELECT id FROM profiles WHERE account_id = story.account_id ORDER BY id LIMIT 1
-  ) AS profile ON true
-  WHERE story.slug = 'reader-2-migration-vector';
-" >/dev/null
-run_goose up-to 17 >/dev/null
-assert_query '1|0|1' "
-  SELECT
-    (SELECT count(*) FROM reading_progress),
-    (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='reading_progress' AND column_name='profile_id'),
-    (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='reading_progress' AND column_name='account_id');
-" 'account-scoped predecessor progress'
-pre_profile_scope_roots=$(psql_query "
-  SELECT
-    (SELECT count(*) FROM accounts) || '|' ||
-    (SELECT count(*) FROM profiles) || '|' ||
-    (SELECT count(*) FROM stories) || '|' ||
-    (SELECT count(*) FROM account_settings);
-")
-run_goose up-to 18 >/dev/null
-assert_query "${pre_profile_scope_roots}|0|1|1" "
-  SELECT
-    (SELECT count(*) FROM accounts) || '|' ||
-    (SELECT count(*) FROM profiles) || '|' ||
-    (SELECT count(*) FROM stories) || '|' ||
-    (SELECT count(*) FROM account_settings) || '|' ||
-    (SELECT count(*) FROM reading_progress) || '|' ||
-    (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='reading_progress' AND column_name='profile_id' AND is_nullable='NO') || '|' ||
-    (SELECT count(*) FROM pg_constraint WHERE conname='reading_progress_profile_account_fkey' AND convalidated);
-" 'profile-scoped progress reset preserves account roots and settings'
-rollback_test_root=$(mktemp -d "${TMPDIR:-/tmp}/pandapages-reader-progress.XXXXXX")
-if run_goose down-to 17 >"$rollback_test_root/down.out" 2>"$rollback_test_root/down.err"; then
-  printf 'Goose unexpectedly accepted profile-scoped progress rollback\n' >&2
-  exit 1
-fi
-grep -Fq 'profile-scoped reading progress migration is irreversible' "$rollback_test_root/down.err"
-rm -rf -- "$rollback_test_root"
-rollback_test_root=''
-
-# Migration 00019 introduces only local reader-mode PIN security state. Its
-# down migration fails explicitly rather than silently removing protection.
-run_goose up-to 19 >/dev/null
-assert_query '3' "
-  SELECT count(*)
-  FROM information_schema.columns
-  WHERE table_schema='public' AND table_name='profiles'
-    AND column_name IN ('pin_hash', 'pin_failed_attempts', 'pin_lock_until');
-" 'profile PIN security columns'
-rollback_test_root=$(mktemp -d "${TMPDIR:-/tmp}/pandapages-profile-pin.XXXXXX")
-if run_goose down-to 18 >"$rollback_test_root/down.out" 2>"$rollback_test_root/down.err"; then
-  printf 'Goose unexpectedly accepted profile PIN security rollback\n' >&2
-  exit 1
-fi
-grep -Fq 'profile PIN security migration is irreversible' "$rollback_test_root/down.err"
-rm -rf -- "$rollback_test_root"
-rollback_test_root=''
-
-# Migration 00020 adds the edition lifecycle without changing the public Reader
-# contract. Every historical version is attached to a Classic edition and both
-# compatibility pointers are copied exactly.
-run_goose up-to 20 >/dev/null
-assert_query 'classic|attached|draft|published' "
-  SELECT
-    edition.edition_key || '|' ||
-    CASE WHEN version.edition_id = edition.id THEN 'attached' ELSE 'detached' END || '|' ||
-    CASE WHEN edition.draft_version_id = story.draft_version_id THEN 'draft' ELSE 'draft-mismatch' END || '|' ||
-    CASE WHEN edition.published_version_id = story.published_version_id THEN 'published' ELSE 'published-mismatch' END
-  FROM stories AS story
-  JOIN story_editions AS edition
-    ON edition.story_id = story.id
-   AND edition.edition_key = 'classic'
-  JOIN story_versions AS version
-    ON version.story_id = story.id
-   AND version.id = 'e2140000-0000-4000-8000-000000000002'
-  WHERE story.slug = 'reader-2-migration-vector';
-" 'Classic edition backfill and compatibility pointers'
-
-expect_sql_rejected invalid-edition-key story_editions_edition_key_check "
-  INSERT INTO story_editions (story_id, edition_key)
-  SELECT id, 'bedtime-ultra'
-  FROM stories
-  WHERE slug = 'reader-2-migration-vector';
-"
-
-psql_query "
-  INSERT INTO story_editions (story_id, edition_key)
-  SELECT id, 'growing-readers'
-  FROM stories
-  WHERE slug = 'reader-2-migration-vector';
-" >/dev/null
-
-expect_sql_rejected cross-edition-draft-pointer story_editions_draft_version_fkey "
-  UPDATE story_editions
-  SET draft_version_id = 'e2140000-0000-4000-8000-000000000002'
-  WHERE story_id = (
-    SELECT id FROM stories WHERE slug = 'reader-2-migration-vector'
-  )
-    AND edition_key = 'growing-readers';
-"
-
-psql_query "
-  INSERT INTO story_versions (
-    story_id, edition_id, version, frontmatter, markdown, rendered_html, content_hash
-  )
-  SELECT
-    original.story_id,
-    edition.id,
-    2,
-    original.frontmatter,
-    original.markdown,
-    original.rendered_html,
-    original.content_hash
-  FROM story_versions AS original
-  JOIN story_editions AS edition
-    ON edition.story_id = original.story_id
-   AND edition.edition_key = 'growing-readers'
-  WHERE original.id = 'e2140000-0000-4000-8000-000000000002';
-" >/dev/null
-assert_query '2' "
-  SELECT count(*)
-  FROM story_versions AS version
-  JOIN stories AS story ON story.id = version.story_id
-  WHERE story.slug = 'reader-2-migration-vector';
-" 'same immutable body may exist independently in two editions'
-
-psql_query "
-  DELETE FROM story_versions
-  WHERE story_id = (SELECT id FROM stories WHERE slug = 'reader-2-migration-vector')
-    AND version = 2;
-  DELETE FROM story_editions
-  WHERE story_id = (SELECT id FROM stories WHERE slug = 'reader-2-migration-vector')
-    AND edition_key = 'growing-readers';
-" >/dev/null
-
-run_goose down-to 19 >/dev/null
-assert_query '0|0|1' "
-  SELECT
-    (SELECT count(*) FROM information_schema.tables
-      WHERE table_schema='public' AND table_name='story_editions') || '|' ||
-    (SELECT count(*) FROM information_schema.columns
-      WHERE table_schema='public' AND table_name='story_versions' AND column_name='edition_id') || '|' ||
-    (SELECT count(*) FROM pg_constraint
-      WHERE conname='story_versions_story_id_content_hash_key');
-" 'edition migration rollback restores the pre-20 version shape'
-
-run_goose up-to 20 >/dev/null
-assert_query '1|1|1' "
-  SELECT
-    (SELECT count(*) FROM story_editions AS edition
-      JOIN stories AS story ON story.id=edition.story_id
-      WHERE story.slug='reader-2-migration-vector' AND edition.edition_key='classic') || '|' ||
-    (SELECT count(*) FROM story_versions
-      WHERE id='e2140000-0000-4000-8000-000000000002' AND edition_id IS NOT NULL) || '|' ||
-    (SELECT count(*) FROM pg_constraint
-      WHERE conname='story_versions_edition_id_content_hash_key');
-" 'edition migration reapplies cleanly'
-
-
-# Migration 00021 establishes explicit canonical-source provenance. Existing
-# adaptations are not backfilled, and the unused Works scaffolding disappears.
-run_goose up-to 21 >/dev/null
-assert_query '0|0|0|0' "
-  SELECT
-    (SELECT count(*) FROM story_sources) || '|' ||
-    (SELECT count(*) FROM story_source_versions) || '|' ||
-    (SELECT count(*) FROM information_schema.tables
-      WHERE table_schema='public' AND table_name='works') || '|' ||
-    (SELECT count(*) FROM information_schema.columns
-      WHERE table_schema='public' AND table_name='stories' AND column_name='work_id');
-" 'canonical source migration starts empty and retires Works'
-
-run_goose down-to 20 >/dev/null
-assert_query '0|0|1|1' "
-  SELECT
-    (SELECT count(*) FROM information_schema.tables
-      WHERE table_schema='public' AND table_name='story_sources') || '|' ||
-    (SELECT count(*) FROM information_schema.tables
-      WHERE table_schema='public' AND table_name='story_source_versions') || '|' ||
-    (SELECT count(*) FROM information_schema.tables
-      WHERE table_schema='public' AND table_name='works') || '|' ||
-    (SELECT count(*) FROM information_schema.columns
-      WHERE table_schema='public' AND table_name='stories' AND column_name='work_id');
-" 'canonical source migration empty rollback restores historical shape'
-
-run_goose up-to 21 >/dev/null
-assert_query '1|1|0|0' "
-  SELECT
-    (SELECT count(*) FROM information_schema.tables
-      WHERE table_schema='public' AND table_name='story_sources') || '|' ||
-    (SELECT count(*) FROM information_schema.tables
-      WHERE table_schema='public' AND table_name='story_source_versions') || '|' ||
-    (SELECT count(*) FROM information_schema.tables
-      WHERE table_schema='public' AND table_name='works') || '|' ||
-    (SELECT count(*) FROM information_schema.columns
-      WHERE table_schema='public' AND table_name='stories' AND column_name='work_id');
-" 'canonical source migration reapplies cleanly'
-
-# Migration 00022 establishes immutable one-to-five edition releases. Existing
-# Classic publication is backfilled as a legitimate one-edition release.
-run_goose up-to 22 >/dev/null
-assert_query '1|1|1|1' "
-  SELECT
-    (SELECT count(*) FROM story_releases AS release
-      JOIN stories AS story ON story.id = release.story_id
-      WHERE story.slug='reader-2-migration-vector'
-        AND release.release_number=1
-        AND release.migration_backfill) || '|' ||
-    (SELECT count(*) FROM story_release_editions AS member
-      JOIN story_releases AS release ON release.id=member.release_id
-      JOIN story_editions AS edition ON edition.id=member.edition_id
-      JOIN stories AS story ON story.id=release.story_id
-      WHERE story.slug='reader-2-migration-vector'
-        AND edition.edition_key='classic') || '|' ||
-    (SELECT count(*) FROM stories
-      WHERE slug='reader-2-migration-vector'
-        AND current_release_id IS NOT NULL
-        AND is_published) || '|' ||
-    (SELECT count(*) FROM information_schema.columns
-      WHERE table_schema='public'
-        AND table_name='stories'
-        AND column_name='current_release_id');
-" 'release migration backfills the existing Classic publication'
-
-run_goose down-to 21 >/dev/null
-assert_query '0|0|0|1' "
-  SELECT
-    (SELECT count(*) FROM information_schema.tables
-      WHERE table_schema='public' AND table_name='story_releases') || '|' ||
-    (SELECT count(*) FROM information_schema.tables
-      WHERE table_schema='public' AND table_name='story_release_editions') || '|' ||
-    (SELECT count(*) FROM information_schema.columns
-      WHERE table_schema='public' AND table_name='stories' AND column_name='current_release_id') || '|' ||
-    (SELECT count(*) FROM stories
-      WHERE slug='reader-2-migration-vector'
-        AND published_version_id IS NOT NULL
-        AND is_published);
-" 'release migration rollback restores the pre-22 publication shape'
-
-run_goose up-to 22 >/dev/null
-
-published_address=$(docker port "$container_name" 5432/tcp)
+published_address=$(docker port "$postgres_container" 5432/tcp)
 published_port=${published_address##*:}
-[[ "$published_port" =~ ^[0-9]+$ ]] || {
-  printf 'Docker returned an invalid disposable PostgreSQL port\n' >&2
-  exit 1
-}
-
+[[ "$published_port" =~ ^[0-9]+$ ]]
 database_url="postgres://$database_user:$database_password@127.0.0.1:$published_port/$database_name?sslmode=disable"
+
 (
   cd "$repo_root/apps/api"
   PP_READER_STORE_TEST_DISPOSABLE=1 \
     PP_READER_STORE_TEST_DATABASE_URL="$database_url" \
-    go test ./internal/db -run '^(TestReaderStoreIntegration|TestAdminEditionBundleIntegration|TestAdminReleaseIntegration)$' -count=1
+    go test ./internal/db \
+      -run '^(TestReaderStoreIntegration|TestAdminEditionBundleIntegration|TestAdminReleaseIntegration)$' \
+      -count=1
 )
 
-# Store integration tests intentionally create non-backfill release history.
-# Remove only that disposable publication state so the existing migration-21
-# rollback refusal can still reach the canonical-source boundary.
-psql_query "
-  UPDATE story_editions SET published_version_id = NULL;
-  UPDATE stories
-  SET current_release_id = NULL,
-      published_version_id = NULL,
-      is_published = false;
-  DELETE FROM story_releases WHERE NOT migration_backfill;
-" >/dev/null
-
-rollback_test_root=$(mktemp -d "${TMPDIR:-/tmp}/pandapages-story-source.XXXXXX")
-if run_goose down-to 20 >"$rollback_test_root/down.out" 2>"$rollback_test_root/down.err"; then
-  printf 'Goose unexpectedly accepted canonical-source rollback after source data existed\n' >&2
-  exit 1
-fi
-grep -Fq 'canonical source rollback refused: source data exists' "$rollback_test_root/down.err"
-rm -rf -- "$rollback_test_root"
-rollback_test_root=''
-
-cleanup
-container_created=false
-network_created=false
-trap - EXIT HUP INT TERM
-[[ -z $(docker ps -aq --filter label=com.pandapages.disposable=reader-store-integration) ]]
-[[ -z $(docker network ls -q --filter label=com.pandapages.disposable=reader-store-integration) ]]
 printf 'reader_store_integration=passed\n'

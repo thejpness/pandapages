@@ -275,8 +275,8 @@ SET published_version_id = 'f17e0000-0000-4000-8000-000000000011',
 WHERE story_id = 'f17e0000-0000-4000-8000-000000000010'
   AND edition_key = 'classic';
 
-INSERT INTO story_releases (story_id, release_number, migration_backfill)
-VALUES ('f17e0000-0000-4000-8000-000000000010', 1, false)
+INSERT INTO story_releases (story_id, release_number)
+VALUES ('f17e0000-0000-4000-8000-000000000010', 1)
 ON CONFLICT (story_id, release_number) DO NOTHING;
 
 INSERT INTO story_release_editions (release_id, story_id, edition_id, story_version_id)
