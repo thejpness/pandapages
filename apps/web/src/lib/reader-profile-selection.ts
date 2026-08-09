@@ -49,17 +49,27 @@ export function clearSelectedReaderProfile(
   }
 }
 
+export function resolvePersistedReaderProfileSelection(
+  persistedID: string | null,
+  profiles: readonly ReaderProfileCandidate[],
+): ReaderProfileSelection | null {
+  if (persistedID === null) return null
+  const profile = profiles.find((candidate) => candidate.id === persistedID)
+  return profile ? { id: profile.id } : null
+}
+
 // reconcileReaderProfileSelection trusts only the current server-returned
 // account-scoped list. It never chooses an arbitrary profile: auto-selection
-// is limited to the unambiguous one-profile state.
+// is limited to the unambiguous one-profile state used by the Profiles screen.
 export function reconcileReaderProfileSelection(
   persistedID: string | null,
   profiles: readonly ReaderProfileCandidate[],
 ): ReaderProfileSelection | null {
-  if (persistedID !== null) {
-    const profile = profiles.find((candidate) => candidate.id === persistedID)
-    if (profile) return { id: profile.id }
-  }
+  const persisted = resolvePersistedReaderProfileSelection(
+    persistedID,
+    profiles,
+  )
+  if (persisted !== null) return persisted
   if (profiles.length === 1) return { id: profiles[0].id }
   return null
 }

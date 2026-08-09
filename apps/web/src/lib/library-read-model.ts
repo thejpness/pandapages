@@ -1,4 +1,8 @@
-import type { LibraryProgress, LibraryStory } from './api'
+import type {
+  LibraryEditionSummary,
+  LibraryProgress,
+  LibraryStory,
+} from './api'
 
 export type { LibraryProgress, LibraryStory } from './api'
 
@@ -18,6 +22,11 @@ export type LibraryCoverPresentation = {
   ink: string
   pattern: LibraryCoverPattern
   initials: string
+}
+
+export type LibraryCountBounds = {
+  min: number
+  max: number
 }
 
 export const LIBRARY_BEGINNING_PERCENT = 0.02
@@ -59,6 +68,34 @@ function progressDetails(input: ProgressInput): ProgressDetails {
   return { progress: input, unavailable: false }
 }
 
+function selectedLibraryEdition(story: LibraryStory): LibraryEditionSummary | null {
+  if (story.state !== 'selected' || story.selectedEdition === null) return null
+  return (
+    story.eligibleEditions.find(
+      (edition) => edition.editionKey === story.selectedEdition,
+    ) ?? null
+  )
+}
+
+function bounds(values: readonly number[]): LibraryCountBounds {
+  if (values.length === 0) return { min: 0, max: 0 }
+  return { min: Math.min(...values), max: Math.max(...values) }
+}
+
+export function libraryWordCountBounds(story: LibraryStory): LibraryCountBounds {
+  const selected = selectedLibraryEdition(story)
+  if (selected !== null) return { min: selected.wordCount, max: selected.wordCount }
+  return bounds(story.eligibleEditions.map((edition) => edition.wordCount))
+}
+
+export function libraryChapterCountBounds(story: LibraryStory): LibraryCountBounds {
+  const selected = selectedLibraryEdition(story)
+  if (selected !== null) {
+    return { min: selected.chapterCount, max: selected.chapterCount }
+  }
+  return bounds(story.eligibleEditions.map((edition) => edition.chapterCount))
+}
+
 export function libraryDisplayPercent(input: ProgressInput): number {
   const { progress } = progressDetails(input)
   if (progress === null) return 0
@@ -76,13 +113,16 @@ export function classifyLibraryProgress(
   const { progress, unavailable } = progressDetails(input)
   if (unavailable) return 'unavailable'
   if (progress === null) return 'not-started'
-  if (!progress.isCurrentVersion) return 'updated'
+  if (!progress.isResolvedVersion) return 'updated'
   if (progress.percent <= LIBRARY_BEGINNING_PERCENT) return 'beginning'
   if (progress.percent >= LIBRARY_COMPLETED_PERCENT) return 'completed'
   return 'in-progress'
 }
 
 export function libraryActionLabel(input: ProgressInput): string {
+  if (input !== null && 'state' in input && input.state === 'chooser') {
+    return 'Choose edition'
+  }
   const { progress } = progressDetails(input)
   const kind = classifyLibraryProgress(input)
   if (kind === 'in-progress' && progress !== null) {
@@ -143,13 +183,23 @@ export function libraryCoverPresentation(
   }
 }
 
-export function libraryLengthLabel(wordCount: number): string {
-  return `${numberFormatter.format(wordCount)} ${wordCount === 1 ? 'word' : 'words'}`
+function countLabel(value: number, singular: string, plural: string): string {
+  return `${numberFormatter.format(value)} ${value === 1 ? singular : plural}`
 }
 
-export function libraryChapterLabel(chapterCount: number): string {
-  if (chapterCount === 0) return 'No chapter breaks'
-  return `${numberFormatter.format(chapterCount)} ${chapterCount === 1 ? 'chapter' : 'chapters'}`
+export function libraryLengthLabel(story: LibraryStory): string {
+  const { min, max } = libraryWordCountBounds(story)
+  if (min === max) return countLabel(min, 'word', 'words')
+  return `${numberFormatter.format(min)}–${numberFormatter.format(max)} words`
+}
+
+export function libraryChapterLabel(story: LibraryStory): string {
+  const { min, max } = libraryChapterCountBounds(story)
+  if (min === max) {
+    if (min === 0) return 'No chapter breaks'
+    return countLabel(min, 'chapter', 'chapters')
+  }
+  return `${numberFormatter.format(min)}–${numberFormatter.format(max)} chapters`
 }
 
 const heroPriority: Partial<Record<LibraryProgressKind, number>> = {

@@ -186,240 +186,6 @@ func libraryVersionMetadata(
 	return title, author, language, nil
 }
 
-func (s *Store) Library(accountID string) (model.LibraryReadModel, error) {
-	ctx, cancel := s.ctx()
-	defer cancel()
-
-	// Segment rows are kept in this single statement so catalogue metadata and
-	// Reader 2 identities all come from one PostgreSQL snapshot. Reading
-	// progress is intentionally absent: it is reader-profile scoped and never
-	// inferred for an account-scoped catalogue response.
-	rows, err := s.db.QueryContext(ctx, `
-		WITH candidates AS (
-			SELECT
-				story.id AS story_id,
-				story.slug,
-				story.created_at,
-				story.updated_at,
-				version.id AS live_version_id,
-				version.version AS published_version,
-				version.frontmatter::text AS frontmatter
-			FROM stories AS story
-			JOIN story_release_editions AS member
-			  ON member.release_id = story.current_release_id
-			 AND member.story_id = story.id
-			JOIN story_editions AS edition
-			  ON edition.id = member.edition_id
-			 AND edition.story_id = story.id
-			 AND edition.edition_key = 'classic'
-			JOIN story_versions AS version
-			  ON version.id = member.story_version_id
-			 AND version.story_id = story.id
-			 AND version.edition_id = edition.id
-			WHERE story.account_id = $1
-		)
-		SELECT
-			candidates.story_id,
-			candidates.slug,
-			candidates.frontmatter,
-			candidates.live_version_id,
-			candidates.published_version,
-			segment.id,
-			segment.ordinal,
-			segment.segment_kind,
-			segment.heading_level,
-			segment.content_key,
-			segment.content_occurrence,
-			segment.chapter_key,
-			segment.chapter_occurrence,
-			segment.word_count
-		FROM candidates
-		LEFT JOIN story_segments AS segment
-		  ON segment.story_version_id = candidates.live_version_id
-		ORDER BY
-			candidates.updated_at DESC,
-			candidates.created_at DESC,
-			candidates.slug ASC,
-			candidates.story_id ASC,
-			segment.ordinal ASC NULLS FIRST
-	`, accountID)
-	if err != nil {
-		return model.LibraryReadModel{}, err
-	}
-	defer rows.Close()
-
-	type storyAccumulator struct {
-		item               model.StoryItem
-		storyID            string
-		publishedVersionID string
-		identities         []readercontract.StoredSegmentIdentity
-		wordCount          int64
-		invalid            bool
-	}
-
-	result := model.LibraryReadModel{Items: make([]model.StoryItem, 0, 16)}
-	var current *storyAccumulator
-	finalize := func() error {
-		if current == nil {
-			return nil
-		}
-		if len(current.identities) == 0 {
-			current.invalid = true
-		}
-		if !current.invalid {
-			chapterCount, err := readercontract.ValidateStoredSegmentIdentities(current.identities)
-			if err != nil {
-				current.invalid = true
-			} else {
-				current.item.WordCount = current.wordCount
-				current.item.ChapterCount = int64(chapterCount)
-			}
-		}
-		if current.invalid {
-			if result.UnavailableItemCount == maxSafeJSONInteger {
-				return fmt.Errorf("unavailable library item count exceeds the safe JSON integer range")
-			}
-			result.UnavailableItemCount++
-			return nil
-		}
-		result.Items = append(result.Items, current.item)
-		return nil
-	}
-
-	for rows.Next() {
-		var (
-			storyID              string
-			slug                 string
-			frontmatterJSON      sql.NullString
-			publishedVersionID   sql.NullString
-			publishedVersion     sql.NullInt64
-			segmentID            sql.NullString
-			segmentOrdinal       sql.NullInt64
-			segmentKind          sql.NullString
-			segmentHeadingLevel  sql.NullInt64
-			segmentContentKey    sql.NullString
-			segmentOccurrence    sql.NullInt64
-			segmentChapterKey    sql.NullString
-			segmentChapterNumber sql.NullInt64
-			segmentWordCount     sql.NullInt64
-		)
-		if err := rows.Scan(
-			&storyID,
-			&slug,
-			&frontmatterJSON,
-			&publishedVersionID,
-			&publishedVersion,
-			&segmentID,
-			&segmentOrdinal,
-			&segmentKind,
-			&segmentHeadingLevel,
-			&segmentContentKey,
-			&segmentOccurrence,
-			&segmentChapterKey,
-			&segmentChapterNumber,
-			&segmentWordCount,
-		); err != nil {
-			return model.LibraryReadModel{}, err
-		}
-
-		if current == nil || current.storyID != storyID {
-			if err := finalize(); err != nil {
-				return model.LibraryReadModel{}, err
-			}
-			current = &storyAccumulator{
-				item:       model.StoryItem{Slug: slug},
-				storyID:    storyID,
-				identities: make([]readercontract.StoredSegmentIdentity, 0, 32),
-			}
-
-			if strings.TrimSpace(storyID) == "" || !validLibrarySlug(slug) ||
-				!publishedVersionID.Valid || strings.TrimSpace(publishedVersionID.String) == "" ||
-				!frontmatterJSON.Valid || !publishedVersion.Valid {
-				current.invalid = true
-			} else {
-				current.publishedVersionID = publishedVersionID.String
-			}
-			versionValue := int(publishedVersion.Int64)
-			if !publishedVersion.Valid || publishedVersion.Int64 <= 0 || int64(versionValue) != publishedVersion.Int64 {
-				current.invalid = true
-			} else {
-				current.item.PublishedVersion = versionValue
-			}
-
-			title, author, language, metadataErr := libraryVersionMetadata([]byte(frontmatterJSON.String))
-			if !frontmatterJSON.Valid || metadataErr != nil {
-				current.invalid = true
-			} else {
-				current.item.Title = title
-				current.item.Author = author
-				current.item.Language = language
-			}
-
-		}
-
-		if !segmentID.Valid {
-			if segmentOrdinal.Valid || segmentKind.Valid || segmentHeadingLevel.Valid ||
-				segmentContentKey.Valid || segmentOccurrence.Valid || segmentChapterKey.Valid ||
-				segmentChapterNumber.Valid || segmentWordCount.Valid {
-				current.invalid = true
-			}
-			continue
-		}
-		if strings.TrimSpace(segmentID.String) == "" || !segmentOrdinal.Valid || !segmentKind.Valid ||
-			!segmentContentKey.Valid || !segmentOccurrence.Valid || !segmentWordCount.Valid {
-			current.invalid = true
-			continue
-		}
-
-		ordinal := int(segmentOrdinal.Int64)
-		occurrence := int(segmentOccurrence.Int64)
-		if segmentOrdinal.Int64 <= 0 || int64(ordinal) != segmentOrdinal.Int64 ||
-			segmentOccurrence.Int64 <= 0 || int64(occurrence) != segmentOccurrence.Int64 ||
-			segmentWordCount.Int64 < 0 || segmentWordCount.Int64 > maxSafeJSONInteger-current.wordCount {
-			current.invalid = true
-			continue
-		}
-
-		identity := readercontract.StoredSegmentIdentity{
-			Ordinal:           ordinal,
-			Kind:              readercontract.SegmentKind(segmentKind.String),
-			ContentKey:        segmentContentKey.String,
-			ContentOccurrence: occurrence,
-		}
-		if segmentHeadingLevel.Valid {
-			value := int(segmentHeadingLevel.Int64)
-			if int64(value) != segmentHeadingLevel.Int64 {
-				current.invalid = true
-				continue
-			}
-			identity.HeadingLevel = &value
-		}
-		if segmentChapterKey.Valid != segmentChapterNumber.Valid {
-			current.invalid = true
-			continue
-		}
-		if segmentChapterKey.Valid {
-			value := int(segmentChapterNumber.Int64)
-			if segmentChapterNumber.Int64 <= 0 || int64(value) != segmentChapterNumber.Int64 {
-				current.invalid = true
-				continue
-			}
-			key := segmentChapterKey.String
-			identity.ChapterKey = &key
-			identity.ChapterOccurrence = &value
-		}
-		current.wordCount += segmentWordCount.Int64
-		current.identities = append(current.identities, identity)
-	}
-	if err := rows.Err(); err != nil {
-		return model.LibraryReadModel{}, err
-	}
-	if err := finalize(); err != nil {
-		return model.LibraryReadModel{}, err
-	}
-	return result, nil
-}
-
 /* ----------------------------- Reader ----------------------------- */
 
 func lockClassicReaderVersion(
@@ -619,47 +385,51 @@ func (s *Store) ProgressGet(accountID, profileID, slug string) (model.ProgressRe
 	ctx, cancel := s.ctx()
 	defer cancel()
 
-	var (
-		hasProgress bool
-		version     sql.NullInt64
-		locatorJSON []byte
-		percent     sql.NullFloat64
-	)
-	err := s.db.QueryRowContext(ctx, `
-		SELECT
-			rp.story_version_id IS NOT NULL,
-			sv.version,
-			rp.locator,
-			rp.percent
-		FROM stories st
-		LEFT JOIN reading_progress rp
-		  ON rp.story_id = st.id
-		 AND rp.account_id = $1
-		 AND rp.profile_id = $2
-		LEFT JOIN story_versions sv
-		  ON sv.id = rp.story_version_id
-		 AND sv.story_id = st.id
-		WHERE st.account_id = $1
-		  AND st.slug = $3
-		  AND EXISTS (
-			SELECT 1
-			FROM story_release_editions AS member
-			JOIN story_editions AS edition
-			  ON edition.id = member.edition_id
-			 AND edition.story_id = member.story_id
-			WHERE member.release_id = st.current_release_id
-			  AND member.story_id = st.id
-			  AND edition.edition_key = 'classic'
-		  )
-	`, accountID, profileID, slug).Scan(&hasProgress, &version, &locatorJSON, &percent)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return model.ProgressResponse{}, err
 	}
-	if !hasProgress {
+	defer func() { _ = tx.Rollback() }()
+
+	access, err := lockReaderProfileStoryAccess(ctx, tx, accountID, profileID, slug)
+	if err != nil {
+		return model.ProgressResponse{}, err
+	}
+	eligible, err := currentReleaseHasAllowedReaderEdition(ctx, tx, access)
+	if err != nil {
+		return model.ProgressResponse{}, err
+	}
+	if !eligible {
+		return model.ProgressResponse{}, sql.ErrNoRows
+	}
+
+	var (
+		version     int
+		locatorJSON []byte
+		percent     float64
+	)
+	err = tx.QueryRowContext(ctx, `
+		SELECT version.version, progress.locator, progress.percent
+		FROM reading_progress AS progress
+		JOIN story_versions AS version
+		  ON version.id = progress.story_version_id
+		 AND version.story_id = progress.story_id
+		WHERE progress.account_id = $1
+		  AND progress.profile_id = $2
+		  AND progress.story_id = $3
+	`, accountID, profileID, access.StoryID).Scan(
+		&version,
+		&locatorJSON,
+		&percent,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		if err := tx.Commit(); err != nil {
+			return model.ProgressResponse{}, err
+		}
 		return model.ProgressResponse{Progress: nil}, nil
 	}
-	if !version.Valid || !percent.Valid {
-		return model.ProgressResponse{}, fmt.Errorf("stored progress is incomplete")
+	if err != nil {
+		return model.ProgressResponse{}, err
 	}
 
 	var locator readercontract.Locator
@@ -669,10 +439,13 @@ func (s *Store) ProgressGet(accountID, profileID, slug string) (model.ProgressRe
 	if err := locator.Validate(); err != nil {
 		return model.ProgressResponse{}, fmt.Errorf("validate stored Reader locator: %w", err)
 	}
+	if err := tx.Commit(); err != nil {
+		return model.ProgressResponse{}, err
+	}
 	return model.ProgressResponse{Progress: &model.Progress{
-		Version: int(version.Int64),
+		Version: version,
 		Locator: locator,
-		Percent: clamp01(percent.Float64),
+		Percent: clamp01(percent),
 	}}, nil
 }
 
@@ -693,21 +466,14 @@ func (s *Store) ProgressPut(accountID, profileID, slug string, version int, loca
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	storyID, versionID, err := lockClassicReaderVersion(ctx, tx, accountID, slug)
+	access, err := lockReaderProfileStoryAccess(ctx, tx, accountID, profileID, slug)
 	if err != nil {
 		return err
 	}
-	var currentVersionID string
-	if err := tx.QueryRowContext(ctx, `
-		SELECT id
-		FROM story_versions
-		WHERE id = $1
-		  AND story_id = $2
-		  AND version = $3
-	`, versionID, storyID, version).Scan(&currentVersionID); err != nil {
+	versionID, err := currentReleaseReaderVersionByNumber(ctx, tx, access, version)
+	if err != nil {
 		return err
 	}
-	versionID = currentVersionID
 
 	var (
 		storedKey               string
@@ -765,7 +531,7 @@ func (s *Store) ProgressPut(accountID, profileID, slug string, version int, loca
 			locator=EXCLUDED.locator,
 			percent=EXCLUDED.percent,
 			updated_at=now()
-	`, accountID, profileID, storyID, versionID, locatorJSON, percent); err != nil {
+	`, accountID, profileID, access.StoryID, versionID, locatorJSON, percent); err != nil {
 		return err
 	}
 
@@ -785,28 +551,56 @@ func (s *Store) ContinueRecent(accountID, profileID string, limit int) ([]model.
 	ctx, cancel := s.ctx()
 	defer cancel()
 
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT st.slug, rp.percent, rp.updated_at
-		FROM reading_progress rp
-		JOIN stories st
-		  ON st.id = rp.story_id
-		 AND st.account_id = rp.account_id
-		WHERE rp.account_id = $2
-		  AND rp.profile_id = $3
-		  AND st.account_id = $2
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var readingLevelValue string
+	if err := tx.QueryRowContext(ctx, `
+		SELECT reading_level
+		FROM profiles
+		WHERE account_id = $1
+		  AND id = $2
+		FOR SHARE
+	`, accountID, profileID).Scan(&readingLevelValue); err != nil {
+		return nil, err
+	}
+	allowed, err := readerEditionAllowanceFlags(model.ReaderEditionKey(readingLevelValue))
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT story.slug, progress.percent, progress.updated_at
+		FROM reading_progress AS progress
+		JOIN stories AS story
+		  ON story.id = progress.story_id
+		 AND story.account_id = progress.account_id
+		WHERE progress.account_id = $2
+		  AND progress.profile_id = $3
 		  AND EXISTS (
 			SELECT 1
 			FROM story_release_editions AS member
 			JOIN story_editions AS edition
 			  ON edition.id = member.edition_id
 			 AND edition.story_id = member.story_id
-			WHERE member.release_id = st.current_release_id
-			  AND member.story_id = st.id
-			  AND edition.edition_key = 'classic'
+			WHERE member.release_id = story.current_release_id
+			  AND member.story_id = story.id
+			  AND (
+				($4 AND edition.edition_key = 'classic')
+				OR ($5 AND edition.edition_key = 'confident-readers')
+				OR ($6 AND edition.edition_key = 'growing-readers')
+				OR ($7 AND edition.edition_key = 'story-explorers')
+				OR ($8 AND edition.edition_key = 'little-listeners')
+			  )
 		  )
-		ORDER BY rp.updated_at DESC
+		ORDER BY progress.updated_at DESC
 		LIMIT $1
-	`, limit, accountID, profileID)
+	`, limit, accountID, profileID,
+		allowed[0], allowed[1], allowed[2], allowed[3], allowed[4],
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -814,16 +608,21 @@ func (s *Store) ContinueRecent(accountID, profileID string, limit int) ([]model.
 
 	out := make([]model.ContinueItem, 0, limit)
 	for rows.Next() {
-		var it model.ContinueItem
-		if err := rows.Scan(&it.Slug, &it.Percent, &it.UpdatedAt); err != nil {
+		var item model.ContinueItem
+		if err := rows.Scan(&item.Slug, &item.Percent, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
-		it.Percent = clamp01(it.Percent)
-		out = append(out, it)
+		item.Percent = clamp01(item.Percent)
+		out = append(out, item)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
 	return out, nil
 }

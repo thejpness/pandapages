@@ -551,6 +551,31 @@ export function useReaderProgress(options: UseReaderProgressOptions) {
     }
   }
 
+  async function flushForStoryChange(): Promise<boolean> {
+    if (
+      handlingSessionLoss ||
+      baselineState.value.status !== 'ready' ||
+      decision.value !== null
+    ) {
+      return false
+    }
+
+    try {
+      if (saveState.value.status === 'error') {
+        await coordinator?.retry()
+      } else {
+        if (!captureSuppressed.value && !awaitingIntent) {
+          const current = snapshot(options.capture())
+          if (current) coordinator?.update(current, { debounce: false })
+        }
+        await coordinator?.flush()
+      }
+      return true
+    } catch {
+      return false
+    }
+  }
+
   async function goLibrary() {
     if (navigatingToLibrary.value) return
     leaveAfterSaveFailure.value = false
@@ -662,6 +687,7 @@ export function useReaderProgress(options: UseReaderProgressOptions) {
     startCurrentVersion,
     dismissDecision,
     returnToLibraryFromVersionDecision,
+    flushForStoryChange,
     goLibrary,
     leaveAnyway,
     pageHide,

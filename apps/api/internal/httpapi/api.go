@@ -29,8 +29,10 @@ type Config struct {
 type Store interface {
 	CheckReadiness(context.Context) error
 
-	Library(accountID string) (model.LibraryReadModel, error)
-	ReaderStory(accountID, slug string) (model.ReaderStory, error)
+	ReaderLibrary(accountID, profileID string) (model.ReaderLibraryReadModel, error)
+	ReaderResolve(accountID, profileID, slug string) (model.ReaderResolution, error)
+	ReaderStoryEditionOverridePut(accountID, profileID, slug string, editionKey model.ReaderEditionKey) error
+	ReaderStoryEditionOverrideClear(accountID, profileID, slug string) (bool, error)
 
 	ProgressGet(accountID, profileID, slug string) (model.ProgressResponse, error)
 	ProgressPut(accountID, profileID, slug string, version int, locator readercontract.Locator, percent float64) error
@@ -126,14 +128,22 @@ func New(cfg Config, store Store) http.Handler {
 		}
 	}
 
-	// Library
-	mux.HandleFunc("/api/v1/library", withBearerAccount(func(w http.ResponseWriter, r *http.Request, accountID string) {
+	// Library is profile scoped because story visibility, edition resolution,
+	// and progress presentation all depend on the explicitly selected reader.
+	mux.HandleFunc("/api/v1/library", withBearerProfile(func(w http.ResponseWriter, r *http.Request, profile httpprofile.Context) {
 		if r.Method != http.MethodGet {
 			methodNotAllowed(w, []string{http.MethodGet})
 			return
 		}
 
-		library, err := store.Library(accountID)
+		library, err := store.ReaderLibrary(profile.AccountID, profile.ProfileID)
+		if errors.Is(err, sql.ErrNoRows) {
+			// The profile passed middleware validation but may have been deleted
+			// before the Store transaction began. Preserve the profile ownership
+			// boundary rather than turning that race into a story-level 404.
+			writeErr(w, http.StatusForbidden, "profile_forbidden", "profile is not available in this account")
+			return
+		}
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, "db", "library query failed")
 			return
@@ -143,14 +153,16 @@ func New(cfg Config, store Store) http.Handler {
 		writeJSON(w, http.StatusOK, library)
 	}))
 
-	// Reader 2: one coherent published-version payload.
-	mux.HandleFunc("/api/v1/reader/", withBearerAccount(func(w http.ResponseWriter, r *http.Request, accountID string) {
+	// Reader release resolution is profile scoped and is the sole public Reader
+	// content route. It returns either one exact immutable selected edition or a
+	// finite chooser without story content.
+	mux.HandleFunc("/api/v1/reader-resolution/", withBearerProfile(func(w http.ResponseWriter, r *http.Request, profile httpprofile.Context) {
 		if r.Method != http.MethodGet {
 			methodNotAllowed(w, []string{http.MethodGet})
 			return
 		}
 
-		slug := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/reader/"), "/")
+		slug := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/reader-resolution/"), "/")
 		if slug == "" {
 			writeErr(w, http.StatusBadRequest, "slug", "missing slug")
 			return
@@ -160,18 +172,85 @@ func New(cfg Config, store Store) http.Handler {
 			return
 		}
 
-		p, err := store.ReaderStory(accountID, slug)
+		resolution, err := store.ReaderResolve(profile.AccountID, profile.ProfileID, slug)
 		if errors.Is(err, sql.ErrNoRows) {
 			writeErr(w, http.StatusNotFound, "not_found", "story not found")
 			return
 		}
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, "db", "reader query failed")
+			writeErr(w, http.StatusInternalServerError, "db", "reader resolution failed")
 			return
 		}
 
 		noStore(w)
-		writeJSON(w, http.StatusOK, p)
+		writeJSON(w, http.StatusOK, resolution)
+	}))
+
+	// Explicit Reader edition selection is durable per profile/story. PUT sets a
+	// validated current-release choice; DELETE idempotently clears only that
+	// choice and never changes reading progress.
+	mux.HandleFunc("/api/v1/reader-edition/", withBearerProfile(func(w http.ResponseWriter, r *http.Request, profile httpprofile.Context) {
+		slug := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/reader-edition/"), "/")
+		if slug == "" {
+			writeErr(w, http.StatusBadRequest, "slug", "missing slug")
+			return
+		}
+		if strings.Contains(slug, "/") {
+			writeErr(w, http.StatusNotFound, "not_found", "reader story not found")
+			return
+		}
+
+		switch r.Method {
+		case http.MethodPut:
+			var body struct {
+				EditionKey model.ReaderEditionKey `json:"editionKey"`
+			}
+			if err := decodeJSON(w, r, &body); err != nil {
+				writeDecodeError(w, err)
+				return
+			}
+			if !model.ValidReaderEditionKey(body.EditionKey) {
+				writeErr(w, http.StatusBadRequest, "edition_invalid", "reading edition is not supported")
+				return
+			}
+
+			err := store.ReaderStoryEditionOverridePut(
+				profile.AccountID,
+				profile.ProfileID,
+				slug,
+				body.EditionKey,
+			)
+			if errors.Is(err, sql.ErrNoRows) {
+				writeErr(w, http.StatusNotFound, "not_found", "story edition not found")
+				return
+			}
+			if err != nil {
+				writeErr(w, http.StatusInternalServerError, "db", "reader edition update failed")
+				return
+			}
+
+			noStore(w)
+			writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+			return
+
+		case http.MethodDelete:
+			if _, err := store.ReaderStoryEditionOverrideClear(
+				profile.AccountID,
+				profile.ProfileID,
+				slug,
+			); err != nil {
+				writeErr(w, http.StatusInternalServerError, "db", "reader edition clear failed")
+				return
+			}
+
+			noStore(w)
+			writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+			return
+
+		default:
+			methodNotAllowed(w, []string{http.MethodPut, http.MethodDelete})
+			return
+		}
 	}))
 
 	// Progress
@@ -425,7 +504,7 @@ func decodeProfileInput(
 	r *http.Request,
 ) (string, model.ReaderEditionKey, bool) {
 	var body struct {
-		Name             string                 `json:"name"`
+		Name         string                 `json:"name"`
 		ReadingLevel model.ReaderEditionKey `json:"readingLevel"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {

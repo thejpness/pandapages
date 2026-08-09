@@ -70,16 +70,20 @@ func TestProgressStoreIntegration(t *testing.T) {
 	store := newProgressIntegrationStore(t, databaseURL)
 
 	const (
-		accountA  = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-		accountB  = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
-		profileA  = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01"
-		profileA2 = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa02"
-		profileB  = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
-		storyA    = "aaaaaaaa-0000-4000-8000-000000000001"
-		editionA  = "aaaaaaaa-2000-4000-8000-000000000001"
-		versionA  = "aaaaaaaa-1000-4000-8000-000000000001"
-		releaseA  = "aaaaaaaa-3000-4000-8000-000000000001"
-		slug      = "shared-slug"
+		accountA       = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+		accountB       = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+		profileA       = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01"
+		profileA2      = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa02"
+		profileLittle  = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa03"
+		profileB       = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+		storyA         = "aaaaaaaa-0000-4000-8000-000000000001"
+		editionA       = "aaaaaaaa-2000-4000-8000-000000000001"
+		editionLittle  = "aaaaaaaa-2000-4000-8000-000000000002"
+		versionA       = "aaaaaaaa-1000-4000-8000-000000000001"
+		versionLittle  = "aaaaaaaa-1000-4000-8000-000000000002"
+		releaseA       = "aaaaaaaa-3000-4000-8000-000000000001"
+		releaseClassic = "aaaaaaaa-3000-4000-8000-000000000002"
+		slug           = "shared-slug"
 	)
 
 	if _, err := adminDB.Exec(
@@ -91,10 +95,11 @@ func TestProgressStoreIntegration(t *testing.T) {
 	}
 	if _, err := adminDB.Exec(
 		`INSERT INTO profiles (id, account_id, name, reading_level) VALUES
-			($1, $2, 'Ted', 'little-listeners'),
+			($1, $2, 'Ted', 'classic'),
 			($3, $2, 'Alex', 'classic'),
-			($4, $5, 'Sam', 'growing-readers')`,
-		profileA, accountA, profileA2, profileB, accountB,
+			($4, $5, 'Sam', 'classic'),
+			($6, $2, 'Mila', 'little-listeners')`,
+		profileA, accountA, profileA2, profileB, accountB, profileLittle,
 	); err != nil {
 		t.Fatalf("insert progress profiles: %v", err)
 	}
@@ -107,11 +112,14 @@ func TestProgressStoreIntegration(t *testing.T) {
 		t.Fatalf("insert account A story: %v", err)
 	}
 	if _, err := adminDB.Exec(
-		`INSERT INTO story_editions (id, story_id, edition_key) VALUES ($1, $2, 'classic')`,
+		`INSERT INTO story_editions (id, story_id, edition_key) VALUES
+			($1, $2, 'classic'),
+			($3, $2, 'little-listeners')`,
 		editionA,
 		storyA,
+		editionLittle,
 	); err != nil {
-		t.Fatalf("insert account A Classic edition: %v", err)
+		t.Fatalf("insert account A editions: %v", err)
 	}
 	if _, err := adminDB.Exec(
 		`INSERT INTO story_versions (id, story_id, edition_id, version, rendered_html) VALUES ($1, $2, $3, 1, '<p>A</p>')`,
@@ -120,6 +128,14 @@ func TestProgressStoreIntegration(t *testing.T) {
 		editionA,
 	); err != nil {
 		t.Fatalf("insert account A version: %v", err)
+	}
+	if _, err := adminDB.Exec(
+		`INSERT INTO story_versions (id, story_id, edition_id, version, rendered_html) VALUES ($1, $2, $3, 2, '<p>Little</p>')`,
+		versionLittle,
+		storyA,
+		editionLittle,
+	); err != nil {
+		t.Fatalf("insert account A Little Listeners version: %v", err)
 	}
 	if _, err := adminDB.Exec(`
 		INSERT INTO story_segments (
@@ -133,6 +149,16 @@ func TestProgressStoreIntegration(t *testing.T) {
 	`, versionA, progressKeyA, progressChapterKey, progressKeyB); err != nil {
 		t.Fatalf("insert account A segments: %v", err)
 	}
+	if _, err := adminDB.Exec(`
+		INSERT INTO story_segments (
+			story_version_id, ordinal, segment_kind, heading_level,
+			content_key, content_occurrence, chapter_key, chapter_occurrence,
+			markdown, rendered_html, word_count
+		) VALUES
+			($1, 1, 'paragraph', NULL, $2, 1, NULL, NULL, 'Little opening', '<p>Little opening</p>', 2)
+	`, versionLittle, "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"); err != nil {
+		t.Fatalf("insert account A Little Listeners segment: %v", err)
+	}
 	if _, err := adminDB.Exec(
 		`INSERT INTO story_releases (id, story_id, release_number) VALUES ($1, $2, 1)`,
 		releaseA,
@@ -141,13 +167,17 @@ func TestProgressStoreIntegration(t *testing.T) {
 		t.Fatalf("insert account A release: %v", err)
 	}
 	if _, err := adminDB.Exec(
-		`INSERT INTO story_release_editions (release_id, story_id, edition_id, story_version_id) VALUES ($1, $2, $3, $4)`,
+		`INSERT INTO story_release_editions (release_id, story_id, edition_id, story_version_id) VALUES
+			($1, $2, $3, $4),
+			($1, $2, $5, $6)`,
 		releaseA,
 		storyA,
 		editionA,
 		versionA,
+		editionLittle,
+		versionLittle,
 	); err != nil {
-		t.Fatalf("insert account A release member: %v", err)
+		t.Fatalf("insert account A release members: %v", err)
 	}
 	if _, err := adminDB.Exec(
 		`UPDATE stories SET current_release_id = $2 WHERE id = $1`,
@@ -415,6 +445,106 @@ func TestProgressStoreIntegration(t *testing.T) {
 			t.Fatalf("ProgressGet account A after rejected ownership writes: %v", err)
 		}
 		assertProgressState(t, gotA, 1, locatorA, 0.91)
+	})
+
+	t.Run("reading level gates current release progress without deleting stale history", func(t *testing.T) {
+		littleLocator := progressLocator(
+			"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+			1,
+			1,
+			0.4,
+			false,
+		)
+		classicLocator := progressLocator(progressKeyA, 1, 1, 0.2, false)
+
+		if err := store.ProgressPut(accountA, profileLittle, slug, 1, classicLocator, 0.1); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("Little Listeners Classic ProgressPut error = %v, want sql.ErrNoRows", err)
+		}
+		if err := store.ProgressPut(accountA, profileLittle, slug, 2, littleLocator, 0.64); err != nil {
+			t.Fatalf("Little Listeners current ProgressPut: %v", err)
+		}
+		got, err := store.ProgressGet(accountA, profileLittle, slug)
+		if err != nil {
+			t.Fatalf("Little Listeners ProgressGet: %v", err)
+		}
+		assertProgressState(t, got, 2, littleLocator, 0.64)
+
+		items, err := store.ContinueRecent(accountA, profileLittle, 3)
+		if err != nil || len(items) != 1 || items[0].Slug != slug {
+			t.Fatalf("Little Listeners ContinueRecent = %#v / %v", items, err)
+		}
+
+		if _, err := adminDB.Exec(
+			`INSERT INTO story_releases (id, story_id, release_number) VALUES ($1, $2, 2)`,
+			releaseClassic,
+			storyA,
+		); err != nil {
+			t.Fatalf("insert Classic-only release: %v", err)
+		}
+		if _, err := adminDB.Exec(
+			`INSERT INTO story_release_editions (release_id, story_id, edition_id, story_version_id) VALUES ($1, $2, $3, $4)`,
+			releaseClassic,
+			storyA,
+			editionA,
+			versionA,
+		); err != nil {
+			t.Fatalf("insert Classic-only release member: %v", err)
+		}
+		if _, err := adminDB.Exec(
+			`UPDATE stories SET current_release_id = $2 WHERE id = $1`,
+			storyA,
+			releaseClassic,
+		); err != nil {
+			t.Fatalf("make Classic-only release current: %v", err)
+		}
+
+		if _, err := store.ProgressGet(accountA, profileLittle, slug); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("ineligible ProgressGet error = %v, want sql.ErrNoRows", err)
+		}
+		if err := store.ProgressPut(accountA, profileLittle, slug, 2, littleLocator, 0.7); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("stale Little Listeners ProgressPut error = %v, want sql.ErrNoRows", err)
+		}
+		items, err = store.ContinueRecent(accountA, profileLittle, 3)
+		if err != nil || len(items) != 0 {
+			t.Fatalf("ineligible ContinueRecent = %#v / %v, want empty", items, err)
+		}
+
+		var storedRows int
+		if err := adminDB.QueryRow(`
+			SELECT count(*)
+			FROM reading_progress
+			WHERE account_id = $1 AND profile_id = $2 AND story_id = $3
+		`, accountA, profileLittle, storyA).Scan(&storedRows); err != nil {
+			t.Fatalf("count retained stale progress: %v", err)
+		}
+		if storedRows != 1 {
+			t.Fatalf("retained stale progress rows = %d, want 1", storedRows)
+		}
+
+		if _, err := adminDB.Exec(`
+			UPDATE profiles
+			SET reading_level = 'classic'
+			WHERE account_id = $1 AND id = $2
+		`, accountA, profileLittle); err != nil {
+			t.Fatalf("raise profile Reading Level to Classic: %v", err)
+		}
+
+		got, err = store.ProgressGet(accountA, profileLittle, slug)
+		if err != nil {
+			t.Fatalf("eligible story with stale progress ProgressGet: %v", err)
+		}
+		assertProgressState(t, got, 2, littleLocator, 0.64)
+		if err := store.ProgressPut(accountA, profileLittle, slug, 2, littleLocator, 0.72); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("non-current stale version ProgressPut error = %v, want sql.ErrNoRows", err)
+		}
+		if err := store.ProgressPut(accountA, profileLittle, slug, 1, classicLocator, 0.72); err != nil {
+			t.Fatalf("current eligible Classic ProgressPut: %v", err)
+		}
+		got, err = store.ProgressGet(accountA, profileLittle, slug)
+		if err != nil {
+			t.Fatalf("current Classic ProgressGet: %v", err)
+		}
+		assertProgressState(t, got, 1, classicLocator, 0.72)
 	})
 }
 

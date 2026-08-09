@@ -1,11 +1,26 @@
 import { AxeBuilder } from '@axe-core/playwright'
 import { expect, test as base } from './support/auth'
 import type { Page, Route } from '@playwright/test'
+
+type ReaderEditionKeyFixture =
+  | 'classic'
+  | 'confident-readers'
+  | 'growing-readers'
+  | 'story-explorers'
+  | 'little-listeners'
+
 type LibraryProgressFixture = {
   version: number
   percent: number
   updatedAt: string
-  isCurrentVersion: boolean
+  isResolvedVersion: boolean
+}
+
+type LibraryEditionFixture = {
+  editionKey: ReaderEditionKeyFixture
+  version: number
+  wordCount: number
+  chapterCount: number
 }
 
 type LibraryStoryFixture = {
@@ -13,9 +28,9 @@ type LibraryStoryFixture = {
   title: string
   author: string | null
   language: string
-  publishedVersion: number
-  wordCount: number
-  chapterCount: number
+  state: 'selected' | 'chooser'
+  eligibleEditions: LibraryEditionFixture[]
+  selectedEdition: ReaderEditionKeyFixture | null
   progress: LibraryProgressFixture | null
 }
 
@@ -49,20 +64,31 @@ type QueuedResponse = MockResponse | InternalGate
 
 const browserIdentity = { authenticated: true, principal: { id: '123e4567-e89b-12d3-a456-426614174100', displayName: 'Panda Pages Adult' }, memberships: [{ accountId: '123e4567-e89b-12d3-a456-426614174200', accountName: 'My Panda Pages', role: 'owner' }] }
 const SORT_STORAGE_KEY = 'pp_library_sort_v1'
+const LIBRARY_PROFILE_ID = '123e4567-e89b-42d3-a456-426614174300'
+const SELECTED_PROFILE_STORAGE_KEY = 'pandapages.selected-reader-profile-id'
+
+function edition(
+  editionKey: ReaderEditionKeyFixture,
+  version: number,
+  wordCount: number,
+  chapterCount: number,
+): LibraryEditionFixture {
+  return { editionKey, version, wordCount, chapterCount }
+}
 
 const CURRENT_STORY: LibraryStoryFixture = {
   slug: 'moonlit-cafe',
   title: 'Moonlit Café',
   author: 'Mara Bell',
   language: 'en-GB',
-  publishedVersion: 2,
-  wordCount: 1_200,
-  chapterCount: 4,
+  state: 'selected',
+  eligibleEditions: [edition('growing-readers', 2, 1_200, 4)],
+  selectedEdition: 'growing-readers',
   progress: {
     version: 2,
     percent: 0.42,
     updatedAt: '2026-07-19T12:00:00Z',
-    isCurrentVersion: true,
+    isResolvedVersion: true,
   },
 }
 
@@ -71,14 +97,14 @@ const COMPLETED_STORY: LibraryStoryFixture = {
   title: 'Amber Woods',
   author: 'Traditional',
   language: 'en',
-  publishedVersion: 1,
-  wordCount: 2_400,
-  chapterCount: 6,
+  state: 'selected',
+  eligibleEditions: [edition('growing-readers', 1, 2_400, 6)],
+  selectedEdition: 'growing-readers',
   progress: {
     version: 1,
     percent: 0.99,
     updatedAt: '2026-07-19T11:00:00Z',
-    isCurrentVersion: true,
+    isResolvedVersion: true,
   },
 }
 
@@ -87,14 +113,14 @@ const UPDATED_STORY: LibraryStoryFixture = {
   title: 'Brave Bamboo',
   author: 'Jun Park',
   language: 'en',
-  publishedVersion: 3,
-  wordCount: 800,
-  chapterCount: 3,
+  state: 'selected',
+  eligibleEditions: [edition('growing-readers', 3, 800, 3)],
+  selectedEdition: 'growing-readers',
   progress: {
     version: 2,
     percent: 0.61,
     updatedAt: '2026-07-19T13:00:00Z',
-    isCurrentVersion: false,
+    isResolvedVersion: false,
   },
 }
 
@@ -104,9 +130,9 @@ const LONG_UNAUTHORED_STORY: LibraryStoryFixture = {
     'Zebra and the Astonishingly Long Night-Time Journey Across the Bamboo Moon',
   author: null,
   language: 'en',
-  publishedVersion: 1,
-  wordCount: 400,
-  chapterCount: 0,
+  state: 'selected',
+  eligibleEditions: [edition('growing-readers', 1, 400, 0)],
+  selectedEdition: 'growing-readers',
   progress: null,
 }
 
@@ -115,9 +141,28 @@ const UNAVAILABLE_PROGRESS_STORY: Omit<LibraryStoryFixture, 'progress'> = {
   title: 'Paper Stars',
   author: 'Nia Rowan',
   language: 'en',
-  publishedVersion: 1,
-  wordCount: 650,
-  chapterCount: 2,
+  state: 'selected',
+  eligibleEditions: [edition('growing-readers', 1, 650, 2)],
+  selectedEdition: 'growing-readers',
+}
+
+const CHOOSER_STORY: LibraryStoryFixture = {
+  slug: 'choose-the-moon',
+  title: 'Choose the Moon',
+  author: 'Panda Pages',
+  language: 'en-GB',
+  state: 'chooser',
+  eligibleEditions: [
+    edition('growing-readers', 3, 900, 3),
+    edition('little-listeners', 5, 350, 0),
+  ],
+  selectedEdition: null,
+  progress: {
+    version: 1,
+    percent: 0.55,
+    updatedAt: '2026-07-20T10:00:00Z',
+    isResolvedVersion: false,
+  },
 }
 
 const READY_STORIES: LibraryStoryFixture[] = [
@@ -177,8 +222,12 @@ class LibraryApiMock {
     ...story,
   }))
   unavailableItemCount = 0
+  profiles = [
+    { id: LIBRARY_PROFILE_ID, name: 'Mina', pin_enabled: false, reading_level: 'classic' },
+  ]
   private readonly identityResponses: QueuedResponse[] = []
   private readonly libraryResponses: QueuedResponse[] = []
+  private clearProfilesAfterNextLibraryResponse = false
   private readonly page: Page
 
   constructor(page: Page) {
@@ -193,6 +242,19 @@ class LibraryApiMock {
 
   enqueueLibrary(response: MockResponse): void {
     this.libraryResponses.push(response)
+  }
+
+  enqueueForbiddenProfileRace(): void {
+    this.clearProfilesAfterNextLibraryResponse = true
+    this.enqueueLibrary({
+      status: 403,
+      body: {
+        error: {
+          code: 'profile_forbidden',
+          message: 'Profile unavailable',
+        },
+      },
+    })
   }
 
   deferIdentity(): ResponseGate {
@@ -267,6 +329,7 @@ class LibraryApiMock {
       request.method() === 'GET' &&
       url.pathname === '/api/v1/library'
     ) {
+      expect(request.headers()['x-pp-profile-id']).toBe(LIBRARY_PROFILE_ID)
       const response = await this.resolveResponse(
         this.libraryResponses.shift(),
         {
@@ -276,6 +339,10 @@ class LibraryApiMock {
           },
         },
       )
+      if (this.clearProfilesAfterNextLibraryResponse) {
+        this.clearProfilesAfterNextLibraryResponse = false
+        this.profiles = []
+      }
       await fulfillJson(route, response)
       return
     }
@@ -286,9 +353,7 @@ class LibraryApiMock {
     ) {
       await fulfillJson(route, {
         body: {
-          profiles: [
-            { id: '123e4567-e89b-42d3-a456-426614174300', name: 'Mina', pin_enabled: false, reading_level: 'classic' },
-          ],
+          profiles: this.profiles,
         },
       })
       return
@@ -304,8 +369,9 @@ class LibraryApiMock {
 
     if (
       request.method() === 'GET' &&
-      url.pathname.startsWith('/api/v1/reader/')
+      url.pathname.startsWith('/api/v1/reader-resolution/')
     ) {
+      expect(request.headers()['x-pp-profile-id']).toBe(LIBRARY_PROFILE_ID)
       await fulfillJson(route, {
         status: 404,
         body: {
@@ -347,6 +413,12 @@ class LibraryApiMock {
 const test = base.extend<{ api: LibraryApiMock }>({
   api: [
     async ({ page }, use) => {
+      await page.addInitScript(
+        ({ key, profileID }) => {
+          window.localStorage.setItem(key, profileID)
+        },
+        { key: SELECTED_PROFILE_STORAGE_KEY, profileID: LIBRARY_PROFILE_ID },
+      )
       const api = new LibraryApiMock(page)
       await api.install()
       await use(api)
@@ -580,6 +652,69 @@ test.describe('Library 2 bookshelf', () => {
 
     expect(api.count('GET', '/api/v1/library')).toBe(1)
     expect(api.count('GET', '/api/v1/continue')).toBe(0)
+  })
+
+  test('chooser stories show edition ranges and never imply an automatic selection', async ({
+    page,
+    api,
+  }) => {
+    api.items = [CHOOSER_STORY]
+    await page.goto('/library')
+
+    const card = storyCard(page, CHOOSER_STORY.title)
+    await expect(card).toContainText('350–900 words')
+    await expect(card).toContainText('0–3 chapters')
+    await expect(card).toContainText('Story updated since you last read')
+    await expect(
+      card.getByRole('link', {
+        name: `Choose edition: ${CHOOSER_STORY.title}`,
+        exact: true,
+      }),
+    ).toBeVisible()
+
+    const hero = page.locator('.continue-card')
+    await expect(hero).toHaveAttribute(
+      'aria-label',
+      `Choose edition: ${CHOOSER_STORY.title}`,
+    )
+  })
+
+  test('missing or stale selected profiles return to explicit profile selection without a Library fallback', async ({
+    page,
+    api,
+  }) => {
+    await page.goto('/')
+    await page.evaluate((key) => window.localStorage.removeItem(key), SELECTED_PROFILE_STORAGE_KEY)
+    await pushAppRoute(page, '/library')
+    await expectPath(page, '/profiles', '/library')
+    expect(api.count('GET', '/api/v1/library')).toBe(0)
+
+    await page.evaluate(
+      ({ key, profileID }) => window.localStorage.setItem(key, profileID),
+      { key: SELECTED_PROFILE_STORAGE_KEY, profileID: LIBRARY_PROFILE_ID },
+    )
+    api.profiles = []
+    await pushAppRoute(page, '/library')
+    await expectPath(page, '/profiles', '/library')
+    await expect.poll(() =>
+      page.evaluate((key) => window.localStorage.getItem(key), SELECTED_PROFILE_STORAGE_KEY),
+    ).toBeNull()
+    expect(api.count('GET', '/api/v1/library')).toBe(0)
+
+    api.profiles = [
+      { id: LIBRARY_PROFILE_ID, name: 'Mina', pin_enabled: false, reading_level: 'classic' },
+    ]
+    await page.evaluate(
+      ({ key, profileID }) => window.localStorage.setItem(key, profileID),
+      { key: SELECTED_PROFILE_STORAGE_KEY, profileID: LIBRARY_PROFILE_ID },
+    )
+    api.enqueueForbiddenProfileRace()
+    await pushAppRoute(page, '/library')
+    await expectPath(page, '/profiles', '/library')
+    await expect.poll(() =>
+      page.evaluate((key) => window.localStorage.getItem(key), SELECTED_PROFILE_STORAGE_KEY),
+    ).toBeNull()
+    expect(api.count('GET', '/api/v1/library')).toBe(1)
   })
 
   test('shows a truthful initial loading state before the single response completes', async ({
@@ -1235,9 +1370,9 @@ test.describe('Library 2 bookshelf', () => {
             slug: CURRENT_STORY.slug,
             author: CURRENT_STORY.author,
             language: CURRENT_STORY.language,
-            publishedVersion: CURRENT_STORY.publishedVersion,
-            wordCount: CURRENT_STORY.wordCount,
-            chapterCount: CURRENT_STORY.chapterCount,
+            state: CURRENT_STORY.state,
+            eligibleEditions: CURRENT_STORY.eligibleEditions,
+            selectedEdition: CURRENT_STORY.selectedEdition,
             progress: CURRENT_STORY.progress,
           },
         ],

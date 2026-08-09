@@ -2,8 +2,7 @@ import { currentAccountContext, type AccountContext } from "./account-context";
 import { listReaderProfiles, type ReaderProfile } from "./api";
 import {
   clearSelectedReaderProfile,
-  reconcileReaderProfileSelection,
-  selectReaderProfile,
+  resolvePersistedReaderProfileSelection,
   selectedReaderProfileID,
 } from "./reader-profile-selection";
 
@@ -29,7 +28,7 @@ export async function currentReaderProfileContext(): Promise<ReaderProfileContex
   } catch {
     throw new ProfileContextError("unavailable");
   }
-  const selection = reconcileReaderProfileSelection(
+  const selection = resolvePersistedReaderProfileSelection(
     selectedReaderProfileID(),
     profiles,
   );
@@ -37,7 +36,6 @@ export async function currentReaderProfileContext(): Promise<ReaderProfileContex
     clearSelectedReaderProfile();
     throw new ProfileContextError("profile_selection_required");
   }
-  selectReaderProfile(selection.id);
   const profile = profiles.find((candidate) => candidate.id === selection.id);
   if (!profile) {
     clearSelectedReaderProfile();

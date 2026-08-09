@@ -43,30 +43,45 @@ var (
 	ErrProfilePINRateLimited = errors.New("reader profile PIN verification is rate limited")
 )
 
-type StoryItem struct {
-	Slug             string                  `json:"slug"`
-	Title            string                  `json:"title"`
-	Author           *string                 `json:"author,omitempty"`
-	Language         string                  `json:"language"`
-	PublishedVersion int                     `json:"publishedVersion"`
-	WordCount        int64                   `json:"wordCount"`
-	ChapterCount     int64                   `json:"chapterCount"`
-	Progress         *LibraryProgressSummary `json:"progress"`
+// ReaderLibraryEditionSummary describes one immutable current-release edition
+// that the selected profile is allowed to open. The list is always in canonical
+// Reading Level order.
+type ReaderLibraryEditionSummary struct {
+	EditionKey   ReaderEditionKey `json:"editionKey"`
+	Version      int              `json:"version"`
+	WordCount    int64            `json:"wordCount"`
+	ChapterCount int64            `json:"chapterCount"`
 }
 
-// LibraryReadModel is the account-scoped bookshelf response. Items that cannot
-// be represented safely from their immutable published version are omitted and
-// counted without exposing their metadata or internal identifiers.
-type LibraryReadModel struct {
-	Items                []StoryItem `json:"items"`
-	UnavailableItemCount int64       `json:"unavailableItemCount"`
+// ReaderLibraryProgressSummary deliberately omits the persisted locator. The
+// Library needs only truthful display state; Reader remains the owner of exact
+// resume and cross-version mapping.
+type ReaderLibraryProgressSummary struct {
+	Version           int       `json:"version"`
+	Percent           float64   `json:"percent"`
+	UpdatedAt         time.Time `json:"updatedAt"`
+	IsResolvedVersion bool      `json:"isResolvedVersion"`
 }
 
-type LibraryProgressSummary struct {
-	Version          int       `json:"version"`
-	Percent          float64   `json:"percent"`
-	UpdatedAt        time.Time `json:"updatedAt"`
-	IsCurrentVersion bool      `json:"isCurrentVersion"`
+// ReaderLibraryItem is profile-scoped. A chooser has no selected edition;
+// selected items identify the exact edition chosen by the canonical resolver.
+type ReaderLibraryItem struct {
+	Slug             string                        `json:"slug"`
+	Title            string                        `json:"title"`
+	Author           *string                       `json:"author,omitempty"`
+	Language         string                        `json:"language"`
+	State            ReaderResolutionState         `json:"state"`
+	EligibleEditions []ReaderLibraryEditionSummary `json:"eligibleEditions"`
+	SelectedEdition  *ReaderEditionKey             `json:"selectedEdition"`
+	Progress         *ReaderLibraryProgressSummary `json:"progress"`
+}
+
+// ReaderLibraryReadModel is the profile-scoped Reader bookshelf. Stories with
+// no eligible current-release edition are invisible. Stories whose eligible
+// immutable release state cannot be represented safely are omitted and counted.
+type ReaderLibraryReadModel struct {
+	Items                []ReaderLibraryItem `json:"items"`
+	UnavailableItemCount int64               `json:"unavailableItemCount"`
 }
 
 type ReaderStory struct {
@@ -76,6 +91,24 @@ type ReaderStory struct {
 	Language string          `json:"language"`
 	Version  int             `json:"version"`
 	Segments []ReaderSegment `json:"segments"`
+}
+
+type ReaderResolvedStory struct {
+	ReaderStory
+	EditionKey ReaderEditionKey `json:"editionKey"`
+}
+
+type ReaderResolutionState string
+
+const (
+	ReaderResolutionSelected ReaderResolutionState = "selected"
+	ReaderResolutionChooser  ReaderResolutionState = "chooser"
+)
+
+type ReaderResolution struct {
+	State            ReaderResolutionState `json:"state"`
+	EligibleEditions []ReaderEditionKey    `json:"eligibleEditions"`
+	Story            *ReaderResolvedStory  `json:"story"`
 }
 
 type ReaderSegment struct {
@@ -129,8 +162,8 @@ func ValidReaderEditionKey(key ReaderEditionKey) bool {
 // representation. Profile ownership is always checked against the selected
 // account by the caller's authorization boundary.
 type ReaderProfile struct {
-	ID               string           `json:"id"`
-	Name             string           `json:"name"`
-	PINEnabled       bool             `json:"pin_enabled"`
+	ID           string           `json:"id"`
+	Name         string           `json:"name"`
+	PINEnabled   bool             `json:"pin_enabled"`
 	ReadingLevel ReaderEditionKey `json:"reading_level"`
 }

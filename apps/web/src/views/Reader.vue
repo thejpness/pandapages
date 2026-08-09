@@ -11,6 +11,7 @@ import {
 import { useEventListener, usePreferredReducedMotion } from '@vueuse/core'
 import { useRoute, useRouter } from 'vue-router'
 import ReaderChaptersDialog from '../components/reader/ReaderChaptersDialog.vue'
+import ReaderEditionChooserDialog from '../components/reader/ReaderEditionChooserDialog.vue'
 import ReaderHeader from '../components/reader/ReaderHeader.vue'
 import ReaderPagedView from '../components/reader/ReaderPagedView.vue'
 import ReaderProgressStatus from '../components/reader/ReaderProgressStatus.vue'
@@ -30,6 +31,7 @@ import {
   currentReaderChapter,
   type ReaderChapter,
 } from '../lib/reader-chapters'
+import type { ReaderEditionKey } from '../lib/api'
 import type { CrossVersionMapping } from '../lib/reader-cross-version-progress'
 import type { ReaderLocatorV2 } from '../lib/reader-locator-v2'
 import { applyReaderTheme } from '../lib/reader-theme-bootstrap'
@@ -159,6 +161,7 @@ const readerInitialized = ref(false)
 const settingsOpen = ref(false)
 const chaptersOpen = ref(false)
 const versionDecisionBusy = ref(false)
+const editionChangeBusy = ref(false)
 const activeOrdinal = ref(1)
 const percent = ref(0)
 const navigationMessage = ref('')
@@ -275,6 +278,8 @@ const story = useReaderStory({
     readerInitialized.value = true
   },
 })
+
+const currentEdition = computed(() => story.story.value?.editionKey ?? null)
 
 const chapters = computed(() =>
   buildReaderChapters(story.story.value?.segments ?? []),
@@ -705,10 +710,75 @@ function closeResume(open: boolean) {
   if (!open) progress.dismissDecision()
 }
 
+async function moveToProfiles() {
+  try {
+    await router.replace('/profiles')
+  } catch {
+    story.contentState.value = { status: 'unavailable' }
+  }
+}
+
 async function loadCurrentStory() {
   navigationMessage.value = ''
+  const profileID = selectedReaderProfileID()
+  if (profileID === null) {
+    await moveToProfiles()
+    return
+  }
   progress.prepare(slug.value)
-  await story.load(slug.value)
+  await story.load(slug.value, profileID)
+}
+
+async function chooseInitialEdition(editionKey: ReaderEditionKey) {
+  const profileID = selectedReaderProfileID()
+  if (profileID === null) {
+    await moveToProfiles()
+    return
+  }
+  await story.chooseEdition(slug.value, profileID, editionKey)
+}
+
+async function changeStoryEdition(editionKey: ReaderEditionKey) {
+  if (
+    editionChangeBusy.value ||
+    currentEdition.value === null ||
+    currentEdition.value === editionKey
+  ) return
+
+  const profileID = selectedReaderProfileID()
+  if (profileID === null) {
+    await moveToProfiles()
+    return
+  }
+
+  editionChangeBusy.value = true
+  settingsOpen.value = false
+  navigationMessage.value = ''
+  try {
+    const flushed = await progress.flushForStoryChange()
+    if (!flushed) {
+      navigationMessage.value =
+        'Your reading place could not be saved before changing edition.'
+      return
+    }
+
+    readerGeneration += 1
+    invalidateReaderPlacementWork()
+    settingsPreferences.value = { ...preferences.value }
+    progress.dispose()
+    clearProgressCaptureSuppressions()
+    readerInitialized.value = false
+    chaptersOpen.value = false
+    versionDecisionBusy.value = false
+    resumeFocusPending = false
+    percent.value = 0
+    activeOrdinal.value = 1
+
+    progress.prepare(slug.value)
+    await story.chooseEdition(slug.value, profileID, editionKey)
+  } finally {
+    editionChangeBusy.value = false
+  }
 }
 
 async function goLibraryWithoutProgress() {
@@ -731,6 +801,7 @@ async function routeChanged(nextSlug: string) {
   settingsOpen.value = false
   chaptersOpen.value = false
   versionDecisionBusy.value = false
+  editionChangeBusy.value = false
   navigationMessage.value = ''
   resumeFocusPending = false
   percent.value = 0
@@ -817,8 +888,17 @@ onBeforeUnmount(() => {
     :data-reader-theme="preferences.theme"
     :data-reader-preference-pending="readerPlacementQueue.preferencePending.value ? 'true' : 'false'"
   >
+    <ReaderEditionChooserDialog
+      v-if="story.chooser.value"
+      :open="true"
+      :eligible-editions="story.chooser.value"
+      :busy="story.editionBusy.value"
+      @choose="chooseInitialEdition"
+      @library="goLibraryWithoutProgress"
+    />
+
     <ReaderStoryState
-      v-if="story.contentState.value.status !== 'ready' || !story.story.value"
+      v-else-if="story.contentState.value.status !== 'ready' || !story.story.value"
       :state="story.contentState.value"
       @retry="loadCurrentStory"
       @library="goLibraryWithoutProgress"
@@ -898,8 +978,12 @@ onBeforeUnmount(() => {
       <ReaderSettingsDialog
         v-model:open="settingsOpen"
         :model-value="settingsPreferences"
+        :current-edition="story.story.value.editionKey"
+        :eligible-editions="story.eligibleEditions.value"
+        :edition-busy="editionChangeBusy"
         @update:model-value="updatePreferences"
         @mode-change="changeMode"
+        @edition-change="changeStoryEdition"
         @reset="resetPreferences"
       />
       <ReaderChaptersDialog

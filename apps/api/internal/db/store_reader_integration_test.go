@@ -305,21 +305,26 @@ func TestReaderStoreIntegration(t *testing.T) {
 			t.Fatalf("Reader followed non-Classic draft: version %d", readerStory.Version)
 		}
 
-		library, err := store.Library(readerAccountA)
+		library, err := store.ReaderLibrary(readerAccountA, readerProfileA)
 		if err != nil {
-			t.Fatalf("read Library after Growing Readers draft: %v", err)
+			t.Fatalf("read profile Library after Growing Readers draft: %v", err)
 		}
 		found := false
 		for _, item := range library.Items {
 			if item.Slug == editionSlug {
 				found = true
-				if item.PublishedVersion != 1 {
-					t.Fatalf("Library followed non-Classic draft: %#v", item)
+				if item.State != model.ReaderResolutionSelected ||
+					item.SelectedEdition == nil ||
+					*item.SelectedEdition != model.ReaderEditionClassic ||
+					len(item.EligibleEditions) != 1 ||
+					item.EligibleEditions[0].EditionKey != model.ReaderEditionClassic ||
+					item.EligibleEditions[0].Version != 1 {
+					t.Fatalf("Library followed non-current-release draft: %#v", item)
 				}
 			}
 		}
 		if !found {
-			t.Fatal("Classic published story disappeared from Library")
+			t.Fatal("Classic current-release story disappeared from profile Library")
 		}
 	})
 
@@ -729,9 +734,9 @@ func TestReaderStoreIntegration(t *testing.T) {
 		if _, err := store.ReaderStory(readerAccountA, unpublishSlug); !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("unpublished Reader lookup error = %v", err)
 		}
-		library, err := store.Library(readerAccountA)
+		library, err := store.ReaderLibrary(readerAccountA, readerProfileA)
 		if err != nil {
-			t.Fatalf("library after unpublish: %v", err)
+			t.Fatalf("profile Library after unpublish: %v", err)
 		}
 		for _, item := range library.Items {
 			if item.Slug == unpublishSlug {
@@ -890,9 +895,9 @@ func TestReaderStoreIntegration(t *testing.T) {
 			}
 		}
 
-		library, err := store.Library(readerAccountC)
+		library, err := store.ReaderLibrary(readerAccountC, readerProfileC)
 		if err != nil {
-			t.Fatalf("list Library with malformed immutable frontmatter: %v", err)
+			t.Fatalf("list profile Library with malformed immutable frontmatter: %v", err)
 		}
 		if len(library.Items) != 5 || library.UnavailableItemCount != 1 {
 			t.Fatalf("mixed-health Library = %#v, want five visible and one unavailable", library)

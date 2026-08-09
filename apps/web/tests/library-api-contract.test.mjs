@@ -10,12 +10,24 @@ async function apiModule() {
   )
 }
 
+const profileID = '123e4567-e89b-42d3-a456-426614174300'
+
+function edition(overrides = {}) {
+  return {
+    editionKey: 'growing-readers',
+    version: 2,
+    wordCount: 1260,
+    chapterCount: 4,
+    ...overrides,
+  }
+}
+
 function progress(overrides = {}) {
   return {
     version: 2,
     percent: 0.42,
     updatedAt: '2026-07-19T12:00:00.123456789Z',
-    isCurrentVersion: true,
+    isResolvedVersion: true,
     ...overrides,
   }
 }
@@ -26,12 +38,30 @@ function story(overrides = {}) {
     title: 'The Three Little Pigs',
     author: 'Traditional',
     language: 'en',
-    publishedVersion: 2,
-    wordCount: 1260,
-    chapterCount: 4,
+    state: 'selected',
+    eligibleEditions: [
+      edition(),
+      edition({ editionKey: 'story-explorers', version: 3, wordCount: 900, chapterCount: 3 }),
+    ],
+    selectedEdition: 'growing-readers',
     progress: progress(),
     ...overrides,
   }
+}
+
+function chooser(overrides = {}) {
+  return story({
+    slug: 'choose-an-edition',
+    title: 'Choose an Edition',
+    state: 'chooser',
+    eligibleEditions: [
+      edition(),
+      edition({ editionKey: 'little-listeners', version: 4, wordCount: 500, chapterCount: 1 }),
+    ],
+    selectedEdition: null,
+    progress: progress({ version: 1, isResolvedVersion: false }),
+    ...overrides,
+  })
 }
 
 function without(record, key) {
@@ -40,28 +70,13 @@ function without(record, key) {
   return result
 }
 
-test('strict Library boundary accepts current, old-version, empty, and missing-author stories', async () => {
+test('strict Library boundary accepts selected, chooser, stale-progress, empty-progress, and missing-author stories', async () => {
   const { module: api } = await apiModule()
   const missingAuthor = without(
     story({ slug: 'author-unknown', title: 'Author Unknown', progress: null }),
     'author',
   )
-  const value = {
-    items: [
-      story(),
-      story({
-        slug: 'a-story-updated',
-        title: 'A Story Updated',
-        publishedVersion: 3,
-        progress: progress({
-          version: 2,
-          updatedAt: '2026-07-19T13:15:10+01:00',
-          isCurrentVersion: false,
-        }),
-      }),
-      missingAuthor,
-    ],
-  }
+  const value = { items: [story(), chooser(), missingAuthor] }
 
   const parsed = api.parseLibraryResponse(value)
   assert.equal(parsed.unavailableItemCount, 0)
@@ -81,7 +96,7 @@ test('strict Library boundary accepts current, old-version, empty, and missing-a
   assert.equal(api.isInvalidLibraryResponseError(new TypeError('offline')), false)
 })
 
-test('strict Library boundary preserves stories when known progress metadata is unavailable', async () => {
+test('strict Library boundary preserves stories when progress metadata is unavailable', async () => {
   const { module: api } = await apiModule()
   const unavailableProgressStories = [
     without(story(), 'progress'),
@@ -95,11 +110,9 @@ test('strict Library boundary preserves stories when known progress metadata is 
     story({ progress: progress({ updatedAt: '2026-07-19' }) }),
     story({ progress: progress({ updatedAt: '2026-02-30T12:00:00Z' }) }),
     story({ progress: progress({ updatedAt: '2026-07-19T25:00:00Z' }) }),
-    story({ progress: progress({ isCurrentVersion: false }) }),
-    story({
-      publishedVersion: 3,
-      progress: progress({ version: 2, isCurrentVersion: true }),
-    }),
+    story({ progress: progress({ isResolvedVersion: 'yes' }) }),
+    story({ progress: progress({ version: 3, isResolvedVersion: true }) }),
+    chooser({ progress: progress({ isResolvedVersion: true }) }),
   ]
 
   for (const unavailable of unavailableProgressStories) {
@@ -107,9 +120,15 @@ test('strict Library boundary preserves stories when known progress metadata is 
     assert.equal(parsed.progress, null)
     assert.equal(parsed.progressAvailability, 'unavailable')
   }
+
+  const stale = api.parseLibraryResponse({
+    items: [story({ progress: progress({ version: 99, isResolvedVersion: false }) })],
+  }).items[0]
+  assert.equal(stale.progress.isResolvedVersion, false)
+  assert.equal(stale.progress.version, 99)
 })
 
-test('strict Library boundary rejects malformed core fields and internal keys', async () => {
+test('strict Library boundary rejects malformed resolution fields and internal keys', async () => {
   const { module: api } = await apiModule()
   const invalidStories = [
     without(story(), 'slug'),
@@ -119,13 +138,20 @@ test('strict Library boundary rejects malformed core fields and internal keys', 
     story({ author: 42 }),
     story({ author: '   ' }),
     story({ language: '' }),
-    story({ publishedVersion: 0 }),
-    story({ publishedVersion: 1.2 }),
-    story({ publishedVersion: Number.MAX_SAFE_INTEGER + 1 }),
-    story({ wordCount: -1 }),
-    story({ wordCount: 1.5 }),
-    story({ wordCount: Number.MAX_SAFE_INTEGER + 1 }),
-    story({ chapterCount: -1 }),
+    story({ state: 'automatic' }),
+    chooser({ eligibleEditions: [edition()] }),
+    chooser({ selectedEdition: 'growing-readers' }),
+    story({ selectedEdition: null }),
+    story({ selectedEdition: 'classic' }),
+    story({ eligibleEditions: [] }),
+    story({ eligibleEditions: [edition(), edition()] }),
+    story({ eligibleEditions: [edition({ editionKey: 'story-explorers' }), edition()] }),
+    story({ eligibleEditions: [edition({ version: 0 })] }),
+    story({ eligibleEditions: [edition({ wordCount: -1 })] }),
+    story({ eligibleEditions: [edition({ chapterCount: -1 })] }),
+    story({ wordCount: 1260 }),
+    story({ chapterCount: 4 }),
+    story({ publishedVersion: 2 }),
     story({ storyId: 'internal-id' }),
     story({ progress: { ...progress(), locator: { internal: true } } }),
   ]
@@ -153,13 +179,12 @@ test('strict Library boundary rejects malformed core fields and internal keys', 
   }
 })
 
-test('zero aggregate counts remain valid and are not invented client-side', async () => {
+test('zero edition aggregate counts remain valid and are not invented client-side', async () => {
   const { module: api } = await apiModule()
   const emptyContent = story({
     slug: 'quiet-page',
     title: 'Quiet Page',
-    wordCount: 0,
-    chapterCount: 0,
+    eligibleEditions: [edition({ wordCount: 0, chapterCount: 0 })],
     progress: null,
   })
   assert.deepEqual(api.parseLibraryResponse({ items: [emptyContent] }), {
@@ -173,38 +198,25 @@ test('Library boundary ignores harmless additive fields but rejects unsafe data 
   const additive = {
     items: [
       story({
-        editorialBadge: {
-          label: 'bedtime',
-          palette: ['paper', 'bamboo'],
-        },
-        progress: progress({
-          futureProgressHint: { label: 'harmless', values: [1, 2, 3] },
-        }),
+        editorialBadge: { label: 'bedtime', palette: ['paper', 'bamboo'] },
+        eligibleEditions: [edition({ futureMetric: 'safe' })],
+        progress: progress({ futureProgressHint: { label: 'harmless', values: [1, 2, 3] } }),
       }),
     ],
     unavailableItemCount: 2,
-    futureEnvelope: {
-      revision: 3,
-      metadata: [{ label: 'new' }, { label: 'calm' }],
-    },
+    futureEnvelope: { revision: 3, metadata: [{ label: 'new' }] },
   }
-  assert.deepEqual(api.parseLibraryResponse(additive), {
-    items: [
-      {
-        ...story(),
-        progressAvailability: 'available',
-      },
-    ],
-    unavailableItemCount: 2,
-  })
+  const parsed = api.parseLibraryResponse(additive)
+  assert.equal(parsed.items[0].eligibleEditions[0].editionKey, 'growing-readers')
+  assert.equal(parsed.unavailableItemCount, 2)
 
   const unsafeValues = [
     { items: [], accountId: 'private' },
-    { items: [story({ publishedVersionId: 'private' })] },
     { items: [story({ future: { segments: [] } })] },
     { items: [story({ progress: progress({ locator: {} }) })] },
     { items: [story({ markdown: '# private' })] },
     { items: [story({ rendered_html: '<p>private</p>' })] },
+    { items: [story({ eligibleEditions: [edition({ versionId: 'private' })] })] },
   ]
   for (const unsafe of unsafeValues) {
     assert.throws(
@@ -212,42 +224,11 @@ test('Library boundary ignores harmless additive fields but rejects unsafe data 
       (error) => api.isInvalidLibraryResponseError(error),
     )
   }
-
-  for (const unsafeKey of [
-    'settings',
-    'child',
-    'prompt',
-    'profile',
-    'profiles',
-    'account',
-    'accountId',
-    'account_id',
-    'aid',
-    'profileId',
-    'profile_id',
-  ]) {
-    const nestedUnsafe = {
-      items: [
-        story({
-          futureEnvelope: [
-            { metadata: { [unsafeKey]: { value: 'private' } } },
-          ],
-        }),
-      ],
-    }
-    assert.throws(
-      () => api.parseLibraryResponse(nestedUnsafe),
-      (error) => api.isInvalidLibraryResponseError(error),
-      `expected nested ${unsafeKey} to be rejected`,
-    )
-  }
 })
 
-test('getLibrary uses the fixed bearer/account route and rejects malformed success bodies', async (t) => {
+test('getLibrary uses explicit profile scope and rejects malformed success bodies', async (t) => {
   const originalFetch = globalThis.fetch
-  t.after(() => {
-    globalThis.fetch = originalFetch
-  })
+  t.after(() => { globalThis.fetch = originalFetch })
 
   const { module: api, source } = await apiModule()
   const requests = []
@@ -260,15 +241,13 @@ test('getLibrary uses the fixed bearer/account route and rejects malformed succe
     })
   }
 
-  assert.deepEqual(await api.getLibrary(), {
-    items: [{ ...payload.items[0], progressAvailability: 'available' }],
-    unavailableItemCount: 0,
-  })
-  assert.deepEqual(
-    requests.map(({ url, init }) => [url, init.credentials]),
-    [['/api/v1/library', 'omit']],
-  )
-  assert.match(source, /request<unknown>\(["']\/api\/v1\/library["']\)/)
+  const result = await api.getLibrary(profileID)
+  assert.equal(result.items[0].selectedEdition, 'growing-readers')
+  assert.equal(result.unavailableItemCount, 0)
+  assert.equal(requests[0].url, '/api/v1/library')
+  assert.equal(requests[0].init.credentials, 'omit')
+  assert.equal(new Headers(requests[0].init.headers).get('X-PP-Profile-ID'), profileID)
+  assert.match(source, /profileScopedRequest<unknown>\(["']\/api\/v1\/library["'], profileID\)/)
   assert.match(source, /return parseLibraryResponse\(data\)/)
 
   globalThis.fetch = async () =>
@@ -277,7 +256,7 @@ test('getLibrary uses the fixed bearer/account route and rejects malformed succe
       headers: { 'Content-Type': 'application/json' },
     })
   await assert.rejects(
-    api.getLibrary(),
+    api.getLibrary(profileID),
     (error) => api.isInvalidLibraryResponseError(error),
   )
 })

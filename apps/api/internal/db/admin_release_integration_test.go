@@ -26,6 +26,7 @@ func TestAdminReleaseIntegration(t *testing.T) {
 	t.Cleanup(func() { _ = adminDB.Close() })
 
 	const accountID = "d6140000-0000-4000-8000-000000000001"
+	const profileID = "d6140000-0000-4000-8000-000000000002"
 	const slug = "partial-release-integration"
 	if _, err := adminDB.Exec(`
 		INSERT INTO accounts (id, name)
@@ -34,8 +35,15 @@ func TestAdminReleaseIntegration(t *testing.T) {
 	`, accountID); err != nil {
 		t.Fatalf("insert release account: %v", err)
 	}
+	if _, err := adminDB.Exec(`
+		INSERT INTO profiles (id, account_id, name, reading_level)
+		VALUES ($1, $2, 'Partial Release Listener', 'little-listeners')
+	`, profileID, accountID); err != nil {
+		t.Fatalf("insert release profile: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = adminDB.Exec(`DELETE FROM stories WHERE account_id = $1 AND slug = $2`, accountID, slug)
+		_, _ = adminDB.Exec(`DELETE FROM profiles WHERE id = $1 AND account_id = $2`, profileID, accountID)
 		_, _ = adminDB.Exec(`DELETE FROM accounts WHERE id = $1`, accountID)
 	})
 
@@ -100,13 +108,13 @@ func TestAdminReleaseIntegration(t *testing.T) {
 	if _, err := store.ReaderStory(accountID, slug); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("Growing-only release became Reader-visible in Lifecycle 6: %v", err)
 	}
-	library, err := store.Library(accountID)
+	library, err := store.ReaderLibrary(accountID, profileID)
 	if err != nil {
-		t.Fatalf("load Library after Growing-only release: %v", err)
+		t.Fatalf("load profile Library after Growing-only release: %v", err)
 	}
 	for _, item := range library.Items {
 		if item.Slug == slug {
-			t.Fatalf("Growing-only release became Library-visible in Lifecycle 6: %#v", item)
+			t.Fatalf("Growing-only release became visible to Little Listeners profile: %#v", item)
 		}
 	}
 
@@ -159,6 +167,22 @@ func TestAdminReleaseIntegration(t *testing.T) {
 	}
 	if classicLiveVersion != classicDraft.VersionID {
 		t.Fatalf("Classic current-release version = %q, want %q", classicLiveVersion, classicDraft.VersionID)
+	}
+	library, err = store.ReaderLibrary(accountID, profileID)
+	if err != nil {
+		t.Fatalf("load profile Library after Classic + Listener release: %v", err)
+	}
+	var releasedItem *model.ReaderLibraryItem
+	for index := range library.Items {
+		if library.Items[index].Slug == slug {
+			releasedItem = &library.Items[index]
+			break
+		}
+	}
+	if releasedItem == nil || releasedItem.State != model.ReaderResolutionSelected ||
+		releasedItem.SelectedEdition == nil ||
+		*releasedItem.SelectedEdition != model.ReaderEditionLittleListeners {
+		t.Fatalf("Little Listeners profile release resolution = %#v", releasedItem)
 	}
 	readerStory, err := store.ReaderStory(accountID, slug)
 	if err != nil {

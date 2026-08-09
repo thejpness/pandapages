@@ -20,8 +20,8 @@ const progressKind = computed(() => classifyLibraryProgress(props.story))
 const percent = computed(() => libraryDisplayPercent(props.story))
 const progressLabel = computed(() => libraryProgressLabel(props.story))
 const actionLabel = computed(() => libraryActionLabel(props.story))
-const lengthLabel = computed(() => libraryLengthLabel(props.story.wordCount))
-const chapterLabel = computed(() => libraryChapterLabel(props.story.chapterCount))
+const lengthLabel = computed(() => libraryLengthLabel(props.story))
+const chapterLabel = computed(() => libraryChapterLabel(props.story))
 const titleId = computed(() => `bookshelf-card-title-${props.story.slug}`)
 </script>
 

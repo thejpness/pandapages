@@ -31,6 +31,18 @@ test('exactly one server profile is selected as a frontend convenience', () => {
   assert.deepEqual(selection.reconcileReaderProfileSelection(null, one), { id: one[0].id })
 })
 
+test('protected profile context requires an explicit persisted selection', () => {
+  assert.equal(selection.resolvePersistedReaderProfileSelection(null, one), null)
+  assert.deepEqual(
+    selection.resolvePersistedReaderProfileSelection(two[1].id, two),
+    { id: two[1].id },
+  )
+  assert.equal(
+    selection.resolvePersistedReaderProfileSelection('missing-profile', one),
+    null,
+  )
+})
+
 test('multiple profiles require an explicit selection', () => {
   assert.equal(selection.reconcileReaderProfileSelection(null, two), null)
 })

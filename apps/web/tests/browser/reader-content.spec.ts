@@ -40,7 +40,7 @@ test.describe('Reader content and route states', () => {
     await expect(progress).toHaveAttribute('aria-valuenow', /^\d+$/)
     await expect(progress).not.toHaveAttribute('aria-live', /.+/)
 
-    expect(api.count('GET', `/api/v1/reader/${READER_SLUG}`)).toBe(1)
+    expect(api.count('GET', `/api/v1/reader-resolution/${READER_SLUG}`)).toBe(1)
     expect(api.legacyRequests).toEqual([])
   })
 
@@ -85,7 +85,7 @@ test.describe('Reader content and route states', () => {
     await expect(page.getByRole('button', { name: 'Return to Library' })).toBeVisible()
     await page.getByRole('button', { name: 'Retry' }).click()
     await expect(page.locator('[data-reader-scroll-view]')).toBeVisible()
-    expect(api.count('GET', `/api/v1/reader/${READER_SLUG}`)).toBe(2)
+    expect(api.count('GET', `/api/v1/reader-resolution/${READER_SLUG}`)).toBe(2)
   })
 
   test('scenario 15: a network failure and malformed success use the unavailable boundary', async ({

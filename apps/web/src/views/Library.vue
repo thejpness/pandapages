@@ -32,6 +32,10 @@ import {
   type LibrarySort,
 } from '../lib/library-sorting'
 import { isChildMode, leaveChildMode } from '../lib/reader-mode'
+import {
+  clearSelectedReaderProfile,
+  selectedReaderProfileID,
+} from '../lib/reader-profile-selection'
 
 type HeaderExpose = { focusSearch: () => void }
 type LoadErrorKind = 'server-error' | 'malformed' | null
@@ -64,6 +68,7 @@ let querySyncNavigationOwner: QuerySyncNavigationOwner | null = null
 let pendingHistoryNavigation: QuerySyncNavigationOwner | null = null
 const querySyncNavigationTokens = new WeakMap<object, number>()
 let componentActive = false
+let profileRedirecting = false
 let removeNavigationSettledHook: (() => void) | null = null
 let removeNavigationErrorHook: (() => void) | null = null
 
@@ -291,6 +296,27 @@ async function moveToSignInAfterSessionEnded() {
   }
 }
 
+async function moveToProfilesForSelection(): Promise<void> {
+  if (profileRedirecting) return
+  profileRedirecting = true
+  leaveChildMode()
+  loadGeneration += 1
+  cancelQuerySync()
+  stories.value = []
+  unavailableItemCount.value = 0
+  selectedStory.value = null
+  detailsOpen.value = false
+  loadError.value = null
+
+  try {
+    await router.replace({ path: '/profiles', query: { next: '/library' } })
+  } catch {
+    profileRedirecting = false
+    loading.value = false
+    loadError.value = 'server-error'
+  }
+}
+
 async function lockLibrary() {
   if (locking.value) return
   locking.value = true
@@ -316,23 +342,39 @@ async function loadLibrary() {
   loading.value = true
   loadError.value = null
 
+  const profileID = selectedReaderProfileID()
+  if (profileID === null) {
+    await moveToProfilesForSelection()
+    return
+  }
+
   try {
-    const response = await getLibrary()
-    if (generation !== loadGeneration || sessionLeaving.value) return
+    const response = await getLibrary(profileID)
+    if (generation !== loadGeneration || sessionLeaving.value || profileRedirecting) return
     stories.value = response.items
     unavailableItemCount.value = response.unavailableItemCount
     if (!sortWasChosen) sort.value = defaultLibrarySort(response.items)
   } catch (error) {
-    if (generation !== loadGeneration || sessionLeaving.value) return
-    if (getAPIErrorStatus(error) === 401) {
+    if (generation !== loadGeneration || sessionLeaving.value || profileRedirecting) return
+    const status = getAPIErrorStatus(error)
+    if (status === 401) {
       await moveToSignInAfterSessionEnded()
+      return
+    }
+    if (status === 400 || status === 403) {
+      clearSelectedReaderProfile()
+      await moveToProfilesForSelection()
       return
     }
     loadError.value = isInvalidLibraryResponseError(error)
       ? 'malformed'
       : 'server-error'
   } finally {
-    if (generation === loadGeneration && !sessionLeaving.value) {
+    if (
+      generation === loadGeneration &&
+      !sessionLeaving.value &&
+      !profileRedirecting
+    ) {
       loading.value = false
     }
   }

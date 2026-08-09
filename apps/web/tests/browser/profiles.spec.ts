@@ -49,8 +49,17 @@ class ProfilesApiMock {
     const headers = request.headers()
     expect(headers.authorization).toBe('Bearer ' + fixtureAccessToken)
     expect(headers['x-pp-account-id']).toBe(fixtureAccountID)
-    expect(headers['x-pp-profile-id']).toBeFalsy()
     expect(headers.cookie).toBeFalsy()
+
+    if (request.method() === 'GET' && url.pathname === '/api/v1/library') {
+      const profileID = headers['x-pp-profile-id']
+      expect(profileID).toBeTruthy()
+      expect(this.profiles.some((candidate) => candidate.id === profileID)).toBe(true)
+      await this.respond(route, { items: [], unavailableItemCount: 0 })
+      return
+    }
+
+    expect(headers['x-pp-profile-id']).toBeFalsy()
 
     if (request.method() === 'GET' && url.pathname === '/api/v1/profiles') {
       await this.respond(route, { profiles: this.profiles })
@@ -117,10 +126,6 @@ class ProfilesApiMock {
         await this.respond(route, null, 204)
         return
       }
-    }
-    if (request.method() === 'GET' && url.pathname === '/api/v1/library') {
-      await this.respond(route, { items: [], unavailableItemCount: 0 })
-      return
     }
     await this.respond(route, { error: { code: 'not_found' } }, 404)
   }

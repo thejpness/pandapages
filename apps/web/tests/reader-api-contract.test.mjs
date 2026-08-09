@@ -94,7 +94,33 @@ test('Reader payload boundary rejects unsafe rendered HTML envelopes', async () 
   assert.deepEqual(api.parseReaderStoryPayload(safe), safe)
 })
 
-test('getReaderStory makes one coherent request and rejects malformed success', async (t) => {
+test('Reader resolution boundary accepts selected and chooser states', async () => {
+  const api = await apiModule()
+  const selected = {
+    state: 'selected',
+    eligibleEditions: ['classic', 'little-listeners'],
+    story: { ...validStory(), editionKey: 'classic' },
+  }
+  assert.deepEqual(api.parseReaderResolutionPayload(selected), selected)
+  const chooser = {
+    state: 'chooser',
+    eligibleEditions: ['growing-readers', 'little-listeners'],
+    story: null,
+  }
+  assert.deepEqual(api.parseReaderResolutionPayload(chooser), chooser)
+
+  for (const invalid of [
+    { ...selected, state: 'unknown' },
+    { ...selected, eligibleEditions: ['little-listeners', 'classic'] },
+    { ...selected, story: { ...selected.story, editionKey: 'confident-readers' } },
+    { ...chooser, eligibleEditions: ['classic'] },
+    { ...chooser, story: selected.story },
+  ]) {
+    assert.throws(() => api.parseReaderResolutionPayload(invalid), /Reader/)
+  }
+})
+
+test('getReaderStory is profile scoped and edition mutations use the explicit Reader route', async (t) => {
   const api = await apiModule()
   const originalFetch = globalThis.fetch
   t.after(() => {
@@ -102,23 +128,52 @@ test('getReaderStory makes one coherent request and rejects malformed success', 
   })
   const requests = []
   globalThis.fetch = async (url, init) => {
-    requests.push({ url, init })
-    return new Response(JSON.stringify(validStory()), {
+    const headers = new Headers(init.headers)
+    requests.push({
+      url: String(url),
+      method: init.method ?? 'GET',
+      profile: headers.get('x-pp-profile-id'),
+      body: init.body ?? null,
+    })
+    if ((init.method ?? 'GET') === 'GET') {
+      return new Response(JSON.stringify({
+        state: 'selected',
+        eligibleEditions: ['classic'],
+        story: { ...validStory(), editionKey: 'classic' },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }
+    return new Response(JSON.stringify({ ok: true }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     })
   }
-  assert.deepEqual(await api.getReaderStory('reader/story'), validStory())
-  assert.deepEqual(requests.map(({ url }) => url), [
-    '/api/v1/reader/reader%2Fstory',
-  ])
 
-  globalThis.fetch = async () =>
-    new Response(JSON.stringify({ ...validStory(), segments: null }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    })
-  await assert.rejects(api.getReaderStory('reader-story'), /Reader response/)
+  const profileID = '123e4567-e89b-42d3-a456-426614174300'
+  const resolution = await api.getReaderStory('reader/story', profileID)
+  assert.equal(resolution.state, 'selected')
+  await api.setReaderStoryEdition('reader/story', profileID, 'little-listeners')
+  await api.clearReaderStoryEdition('reader/story', profileID)
+
+  assert.deepEqual(requests, [
+    {
+      url: '/api/v1/reader-resolution/reader%2Fstory',
+      method: 'GET',
+      profile: profileID,
+      body: null,
+    },
+    {
+      url: '/api/v1/reader-edition/reader%2Fstory',
+      method: 'PUT',
+      profile: profileID,
+      body: JSON.stringify({ editionKey: 'little-listeners' }),
+    },
+    {
+      url: '/api/v1/reader-edition/reader%2Fstory',
+      method: 'DELETE',
+      profile: profileID,
+      body: null,
+    },
+  ])
 })
 
 test('progress response boundary distinguishes known empty and strict Locator v2', async () => {
