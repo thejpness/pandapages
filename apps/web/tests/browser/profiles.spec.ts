@@ -24,6 +24,7 @@ type Profile = {
 class ProfilesApiMock {
   profiles: Profile[] = []
   rateLimitPINVerification = false
+  pinVerificationGate: Promise<void> | null = null
   private readonly page: Page
 
   constructor(page: Page) {
@@ -108,6 +109,7 @@ class ProfilesApiMock {
           await this.respond(route, { error: { code: 'pin_rate_limited' } }, 429)
           return
         }
+        if (this.pinVerificationGate) await this.pinVerificationGate
         const pin = (request.postDataJSON() as { pin: string }).pin
         if (pin !== '1234') {
           await this.respond(route, { error: { code: 'pin_invalid' } }, 403)
@@ -298,6 +300,28 @@ test.describe('reader profile lifecycle', () => {
     await page.getByRole('button', { name: 'Continue' }).click()
     await expect(page).toHaveURL('/library')
     await expect.poll(() => page.evaluate(() => window.localStorage.getItem('pandapages.selected-reader-profile-id'))).toBe(tedID)
+  })
+
+  test("a pending PIN verification cannot be dismissed into a later reader switch", async ({ page }) => {
+    const api = new ProfilesApiMock(page)
+    api.profiles = [{ id: fixtureProfileID, name: "Ted", pin_enabled: true, reading_level: "classic" }]
+    let releaseVerification: () => void = () => { throw new Error("PIN verification release was not prepared") }
+    api.pinVerificationGate = new Promise<void>((resolve) => { releaseVerification = resolve })
+    await api.install()
+    await page.goto("/profiles")
+
+    await page.getByRole("button", { name: "Start reading as Ted" }).click()
+    const dialog = page.getByRole("dialog", { name: "Enter Ted’s PIN" })
+    await dialog.getByLabel("Four-digit PIN").fill("1234")
+    await dialog.getByRole("button", { name: "Continue" }).click()
+    await expect(dialog.getByRole("button", { name: "Continue" })).toBeDisabled()
+    await page.keyboard.press("Escape")
+    await expect(dialog).toBeVisible()
+    await expect.poll(() => page.evaluate(() => window.localStorage.getItem("pandapages.selected-reader-profile-id"))).toBeNull()
+
+    releaseVerification()
+    await expect(page).toHaveURL("/library")
+    await expect.poll(() => page.evaluate(() => window.localStorage.getItem("pandapages.selected-reader-profile-id"))).toBe(fixtureProfileID)
   })
 
   test('the active PIN reader continues without a second verification', async ({ page }) => {

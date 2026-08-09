@@ -59,6 +59,7 @@ watch(
         class="profile-pin-dialog"
         @open-auto-focus="focusPIN"
         @pointer-down-outside="$event.preventDefault()"
+        @escape-key-down="busy && $event.preventDefault()"
       >
         <div class="profile-pin-dialog__identity" aria-hidden="true">
           <ProfileIdentity :profileID="profileID" />
