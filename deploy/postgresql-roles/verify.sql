@@ -159,6 +159,7 @@ WITH runtime_table(name, immutable) AS (
     ('external_identities', false),
     ('principals', false),
     ('profiles', false),
+    ('reader_story_edition_overrides', false),
     ('reading_progress', false),
     ('stories', false),
     ('story_editions', false),
@@ -189,7 +190,7 @@ WITH runtime_table(name, immutable) AS (
     AND class.relkind IN ('r', 'p')
 )
 SELECT
-  count(*) = 17
+  count(*) = 18
   AND to_regclass('public.child_profiles') IS NULL
   AND to_regclass('public.prompt_profiles') IS NULL
   AND to_regclass('public.profile_settings') IS NULL
@@ -248,6 +249,7 @@ WITH runtime_table(name) AS (
     ('external_identities'),
     ('principals'),
     ('profiles'),
+    ('reader_story_edition_overrides'),
     ('reading_progress'),
     ('stories'),
     ('story_editions'),

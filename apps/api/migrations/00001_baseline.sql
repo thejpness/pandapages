@@ -423,6 +423,46 @@ CREATE TABLE reading_progress (
 CREATE INDEX reading_progress_account_profile_updated_idx
   ON reading_progress(account_id, profile_id, updated_at DESC);
 
+-- Explicit per-profile, per-story edition selection. This is a Reader choice,
+-- not publication authority: current release membership is still authoritative
+-- when deciding whether a stored override can be used.
+CREATE TABLE reader_story_edition_overrides (
+  account_id uuid NOT NULL,
+  profile_id uuid NOT NULL,
+  story_id uuid NOT NULL,
+  edition_key text NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+
+  CONSTRAINT reader_story_edition_overrides_pkey
+    PRIMARY KEY (account_id, profile_id, story_id),
+
+  CONSTRAINT reader_story_edition_overrides_profile_account_fkey
+    FOREIGN KEY (profile_id, account_id)
+    REFERENCES profiles(id, account_id)
+    ON DELETE CASCADE,
+
+  CONSTRAINT reader_story_edition_overrides_story_account_fkey
+    FOREIGN KEY (story_id, account_id)
+    REFERENCES stories(id, account_id)
+    ON DELETE CASCADE,
+
+  CONSTRAINT reader_story_edition_overrides_edition_key_check
+    CHECK (
+      edition_key IN (
+        'classic',
+        'confident-readers',
+        'growing-readers',
+        'story-explorers',
+        'little-listeners'
+      )
+    ),
+
+  CONSTRAINT reader_story_edition_overrides_story_edition_fkey
+    FOREIGN KEY (story_id, edition_key)
+    REFERENCES story_editions(story_id, edition_key)
+    ON DELETE CASCADE
+);
+
 -- Canonical source lifecycle.
 CREATE TABLE story_sources (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -587,6 +627,7 @@ DROP TABLE story_release_editions;
 DROP TABLE story_releases;
 DROP TABLE story_source_versions;
 DROP TABLE story_sources;
+DROP TABLE reader_story_edition_overrides;
 DROP TABLE reading_progress;
 DROP TABLE story_segments;
 DROP TABLE story_sections;

@@ -306,6 +306,7 @@ WITH runtime_table(name) AS (
     ('external_identities'),
     ('principals'),
     ('profiles'),
+    ('reader_story_edition_overrides'),
     ('reading_progress'),
     ('stories'),
     ('story_editions'),
