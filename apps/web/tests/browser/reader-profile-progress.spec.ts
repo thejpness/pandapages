@@ -44,7 +44,7 @@ test('reader progress is reloaded and isolated when the selected profile changes
   await page.getByRole('button', { name: 'Dismiss' }).click()
 
   await page.goto('/profiles')
-  await page.getByRole('button', { name: 'Ted', exact: true }).click()
+  await page.getByRole('button', { name: 'Start reading as Ted', exact: true }).click()
   await expect(page).toHaveURL('/library')
   await expect
     .poll(() =>
