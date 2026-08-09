@@ -914,7 +914,9 @@ grep -q 'OK.*00015_account_ownership_integrity.sql' \
   "$test_root/fresh-goose.out" "$test_root/fresh-goose.err"
 grep -q 'OK.*00016_identity_foundation.sql' \
   "$test_root/fresh-goose.out" "$test_root/fresh-goose.err"
-assert_query '22|true' "
+grep -q 'OK.*00023_remove_legacy_runtime_scaffolding.sql' \
+  "$test_root/fresh-goose.out" "$test_root/fresh-goose.err"
+assert_query '23|true' "
   SELECT version_id || '|' || is_applied
   FROM goose_db_version ORDER BY id DESC LIMIT 1;
 " 'fresh latest migration marker'
@@ -923,10 +925,7 @@ assert_query 't' "
   FROM (VALUES
     (to_regclass('public.accounts')),
     (to_regclass('public.account_memberships')),
-    (to_regclass('public.child_profiles')),
     (to_regclass('public.external_identities')),
-    (to_regclass('public.generation_jobs')),
-    (to_regclass('public.account_settings')),
     (to_regclass('public.profiles')),
     (to_regclass('public.principals')),
     (to_regclass('public.reading_progress')),
@@ -941,7 +940,15 @@ assert_query 't' "
     (to_regclass('public.story_versions'))
   ) AS required(relation);
 " 'fresh schema tables'
-assert_query '0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0' "
+assert_query '1|1|1|1|1' "
+  SELECT
+    (to_regclass('public.account_settings') IS NULL)::int,
+    (to_regclass('public.child_profiles') IS NULL)::int,
+    (to_regclass('public.prompt_profiles') IS NULL)::int,
+    (to_regclass('public.generation_jobs') IS NULL)::int,
+    (to_regtype('public.generation_status') IS NULL)::int;
+" 'fresh legacy runtime schema retirement'
+assert_query '0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0' "
   SELECT
     (SELECT count(*) FROM stories),
     (SELECT count(*) FROM story_versions),
@@ -953,10 +960,6 @@ assert_query '0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0' "
     (SELECT count(*) FROM story_sections),
     (SELECT count(*) FROM story_segments),
     (SELECT count(*) FROM reading_progress),
-    (SELECT count(*) FROM child_profiles),
-    (SELECT count(*) FROM prompt_profiles),
-    (SELECT count(*) FROM generation_jobs),
-    (SELECT count(*) FROM account_settings),
     (SELECT count(*) FROM contributors),
     (SELECT count(*) FROM story_contributors),
     (SELECT count(*) FROM assets),
@@ -970,7 +973,7 @@ assert_query 'false|0' "
     (SELECT count(*) FROM information_schema.columns
       WHERE table_schema='public' AND table_name='stories' AND column_name='work_id');
 " 'retired works scaffolding'
-printf 'ok 1 - fresh migrations leave the complete application schema without fixture content\n'
+printf 'ok 1 - fresh migrations reach version 23 with current schema only and no fixture content\n'
 
 assert_query '1|1|0' "
   SELECT
@@ -1440,11 +1443,51 @@ psql_query "
   DELETE FROM works;
 " >/dev/null
 
+# Migration 23 must never decide that preserved Journey/generation data is
+# disposable. Advancing this historical-preservation database therefore stops
+# at 22 with every legacy row intact.
+if run_goose up \
+  >"$test_root/current-seed-legacy-retirement-preflight.out" \
+  2>"$test_root/current-seed-legacy-retirement-preflight.err"; then
+  printf 'Legacy runtime retirement unexpectedly discarded preserved data\n' >&2
+  exit 1
+fi
+grep -Fq 'legacy runtime scaffolding retirement refused:' \
+  "$test_root/current-seed-legacy-retirement-preflight.err"
+assert_query '22|1|1|1|1' "
+  SELECT
+    (SELECT max(version_id) FROM goose_db_version WHERE is_applied),
+    (SELECT count(*) FROM child_profiles WHERE id = 'a11e0000-0000-4000-8000-000000000002'),
+    (SELECT count(*) FROM prompt_profiles WHERE id = 'a11e0000-0000-4000-8000-000000000003'),
+    (SELECT count(*) FROM generation_jobs WHERE id = 'a11e0000-0000-4000-8000-000000000013'),
+    (SELECT count(*) FROM account_settings
+       WHERE active_child_profile_id = 'a11e0000-0000-4000-8000-000000000002'
+         AND active_prompt_profile_id = 'a11e0000-0000-4000-8000-000000000003');
+" 'legacy retirement fail-closed preservation'
+
+# These rows belong only to this disposable preservation vector. The harness
+# makes the explicit operator decision that migration 23 deliberately refuses
+# to make on behalf of a real deployment.
+psql_query "
+  DELETE FROM generation_jobs;
+  DELETE FROM account_settings;
+  DELETE FROM child_profiles;
+  DELETE FROM prompt_profiles;
+" >/dev/null
+
 run_goose up >"$test_root/current-seed-schema-upgrade.out" 2>"$test_root/current-seed-schema-upgrade.err"
-assert_query '22|true' "
+assert_query '23|true' "
   SELECT version_id || '|' || is_applied
   FROM goose_db_version ORDER BY id DESC LIMIT 1;
 " 'current seed schema marker'
+assert_query '1|1|1|1|1' "
+  SELECT
+    (to_regclass('public.account_settings') IS NULL)::int,
+    (to_regclass('public.child_profiles') IS NULL)::int,
+    (to_regclass('public.prompt_profiles') IS NULL)::int,
+    (to_regclass('public.generation_jobs') IS NULL)::int,
+    (to_regtype('public.generation_status') IS NULL)::int;
+" 'current legacy runtime schema retirement'
 
 env \
   PP_ALLOW_TEST_SEED=1 \
@@ -1452,16 +1495,13 @@ env \
   PP_TEST_SEED_CONTAINER="$postgres_container" \
   "$seed_script" >"$test_root/seed.out"
 grep -q '^test_seed=installed progress=absent target=local_or_disposable$' "$test_root/seed.out"
-assert_query '1|1|1|1|1|2|6|1|0|0|0' "
+assert_query '1|1|1|2|6|0|0|0' "
   SELECT
-    (SELECT count(*) FROM child_profiles WHERE id = 'f17e0000-0000-4000-8000-000000000001'),
-    (SELECT count(*) FROM prompt_profiles WHERE id = 'f17e0000-0000-4000-8000-000000000002'),
     (SELECT count(*) FROM contributors WHERE id = 'f17e0000-0000-4000-8000-000000000004'),
     (SELECT count(*) FROM stories WHERE id = 'f17e0000-0000-4000-8000-000000000010' AND is_published),
     (SELECT count(*) FROM story_versions WHERE id = 'f17e0000-0000-4000-8000-000000000011'),
     (SELECT count(*) FROM story_sections WHERE story_version_id = 'f17e0000-0000-4000-8000-000000000011'),
     (SELECT count(*) FROM story_segments WHERE story_version_id = 'f17e0000-0000-4000-8000-000000000011'),
-    (SELECT count(*) FROM generation_jobs WHERE id = 'f17e0000-0000-4000-8000-000000000040'),
     (SELECT count(*) FROM reading_progress WHERE story_id = 'f17e0000-0000-4000-8000-000000000010'),
     (SELECT count(*) FROM story_sources WHERE story_id = 'f17e0000-0000-4000-8000-000000000010'),
     (SELECT count(*) FROM story_source_versions WHERE story_id = 'f17e0000-0000-4000-8000-000000000010');
@@ -1580,22 +1620,16 @@ env \
   PP_TEST_SEED_DATABASE="$database" \
   PP_TEST_SEED_CONTAINER="$postgres_container" \
   "$seed_script" --remove >/dev/null
-assert_query '0|0|0|0|0|0|0|0|0|0|1|1|0' "
+assert_query '0|0|0|0|0|0|0|1|0' "
   SELECT
     (SELECT count(*) FROM stories WHERE id = 'f17e0000-0000-4000-8000-000000000010'),
     (SELECT count(*) FROM story_versions WHERE id = 'f17e0000-0000-4000-8000-000000000011'),
     (SELECT count(*) FROM story_sections WHERE story_version_id = 'f17e0000-0000-4000-8000-000000000011'),
     (SELECT count(*) FROM story_segments WHERE story_version_id = 'f17e0000-0000-4000-8000-000000000011'),
-    (SELECT count(*) FROM child_profiles WHERE id = 'f17e0000-0000-4000-8000-000000000001'),
-    (SELECT count(*) FROM prompt_profiles WHERE id = 'f17e0000-0000-4000-8000-000000000002'),
     (SELECT count(*) FROM contributors WHERE id = 'f17e0000-0000-4000-8000-000000000004'),
-    (SELECT count(*) FROM generation_jobs WHERE id = 'f17e0000-0000-4000-8000-000000000040'),
     (SELECT count(*) FROM reading_progress WHERE story_id = 'f17e0000-0000-4000-8000-000000000010'),
     (SELECT count(*) FROM story_contributors WHERE story_id = 'f17e0000-0000-4000-8000-000000000010'),
     (SELECT count(*) FROM stories WHERE id = 'a11e0000-0000-4000-8000-000000000010'),
-    (SELECT count(*) FROM account_settings
-       WHERE active_child_profile_id = 'a11e0000-0000-4000-8000-000000000002'
-         AND active_prompt_profile_id = 'a11e0000-0000-4000-8000-000000000003'),
     (SELECT count(*) FROM reading_progress WHERE story_id = 'a11e0000-0000-4000-8000-000000000010');
 " 'explicit fixture removal preservation'
 env \

@@ -296,7 +296,9 @@ WHERE namespace.nspname = 'public'
   )
 \gexec
 
--- Runtime access is deliberately tied to the tables used by current Go SQL.
+-- Runtime access covers current tables plus historical compatibility tables
+-- exercised by migration integration tests. Only relations that actually exist
+-- at the database's migration boundary receive grants.
 WITH runtime_table(name) AS (
   VALUES
     ('accounts'),
