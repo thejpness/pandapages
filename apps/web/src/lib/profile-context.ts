@@ -1,10 +1,10 @@
 import { currentAccountContext, type AccountContext } from "./account-context";
 import { listReaderProfiles, type ReaderProfile } from "./api";
 import {
-  clearSelectedReaderProfile,
   resolvePersistedReaderProfileSelection,
   selectedReaderProfileID,
 } from "./reader-profile-selection";
+import { invalidateReaderProfileSession } from "./profile-session";
 
 export type ReaderProfileContext = Readonly<{
   account: AccountContext;
@@ -22,6 +22,7 @@ export class ProfileContextError extends Error {
 
 export async function currentReaderProfileContext(): Promise<ReaderProfileContext> {
   const account = await currentAccountContext();
+  const persistedID = selectedReaderProfileID();
   let profiles: readonly ReaderProfile[];
   try {
     profiles = await listReaderProfiles(account);
@@ -29,16 +30,16 @@ export async function currentReaderProfileContext(): Promise<ReaderProfileContex
     throw new ProfileContextError("unavailable");
   }
   const selection = resolvePersistedReaderProfileSelection(
-    selectedReaderProfileID(),
+    persistedID,
     profiles,
   );
   if (selection === null) {
-    clearSelectedReaderProfile();
+    invalidateReaderProfileSession(persistedID ?? undefined);
     throw new ProfileContextError("profile_selection_required");
   }
   const profile = profiles.find((candidate) => candidate.id === selection.id);
   if (!profile) {
-    clearSelectedReaderProfile();
+    invalidateReaderProfileSession(persistedID ?? undefined);
     throw new ProfileContextError("profile_selection_required");
   }
   return { account, profile };

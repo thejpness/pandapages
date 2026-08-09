@@ -8,6 +8,7 @@ import {
   ProfileContextError,
   currentReaderProfileContext,
 } from "./lib/profile-context";
+import { resolveReaderDestination } from "./lib/profile-destination";
 import { enterChildMode, isChildMode, isChildModeFor } from "./lib/reader-mode";
 
 export const router = createRouter({
@@ -142,7 +143,7 @@ router.beforeEach(async (to) => {
       return {
         path: "/profiles",
         query: {
-          next: to.fullPath,
+          next: resolveReaderDestination(to.fullPath),
           ...(error.kind === "unavailable" ? { unavailable: "1" } : {}),
         },
       };
