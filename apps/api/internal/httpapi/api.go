@@ -31,6 +31,9 @@ type Store interface {
 
 	Library(accountID string) (model.LibraryReadModel, error)
 	ReaderStory(accountID, slug string) (model.ReaderStory, error)
+	ReaderResolve(accountID, profileID, slug string) (model.ReaderResolution, error)
+	ReaderStoryEditionOverridePut(accountID, profileID, slug string, editionKey model.ReaderEditionKey) error
+	ReaderStoryEditionOverrideClear(accountID, profileID, slug string) (bool, error)
 
 	ProgressGet(accountID, profileID, slug string) (model.ProgressResponse, error)
 	ProgressPut(accountID, profileID, slug string, version int, locator readercontract.Locator, percent float64) error
@@ -141,6 +144,106 @@ func New(cfg Config, store Store) http.Handler {
 
 		noStore(w)
 		writeJSON(w, http.StatusOK, library)
+	}))
+
+	// Reader release resolution is profile scoped. This additive endpoint is
+	// consumed by the L7.2 Reader client before the legacy account-scoped Reader
+	// payload route is retired.
+	mux.HandleFunc("/api/v1/reader-resolution/", withBearerProfile(func(w http.ResponseWriter, r *http.Request, profile httpprofile.Context) {
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w, []string{http.MethodGet})
+			return
+		}
+
+		slug := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/reader-resolution/"), "/")
+		if slug == "" {
+			writeErr(w, http.StatusBadRequest, "slug", "missing slug")
+			return
+		}
+		if strings.Contains(slug, "/") {
+			writeErr(w, http.StatusNotFound, "not_found", "reader story not found")
+			return
+		}
+
+		resolution, err := store.ReaderResolve(profile.AccountID, profile.ProfileID, slug)
+		if errors.Is(err, sql.ErrNoRows) {
+			writeErr(w, http.StatusNotFound, "not_found", "story not found")
+			return
+		}
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "db", "reader resolution failed")
+			return
+		}
+
+		noStore(w)
+		writeJSON(w, http.StatusOK, resolution)
+	}))
+
+	// Explicit Reader edition selection is durable per profile/story. PUT sets a
+	// validated current-release choice; DELETE idempotently clears only that
+	// choice and never changes reading progress.
+	mux.HandleFunc("/api/v1/reader-edition/", withBearerProfile(func(w http.ResponseWriter, r *http.Request, profile httpprofile.Context) {
+		slug := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/reader-edition/"), "/")
+		if slug == "" {
+			writeErr(w, http.StatusBadRequest, "slug", "missing slug")
+			return
+		}
+		if strings.Contains(slug, "/") {
+			writeErr(w, http.StatusNotFound, "not_found", "reader story not found")
+			return
+		}
+
+		switch r.Method {
+		case http.MethodPut:
+			var body struct {
+				EditionKey model.ReaderEditionKey `json:"editionKey"`
+			}
+			if err := decodeJSON(w, r, &body); err != nil {
+				writeDecodeError(w, err)
+				return
+			}
+			if !model.ValidReaderEditionKey(body.EditionKey) {
+				writeErr(w, http.StatusBadRequest, "edition_invalid", "reading edition is not supported")
+				return
+			}
+
+			err := store.ReaderStoryEditionOverridePut(
+				profile.AccountID,
+				profile.ProfileID,
+				slug,
+				body.EditionKey,
+			)
+			if errors.Is(err, sql.ErrNoRows) {
+				writeErr(w, http.StatusNotFound, "not_found", "story edition not found")
+				return
+			}
+			if err != nil {
+				writeErr(w, http.StatusInternalServerError, "db", "reader edition update failed")
+				return
+			}
+
+			noStore(w)
+			writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+			return
+
+		case http.MethodDelete:
+			if _, err := store.ReaderStoryEditionOverrideClear(
+				profile.AccountID,
+				profile.ProfileID,
+				slug,
+			); err != nil {
+				writeErr(w, http.StatusInternalServerError, "db", "reader edition clear failed")
+				return
+			}
+
+			noStore(w)
+			writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+			return
+
+		default:
+			methodNotAllowed(w, []string{http.MethodPut, http.MethodDelete})
+			return
+		}
 	}))
 
 	// Reader 2: one coherent published-version payload.
@@ -425,7 +528,7 @@ func decodeProfileInput(
 	r *http.Request,
 ) (string, model.ReaderEditionKey, bool) {
 	var body struct {
-		Name             string                 `json:"name"`
+		Name         string                 `json:"name"`
 		ReadingLevel model.ReaderEditionKey `json:"readingLevel"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
