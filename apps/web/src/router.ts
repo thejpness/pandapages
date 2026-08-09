@@ -8,6 +8,7 @@ import {
   ProfileContextError,
   currentReaderProfileContext,
 } from "./lib/profile-context";
+import { resolveReaderDestination } from "./lib/profile-destination";
 import { enterChildMode, isChildMode, isChildModeFor } from "./lib/reader-mode";
 
 export const router = createRouter({
@@ -38,6 +39,22 @@ export const router = createRouter({
     {
       path: "/profiles",
       component: () => import("./views/Profiles.vue"),
+      meta: { requiresAccount: true },
+    },
+    {
+      path: "/profiles/new",
+      component: () => import("./views/ProfileNew.vue"),
+      meta: { requiresAccount: true, parentOnly: true },
+    },
+    {
+      path: "/profiles/manage",
+      component: () => import("./views/ProfileManage.vue"),
+      meta: { requiresAccount: true, parentOnly: true },
+    },
+    {
+      path: "/profiles/:profileID/edit",
+      component: () => import("./views/ProfileEdit.vue"),
+      props: true,
       meta: { requiresAccount: true, parentOnly: true },
     },
 
@@ -142,7 +159,7 @@ router.beforeEach(async (to) => {
       return {
         path: "/profiles",
         query: {
-          next: to.fullPath,
+          next: resolveReaderDestination(to.fullPath),
           ...(error.kind === "unavailable" ? { unavailable: "1" } : {}),
         },
       };

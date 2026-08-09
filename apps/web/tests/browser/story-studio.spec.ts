@@ -694,15 +694,15 @@ test('catalogue loads human statuses and supports deterministic search and filte
   expect(api.unhandled).toEqual([])
 })
 
-test('owner can round-trip Parent Hub and Story Studio without entering reader mode', async ({
+test('owner can round-trip Manage profiles and Story Studio without entering reader mode', async ({
   page,
 }) => {
   const api = new StudioAPI()
   await api.install(page)
 
-  await page.goto('/profiles')
+  await page.goto('/profiles/manage')
   await expect(
-    page.getByRole('heading', { level: 1, name: 'Parent Hub' }),
+    page.getByRole('heading', { level: 1, name: 'Manage profiles' }),
   ).toBeVisible()
   await expect(
     page.getByRole('button', { name: /Story Studio/ }),
@@ -718,17 +718,17 @@ test('owner can round-trip Parent Hub and Story Studio without entering reader m
     page.getByRole('heading', { level: 1, name: 'Stories' }),
   ).toBeVisible()
   await expect(
-    page.getByRole('button', { name: 'Parent Hub' }),
+    page.getByRole('button', { name: 'Manage profiles' }),
   ).toBeVisible()
 
-  await page.getByRole('button', { name: 'Parent Hub' }).click()
+  await page.getByRole('button', { name: 'Manage profiles' }).click()
 
-  await expect(page).toHaveURL('/profiles')
+  await expect(page).toHaveURL('/profiles/manage')
   await expect(
-    page.getByRole('heading', { level: 1, name: 'Parent Hub' }),
+    page.getByRole('heading', { level: 1, name: 'Manage profiles' }),
   ).toBeVisible()
   await expect(
-    page.getByRole('button', { name: 'Start reading as Mina' }),
+    page.getByRole('button', { name: 'Edit Mina' }),
   ).toBeVisible()
   await expect(
     page.getByRole('button', { name: 'Leave reader mode' }),

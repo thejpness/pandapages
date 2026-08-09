@@ -32,10 +32,9 @@ import {
   type LibrarySort,
 } from '../lib/library-sorting'
 import { isChildMode, leaveChildMode } from '../lib/reader-mode'
-import {
-  clearSelectedReaderProfile,
-  selectedReaderProfileID,
-} from '../lib/reader-profile-selection'
+import { resolveReaderDestination } from '../lib/profile-destination'
+import { invalidateReaderProfileSession, isProfileSessionInvalidError } from '../lib/profile-session'
+import { selectedReaderProfileID } from '../lib/reader-profile-selection'
 
 type HeaderExpose = { focusSearch: () => void }
 type LoadErrorKind = 'server-error' | 'malformed' | null
@@ -309,7 +308,7 @@ async function moveToProfilesForSelection(): Promise<void> {
   loadError.value = null
 
   try {
-    await router.replace({ path: '/profiles', query: { next: '/library' } })
+    await router.replace({ path: '/profiles', query: { next: resolveReaderDestination(route.fullPath) } })
   } catch {
     profileRedirecting = false
     loading.value = false
@@ -361,8 +360,8 @@ async function loadLibrary() {
       await moveToSignInAfterSessionEnded()
       return
     }
-    if (status === 400 || status === 403) {
-      clearSelectedReaderProfile()
+    if (isProfileSessionInvalidError(error)) {
+      invalidateReaderProfileSession()
       await moveToProfilesForSelection()
       return
     }
@@ -421,6 +420,9 @@ onBeforeRouteUpdate((to) => {
 function navigateFromLibrary(path: string) {
   void router.push(path)
 }
+function switchReader() {
+  void router.push({ path: "/profiles", query: { next: resolveReaderDestination(route.fullPath) } })
+}
 
 function leaveReaderMode() {
   leaveChildMode()
@@ -444,7 +446,7 @@ function leaveReaderMode() {
       @update:sort="setSort"
       @clear="clearSearch"
       @surprise="goSurprise"
-      @profiles="navigateFromLibrary('/profiles')"
+      @profiles="switchReader"
       @journey="navigateFromLibrary('/journey')"
       @admin="navigateFromLibrary('/admin/stories')"
       @lock="lockLibrary"

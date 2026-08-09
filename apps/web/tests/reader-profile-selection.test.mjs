@@ -28,7 +28,10 @@ test('zero profiles stays unselected and creates no default', () => {
 })
 
 test('exactly one server profile is selected as a frontend convenience', () => {
-  assert.deepEqual(selection.reconcileReaderProfileSelection(null, one), { id: one[0].id })
+  const convenience = selection.reconcileReaderProfileSelection(null, one)
+  assert.deepEqual(convenience, { id: one[0].id })
+  const localStorage = storage()
+  assert.equal(selection.selectedReaderProfileID(localStorage), null)
 })
 
 test('protected profile context requires an explicit persisted selection', () => {

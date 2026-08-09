@@ -784,6 +784,11 @@ export class ReaderApiMock {
 export const test = base.extend<{ api: ReaderApiMock }>({
   api: async ({ page }, use) => {
     const api = new ReaderApiMock(page)
+    await page.addInitScript((profileID) => {
+      if (!window.localStorage.getItem('pandapages.selected-reader-profile-id')) {
+        window.localStorage.setItem('pandapages.selected-reader-profile-id', profileID)
+      }
+    }, fixtureProfileID)
     await api.install()
     await use(api)
     expect(api.unhandledRequests, 'browser test left API requests unhandled').toEqual([])

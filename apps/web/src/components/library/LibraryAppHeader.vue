@@ -24,6 +24,7 @@ const emit = defineEmits<{
   clear: []
   surprise: []
   profiles: []
+  switch: []
   journey: []
   admin: []
   lock: []
@@ -198,6 +199,14 @@ defineExpose({ focusSearch })
             </div>
           </PopoverRoot>
 
+          <button
+            v-if="childMode"
+            class="header-button header-button--quiet"
+            type="button"
+            @click="emit('switch')"
+          >
+            Switch reader
+          </button>
           <button
             v-if="childMode"
             ref="lockButton"
