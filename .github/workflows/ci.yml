@@ -219,6 +219,7 @@ jobs:
             scripts/tests/postgresql-roles-contract.sh \
             scripts/tests/web-security-headers-contract.sh \
             scripts/tests/postgresql-roles-integration.sh \
+            scripts/dev/bootstrap-postgresql.sh \
             scripts/dev/seed-test-data.sh
           scripts/postgresql-backup.sh --help >/dev/null
           scripts/postgresql-backup-healthcheck.sh --help >/dev/null
@@ -228,6 +229,7 @@ jobs:
           scripts/postgresql-readonly-audit.sh --help >/dev/null
           scripts/postgresql-roles.sh --help >/dev/null
           scripts/postgresql-restore-rehearsal.sh --help >/dev/null
+          scripts/dev/bootstrap-postgresql.sh --help >/dev/null
           scripts/dev/seed-test-data.sh --help >/dev/null
 
       - name: Build API and migration images for generated database tests
