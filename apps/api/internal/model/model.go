@@ -78,6 +78,24 @@ type ReaderStory struct {
 	Segments []ReaderSegment `json:"segments"`
 }
 
+type ReaderResolvedStory struct {
+	ReaderStory
+	EditionKey ReaderEditionKey `json:"editionKey"`
+}
+
+type ReaderResolutionState string
+
+const (
+	ReaderResolutionSelected ReaderResolutionState = "selected"
+	ReaderResolutionChooser  ReaderResolutionState = "chooser"
+)
+
+type ReaderResolution struct {
+	State            ReaderResolutionState `json:"state"`
+	EligibleEditions []ReaderEditionKey    `json:"eligibleEditions"`
+	Story            *ReaderResolvedStory  `json:"story"`
+}
+
 type ReaderSegment struct {
 	Ordinal           int     `json:"ordinal"`
 	Kind              string  `json:"kind"`
@@ -129,8 +147,8 @@ func ValidReaderEditionKey(key ReaderEditionKey) bool {
 // representation. Profile ownership is always checked against the selected
 // account by the caller's authorization boundary.
 type ReaderProfile struct {
-	ID               string           `json:"id"`
-	Name             string           `json:"name"`
-	PINEnabled       bool             `json:"pin_enabled"`
+	ID           string           `json:"id"`
+	Name         string           `json:"name"`
+	PINEnabled   bool             `json:"pin_enabled"`
 	ReadingLevel ReaderEditionKey `json:"reading_level"`
 }
