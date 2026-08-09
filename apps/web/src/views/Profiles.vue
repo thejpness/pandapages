@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, nextTick, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import ProfileIdentity from '../components/profile/ProfileIdentity.vue';
+import ProfilePINDialog from '../components/profile/ProfilePINDialog.vue';
 import { getAPIErrorStatus, listReaderProfiles, type ReaderProfile, verifyReaderProfilePIN } from "../lib/api";
 import { currentAccountContext } from "../lib/account-context";
 import { resolveReaderDestination } from "../lib/profile-destination";
@@ -9,14 +10,14 @@ import { enterReaderProfileSession } from "../lib/profile-session";
 import { readerEditionLabel } from '../lib/reader-editions';
 import { clearSelectedReaderProfile, reconcileReaderProfileSelection, selectedReaderProfileID } from "../lib/reader-profile-selection";
 import { isChildMode, isChildModeFor } from "../lib/reader-mode";
-const route=useRoute();const router=useRouter();const profiles=ref<readonly ReaderProfile[]>([]);const selectedID=ref<string|null>(null);const loading=ref(true);const busy=ref(false);const errorMessage=ref("");const pinTarget=ref<ReaderProfile|null>(null);const pinValue=ref("");const pinError=ref("");const unavailable=computed(()=>route.query.unavailable==='1');
+const route=useRoute();const router=useRouter();const profiles=ref<readonly ReaderProfile[]>([]);const selectedID=ref<string|null>(null);const loading=ref(true);const busy=ref(false);const errorMessage=ref("");const pinTarget=ref<ReaderProfile|null>(null);const pinValue=ref("");const pinError=ref("");const pinTrigger=ref<HTMLElement|null>(null);const unavailable=computed(()=>route.query.unavailable==='1');
 const destination=()=>resolveReaderDestination(route.query.next);const message=(error:unknown)=>error instanceof Error&&error.message?error.message:"Profiles could not be updated. Please try again.";
 function readerStatus(profileID:string){if(selectedID.value!==profileID)return null;return isChildModeFor(profileID)?'Current reader':'Selected reader';}
 function restore(){const value=reconcileReaderProfileSelection(selectedReaderProfileID(),profiles.value);if(!value){clearSelectedReaderProfile();selectedID.value=null;return;}selectedID.value=value.id;}
 async function refresh(){profiles.value=await listReaderProfiles(await currentAccountContext());restore();}
-async function choose(profile:ReaderProfile){if(isChildModeFor(profile.id) && selectedReaderProfileID() === profile.id){await router.replace(destination());return;}if(profile.pinEnabled){pinTarget.value=profile;pinValue.value="";pinError.value="";return;}if(!enterReaderProfileSession(profile.id)){errorMessage.value="This reader could not be started. Please try again.";return;}selectedID.value=profile.id;await router.replace(destination());}
-function closePIN(){pinTarget.value=null;pinValue.value="";pinError.value="";}
-async function submitPIN(){const profile=pinTarget.value;if(!profile||busy.value)return;busy.value=true;pinError.value="";try{await verifyReaderProfilePIN(profile.id,pinValue.value);if(!enterReaderProfileSession(profile.id)){pinError.value="This reader could not be started. Please try again.";return;}selectedID.value=profile.id;closePIN();await router.replace(destination());}catch(error){pinError.value=getAPIErrorStatus(error)===429?"Too many tries. Please wait before trying again.":"That PIN is not right.";}finally{busy.value=false;}}
+async function choose(profile:ReaderProfile,trigger?:EventTarget|null){if(isChildModeFor(profile.id) && selectedReaderProfileID() === profile.id){await router.replace(destination());return;}if(profile.pinEnabled){pinTrigger.value=trigger instanceof HTMLElement?trigger:null;pinTarget.value=profile;pinValue.value="";pinError.value="";return;}if(!enterReaderProfileSession(profile.id)){errorMessage.value="This reader could not be started. Please try again.";return;}selectedID.value=profile.id;await router.replace(destination());}
+function closePIN(restoreFocus=true){pinTarget.value=null;pinValue.value="";pinError.value="";if(restoreFocus){const trigger=pinTrigger.value;void nextTick(()=>trigger?.focus({preventScroll:true}));}pinTrigger.value=null;}
+async function submitPIN(){const profile=pinTarget.value;if(!profile||busy.value)return;busy.value=true;pinError.value="";try{await verifyReaderProfilePIN(profile.id,pinValue.value);if(!enterReaderProfileSession(profile.id)){pinError.value="This reader could not be started. Please try again.";return;}selectedID.value=profile.id;closePIN(false);await router.replace(destination());}catch(error){pinError.value=getAPIErrorStatus(error)===429?"Too many tries. Please wait before trying again.":"That PIN is not right.";}finally{busy.value=false;}}
 onMounted(async()=>{try{await refresh();}catch(error){errorMessage.value=message(error);}finally{loading.value=false;}});
 </script>
 <template>
@@ -54,7 +55,7 @@ onMounted(async()=>{try{await refresh();}catch(error){errorMessage.value=message
         </section>
         <ul v-else class="profile-grid" aria-label="Readers">
           <li v-for="profile in profiles" :key="profile.id">
-            <button class="profile-choice" type="button" :aria-label="`Start reading as ${profile.name}`" @click="choose(profile)">
+            <button class="profile-choice" type="button" :aria-label="`Start reading as ${profile.name}`" @click="choose(profile, $event.currentTarget)">
               <ProfileIdentity class="profile-choice__identity" :profileID="profile.id" />
               <span class="profile-choice__copy">
                 <span class="profile-choice__name">{{ profile.name }}</span>
@@ -75,15 +76,18 @@ onMounted(async()=>{try{await refresh();}catch(error){errorMessage.value=message
       </nav>
     </main>
 
-    <section v-if="pinTarget" class="profile-pin" role="dialog" aria-modal="true" aria-labelledby="profile-pin-title">
-      <h2 id="profile-pin-title">Enter {{ pinTarget.name }}’s PIN</h2>
-      <form class="profile-pin__form" @submit.prevent="submitPIN">
-        <label for="profile-pin">Four-digit PIN</label>
-        <input id="profile-pin" v-model="pinValue" type="password" inputmode="numeric" autocomplete="off" pattern="[0-9]{4}" minlength="4" maxlength="4" :disabled="busy" required />
-        <p v-if="pinError" class="profile-pin__error" role="alert">{{ pinError }}</p>
-        <div class="profile-pin__actions"><button type="button" :disabled="busy" @click="closePIN">Cancel</button><button type="submit" :disabled="busy">Continue</button></div>
-      </form>
-    </section>
+    <ProfilePINDialog
+      v-if="pinTarget"
+      :open="pinTarget !== null"
+      :profileID="pinTarget.id"
+      :profile-name="pinTarget.name"
+      :pin-value="pinValue"
+      :busy="busy"
+      :error="pinError"
+      @update:pin-value="pinValue = $event"
+      @submit="submitPIN"
+      @cancel="closePIN"
+    />
   </div>
 </template>
 
@@ -171,7 +175,7 @@ onMounted(async()=>{try{await refresh();}catch(error){errorMessage.value=message
 .profile-choice__current { width: fit-content; justify-self: center; border: 1px solid var(--panda-success); border-radius: var(--panda-radius-pill); padding: 0.2rem 0.55rem; color: var(--panda-success); }
 
 .profile-chooser__parent-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.7rem; margin-top: clamp(2rem, 6vh, 4rem); }
-.profile-chooser__parent-actions button, .profile-pin button { min-height: 2.75rem; border: 1px solid var(--panda-ink); border-radius: var(--panda-radius-compact); padding: 0.6rem 0.9rem; background: var(--panda-paper-raised); color: var(--panda-ink); font: inherit; font-weight: 800; }
+.profile-chooser__parent-actions button { min-height: 2.75rem; border: 1px solid var(--panda-ink); border-radius: var(--panda-radius-compact); padding: 0.6rem 0.9rem; background: var(--panda-paper-raised); color: var(--panda-ink); font: inherit; font-weight: 800; }
 .profile-chooser__add { background: var(--panda-ink) !important; color: var(--panda-white) !important; }
 .profile-chooser__add span { margin-right: 0.25rem; font-size: 1.1em; }
 .profile-chooser__manage { border-color: var(--panda-line-strong) !important; }
@@ -183,15 +187,6 @@ onMounted(async()=>{try{await refresh();}catch(error){errorMessage.value=message
 .profile-state--error { border-color: var(--panda-danger); }
 .profile-state--error .profile-state__mark { color: var(--panda-danger); }
 .profile-notice { width: min(100%, 44rem); margin: 0 auto 1.25rem; border: 1px solid var(--panda-warning); border-radius: var(--panda-radius-compact); padding: 0.75rem 0.9rem; background: var(--panda-warning-surface); color: var(--panda-warning); font-weight: 700; line-height: 1.45; text-align: center; }
-
-.profile-pin { display: grid; width: min(100%, 30rem); gap: 1rem; margin: 2rem auto 0; border: 1px solid var(--panda-line-strong); border-radius: var(--panda-radius-card); padding: 1.1rem; background: var(--panda-paper-raised); box-shadow: var(--panda-shadow); }
-.profile-pin h2 { font-family: var(--panda-serif); font-size: 1.45rem; }
-.profile-pin__form { display: grid; gap: 0.8rem; }
-.profile-pin label { font-weight: 800; }
-.profile-pin input { min-height: 2.75rem; border: 1px solid var(--panda-line-strong); border-radius: var(--panda-radius-compact); padding: 0.55rem 0.7rem; background: var(--panda-white); color: var(--panda-ink); font: inherit; }
-.profile-pin__error { color: var(--panda-danger); font-weight: 800; }
-.profile-pin__actions { display: flex; flex-wrap: wrap; gap: 0.65rem; }
-.profile-pin__actions button[type="submit"] { background: var(--panda-ink); color: var(--panda-white); }
 
 @media (max-width: 29rem) {
   .profile-chooser { padding-inline: max(0.8rem, env(safe-area-inset-right)) max(0.8rem, env(safe-area-inset-left)); }
@@ -206,7 +201,7 @@ onMounted(async()=>{try{await refresh();}catch(error){errorMessage.value=message
 @media (forced-colors: active) {
   .profile-chooser { background: Canvas; color: CanvasText; }
   .profile-chooser::before { display: none; }
-  .profile-chooser__brand img, .profile-choice, .profile-state, .profile-pin { border-color: CanvasText; background: Canvas; box-shadow: none; }
+  .profile-chooser__brand img, .profile-choice, .profile-state { border-color: CanvasText; background: Canvas; box-shadow: none; }
   .profile-choice__current { border-color: Highlight; color: Highlight; }
   .profile-chooser__add { border-color: CanvasText; background: Canvas !important; color: CanvasText !important; }
 }

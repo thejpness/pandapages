@@ -1,4 +1,5 @@
 import type { Page, Route } from '@playwright/test'
+import AxeBuilder from '@axe-core/playwright'
 
 import {
   expect,
@@ -135,6 +136,40 @@ test.describe('reader profile lifecycle', () => {
     const api = new ProfilesApiMock(page); api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false, reading_level: 'classic' }]; await api.install(); await page.goto('/profiles');
     await expect(page.getByRole('heading', { level: 1, name: 'Who’s reading?' })).toBeVisible(); await expect(page.getByRole('button', { name: 'Start reading as Mina' })).toBeVisible(); await expect(page.getByText('Classic', { exact: true })).toBeVisible(); await expect(page.getByRole('button', { name: 'Add profile' })).toBeVisible(); await expect(page.getByRole('button', { name: 'Manage profiles' })).toBeVisible(); await expect(page.getByLabel('New reader name')).toHaveCount(0); await expect(page.getByRole('button', { name: 'Edit reader' })).toHaveCount(0); await expect.poll(() => page.evaluate(() => window.localStorage.getItem('pandapages.selected-reader-profile-id'))).toBeNull(); await page.setViewportSize({ width: 320, height: 700 }); await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   });
+  test("PIN dialog is named, focus-contained, cancellable, and usable on a narrow viewport", async ({ page }) => {
+    const api = new ProfilesApiMock(page)
+    api.profiles = [{ id: fixtureProfileID, name: "Ted", pin_enabled: true, reading_level: "classic" }]
+    await api.install()
+    await page.setViewportSize({ width: 320, height: 700 })
+    await page.goto("/profiles")
+
+    const trigger = page.getByRole("button", { name: "Start reading as Ted" })
+    await trigger.click()
+    const dialog = page.getByRole("dialog", { name: "Enter Ted’s PIN" })
+    const pin = dialog.getByLabel("Four-digit PIN")
+    await expect(dialog).toBeVisible()
+    await expect(dialog).toHaveAccessibleDescription("A four-digit PIN is required to start reading as Ted.")
+    await expect(pin).toBeFocused()
+    const violations = (await new AxeBuilder({ page }).analyze()).violations
+      .filter((violation) => violation.impact === 'serious' || violation.impact === 'critical')
+      .map((violation) => violation.id)
+    expect(violations).toEqual([])
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
+
+    await page.keyboard.press("Tab")
+    await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused()
+    await page.keyboard.press("Tab")
+    await expect(dialog.getByRole("button", { name: "Continue" })).toBeFocused()
+    await page.keyboard.press("Tab")
+    await expect(pin).toBeFocused()
+    await page.keyboard.press("Shift+Tab")
+    await expect(dialog.getByRole("button", { name: "Continue" })).toBeFocused()
+
+    await page.keyboard.press("Escape")
+    await expect(dialog).toBeHidden()
+    await expect(trigger).toBeFocused()
+  })
+
   test('create is dedicated and does not start or select a reader', async ({ page }) => {
     const api = new ProfilesApiMock(page); await api.install(); await page.goto('/profiles/new?from=chooser'); await page.getByLabel('Reader name').fill('Ted'); await page.getByLabel('Reading level').selectOption('little-listeners'); await page.getByRole('button', { name: 'Create profile' }).click(); await expect(page).toHaveURL('/profiles'); await expect.poll(() => page.evaluate(() => window.localStorage.getItem('pandapages.selected-reader-profile-id'))).toBeNull(); await expect(page.getByRole('button', { name: 'Start reading as Ted' })).toBeVisible();
   });
@@ -187,14 +222,23 @@ test.describe('reader profile lifecycle', () => {
       if (!app) throw new Error('Vue application was not mounted')
       await app.config.globalProperties.$router.push('/profiles?next=/library')
     })
-    await page.getByRole('button', { name: 'Start reading as Ted' }).click()
+    const tedTrigger = page.getByRole('button', { name: 'Start reading as Ted' })
+    await tedTrigger.click()
+    await expect(page.getByLabel('Four-digit PIN')).toBeFocused()
     await page.getByLabel('Four-digit PIN').fill('0000')
     await page.getByRole('button', { name: 'Continue' }).click()
     await expect(page.getByRole('alert')).toHaveText('That PIN is not right.')
+    await expect(page.getByLabel('Four-digit PIN')).toBeFocused()
     await expect.poll(() => page.evaluate(() => window.localStorage.getItem('pandapages.selected-reader-profile-id'))).toBe(fixtureProfileID)
     await page.getByRole('button', { name: 'Cancel' }).click()
     await expect(page.getByRole('dialog')).toHaveCount(0)
     await expect.poll(() => page.evaluate(() => window.localStorage.getItem('pandapages.selected-reader-profile-id'))).toBe(fixtureProfileID)
+    await expect(tedTrigger).toBeFocused()
+    await tedTrigger.click()
+    await page.getByLabel('Four-digit PIN').fill('1234')
+    await page.getByRole('button', { name: 'Continue' }).click()
+    await expect(page).toHaveURL('/library')
+    await expect.poll(() => page.evaluate(() => window.localStorage.getItem('pandapages.selected-reader-profile-id'))).toBe(tedID)
   })
 
   test('the active PIN reader continues without a second verification', async ({ page }) => {
