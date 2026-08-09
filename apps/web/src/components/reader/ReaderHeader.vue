@@ -18,6 +18,8 @@ const emit = defineEmits<{
   settings: []
   chapters: []
   retry: []
+  switch: []
+  leave: []
 }>()
 </script>
 
@@ -53,6 +55,8 @@ const emit = defineEmits<{
       </div>
 
       <div class="reader-header-controls">
+        <button class="reader-header-action" type="button" :disabled="navigating" @click="emit('switch')">Switch reader</button>
+        <button class="reader-header-action" type="button" :disabled="navigating" @click="emit('leave')">Leave reader mode</button>
         <div class="reader-save-status" role="status" aria-live="polite" aria-atomic="true">
           <span>{{ statusText }}</span>
           <button

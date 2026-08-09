@@ -9,9 +9,11 @@ import {
 } from '../lib/api'
 import { readerContentFailure, type ReaderContentState } from '../lib/reader-content-state'
 import { createReaderLoadGeneration } from '../lib/reader-load-generation'
+import { isProfileSessionInvalidError } from '../lib/profile-session'
 
 export type UseReaderStoryOptions = {
   onSessionEnded: (slug: string) => Promise<void> | void
+  onProfileInvalid: (slug: string) => Promise<void> | void
   onReady?: (story: ReaderResolvedStoryPayload) => Promise<void> | void
 }
 
@@ -57,6 +59,10 @@ export function useReaderStory(options: UseReaderStoryOptions) {
     if (error instanceof DOMException && error.name === 'AbortError') return
     if (getAPIErrorStatus(error) === 401) {
       await options.onSessionEnded(slug)
+      return
+    }
+    if (isProfileSessionInvalidError(error)) {
+      await options.onProfileInvalid(slug)
       return
     }
     story.value = null

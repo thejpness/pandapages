@@ -36,6 +36,9 @@ import type { CrossVersionMapping } from '../lib/reader-cross-version-progress'
 import type { ReaderLocatorV2 } from '../lib/reader-locator-v2'
 import { applyReaderTheme } from '../lib/reader-theme-bootstrap'
 import { selectedReaderProfileID } from '../lib/reader-profile-selection'
+import { resolveReaderDestination } from '../lib/profile-destination'
+import { leaveChildMode } from '../lib/reader-mode'
+import { invalidateReaderProfileSession } from '../lib/profile-session'
 import { planReaderModeTransition } from '../lib/reader-mode-transition'
 import {
   READER_PREFERENCES_V2_DEFAULTS,
@@ -267,6 +270,10 @@ function invalidateReaderPlacementWork() {
 
 const story = useReaderStory({
   onSessionEnded: moveToSignIn,
+  onProfileInvalid: async (storySlug) => {
+    invalidateReaderProfileSession()
+    await router.replace({ path: "/profiles", query: { next: resolveReaderDestination("/read/" + encodeURIComponent(storySlug)) } })
+  },
   onReady: async (loaded) => {
     const activeGeneration = readerGeneration
     await currentReaderView()?.whenReady()
@@ -710,6 +717,15 @@ function closeResume(open: boolean) {
   if (!open) progress.dismissDecision()
 }
 
+async function switchReader() {
+  await router.push({ path: "/profiles", query: { next: resolveReaderDestination(route.fullPath) } })
+}
+
+async function leaveReaderMode() {
+  leaveChildMode()
+  await router.push("/profiles")
+}
+
 async function moveToProfiles() {
   try {
     await router.replace('/profiles')
@@ -918,6 +934,8 @@ onBeforeUnmount(() => {
         :chapters-open="chaptersOpen"
         :navigating="progress.navigatingToLibrary.value"
         @library="progress.goLibrary"
+        @switch="switchReader"
+        @leave="leaveReaderMode"
         @settings="settingsOpen = true"
         @chapters="chaptersOpen = true"
         @retry="progress.retry"
