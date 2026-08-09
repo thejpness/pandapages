@@ -41,6 +41,22 @@ export const router = createRouter({
       component: () => import("./views/Profiles.vue"),
       meta: { requiresAccount: true, parentOnly: true },
     },
+    {
+      path: "/profiles/new",
+      component: () => import("./views/ProfileNew.vue"),
+      meta: { requiresAccount: true, parentOnly: true },
+    },
+    {
+      path: "/profiles/manage",
+      component: () => import("./views/ProfileManage.vue"),
+      meta: { requiresAccount: true, parentOnly: true },
+    },
+    {
+      path: "/profiles/:profileID/edit",
+      component: () => import("./views/ProfileEdit.vue"),
+      props: true,
+      meta: { requiresAccount: true, parentOnly: true },
+    },
 
     {
       path: "/library",
