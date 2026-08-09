@@ -2,6 +2,11 @@
 import { computed, ref } from 'vue'
 import ReaderDialogShell from './ReaderDialogShell.vue'
 import {
+  readerEditionDescription,
+  readerEditionLabel,
+} from '../../lib/reader-editions'
+import type { ReaderEditionKey } from '../../lib/api'
+import {
   READER_THEMES,
   readerTheme,
   readerThemePreviewCssVariables,
@@ -17,6 +22,9 @@ import {
 const props = defineProps<{
   open: boolean
   modelValue: ReaderPreferencesV2
+  currentEdition: ReaderEditionKey
+  eligibleEditions: readonly ReaderEditionKey[]
+  editionBusy: boolean
 }>()
 
 const emit = defineEmits<{
@@ -24,6 +32,7 @@ const emit = defineEmits<{
   'update:modelValue': [preferences: ReaderPreferencesV2]
   reset: []
   modeChange: [mode: ReaderMode]
+  editionChange: [editionKey: ReaderEditionKey]
 }>()
 
 const pageStyleExpanded = ref(false)
@@ -60,6 +69,34 @@ function setFont(fontFamily: ReaderFontFamily) {
     @update:open="emit('update:open', $event)"
   >
     <div class="reader-settings-sections">
+      <section class="reader-edition-settings" aria-labelledby="reader-edition-settings-title">
+        <div>
+          <h2 id="reader-edition-settings-title">Story edition</h2>
+          <p class="reader-settings-help">
+            This story is currently using {{ readerEditionLabel(currentEdition) }}. Choose another available edition for this profile.
+          </p>
+        </div>
+        <div class="reader-edition-settings__options">
+          <button
+            v-for="editionKey in eligibleEditions"
+            :key="editionKey"
+            class="reader-edition-settings__option"
+            type="button"
+            :aria-pressed="currentEdition === editionKey"
+            :disabled="editionBusy || currentEdition === editionKey"
+            @click="emit('editionChange', editionKey)"
+          >
+            <span>
+              <strong>{{ readerEditionLabel(editionKey) }}</strong>
+              <small>{{ readerEditionDescription(editionKey) }}</small>
+            </span>
+            <span v-if="currentEdition === editionKey" class="reader-edition-settings__current">
+              Current
+            </span>
+          </button>
+        </div>
+      </section>
+
       <section class="reader-settings-disclosure">
         <button
           id="reader-page-style-disclosure"
@@ -255,3 +292,54 @@ function setFont(fontFamily: ReaderFontFamily) {
     </div>
   </ReaderDialogShell>
 </template>
+
+<style scoped>
+.reader-edition-settings {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.reader-edition-settings__options {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.reader-edition-settings__option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  width: 100%;
+  border: 1px solid var(--reader-control-border);
+  border-radius: 0.75rem;
+  background: var(--reader-control-background);
+  padding: 0.75rem 0.85rem;
+  color: var(--reader-control-text);
+  text-align: left;
+}
+
+.reader-edition-settings__option:hover:not(:disabled) {
+  background: var(--reader-control-hover);
+}
+
+.reader-edition-settings__option:focus-visible {
+  outline: 3px solid var(--reader-focus-ring);
+  outline-offset: 2px;
+}
+
+.reader-edition-settings__option strong,
+.reader-edition-settings__option small {
+  display: block;
+}
+
+.reader-edition-settings__option small {
+  margin-top: 0.2rem;
+  color: var(--reader-text-secondary);
+  line-height: 1.35;
+}
+
+.reader-edition-settings__current {
+  flex: 0 0 auto;
+  font-weight: 700;
+}
+</style>

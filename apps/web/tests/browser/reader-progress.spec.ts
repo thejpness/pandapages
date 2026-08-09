@@ -276,6 +276,6 @@ test.describe('Reader progress decisions and persistence', () => {
     const request = await put.started
     expectLocatorV2Request(request, { ordinal: expectedOrdinal })
     put.fulfill({ ok: true })
-    expect(api.count('GET', `/api/v1/reader/${READER_SLUG}`)).toBe(1)
+    expect(api.count('GET', `/api/v1/reader-resolution/${READER_SLUG}`)).toBe(1)
   })
 })

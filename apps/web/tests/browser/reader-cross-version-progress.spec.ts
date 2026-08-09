@@ -543,7 +543,7 @@ test.describe('Reader cross-version progress decisions', () => {
       .toBe(1)
     await expect(page.getByRole('dialog', { name: 'Story updated' })).toBeHidden()
 
-    storyGate.fulfill(currentStory)
+    storyGate.fulfill()
     await navigation
     await storyUpdatedDialog(page)
     await expectNoProgressPut(page, api, READER_SLUG)

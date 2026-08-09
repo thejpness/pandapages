@@ -616,6 +616,22 @@ export type ReaderStoryPayload = {
   segments: ReaderStorySegment[];
 };
 
+export type ReaderResolvedStoryPayload = ReaderStoryPayload & {
+  editionKey: ReaderEditionKey;
+};
+
+export type ReaderResolutionPayload =
+  | {
+      state: "selected";
+      eligibleEditions: ReaderEditionKey[];
+      story: ReaderResolvedStoryPayload;
+    }
+  | {
+      state: "chooser";
+      eligibleEditions: ReaderEditionKey[];
+      story: null;
+    };
+
 function hasExactKeys(
   record: Record<string, unknown>,
   required: readonly string[],
@@ -730,15 +746,131 @@ export function parseReaderStoryPayload(value: unknown): ReaderStoryPayload {
   };
 }
 
+function parseReaderEditionSubset(value: unknown): ReaderEditionKey[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error("Invalid Reader resolution editions");
+  }
+
+  const editions: ReaderEditionKey[] = [];
+  let previousIndex = -1;
+  for (const candidate of value) {
+    if (!isReaderEditionKey(candidate)) {
+      throw new Error("Invalid Reader resolution edition");
+    }
+    const index = readerEditionKeys.indexOf(candidate);
+    if (index <= previousIndex || editions.includes(candidate)) {
+      throw new Error("Invalid Reader resolution edition order");
+    }
+    editions.push(candidate);
+    previousIndex = index;
+  }
+  return editions;
+}
+
+function parseReaderResolvedStory(value: unknown): ReaderResolvedStoryPayload {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "slug",
+      "title",
+      "author",
+      "language",
+      "version",
+      "segments",
+      "editionKey",
+    ]) ||
+    !isReaderEditionKey(value.editionKey)
+  ) {
+    throw new Error("Invalid Reader resolution story");
+  }
+
+  const story = parseReaderStoryPayload({
+    slug: value.slug,
+    title: value.title,
+    author: value.author,
+    language: value.language,
+    version: value.version,
+    segments: value.segments,
+  });
+  return { ...story, editionKey: value.editionKey };
+}
+
+export function parseReaderResolutionPayload(
+  value: unknown,
+): ReaderResolutionPayload {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["state", "eligibleEditions", "story"])
+  ) {
+    throw new Error("Invalid Reader resolution response");
+  }
+
+  const eligibleEditions = parseReaderEditionSubset(value.eligibleEditions);
+  if (value.state === "chooser") {
+    if (value.story !== null || eligibleEditions.length < 2) {
+      throw new Error("Invalid Reader chooser response");
+    }
+    return { state: "chooser", eligibleEditions, story: null };
+  }
+
+  if (value.state !== "selected") {
+    throw new Error("Invalid Reader resolution state");
+  }
+  const story = parseReaderResolvedStory(value.story);
+  if (!eligibleEditions.includes(story.editionKey)) {
+    throw new Error("Reader selected an ineligible edition");
+  }
+  return { state: "selected", eligibleEditions, story };
+}
+
+function parseReaderEditionMutation(value: unknown): void {
+  if (!isRecord(value) || !hasExactKeys(value, ["ok"]) || value.ok !== true) {
+    throw new Error("Invalid Reader edition response");
+  }
+}
+
 export async function getReaderStory(
   slug: string,
+  profileID: string,
   signal?: AbortSignal,
-): Promise<ReaderStoryPayload> {
-  const data = await request<unknown>(
-    `/api/v1/reader/${encodeURIComponent(slug)}`,
+): Promise<ReaderResolutionPayload> {
+  const data = await profileScopedRequest<unknown>(
+    `/api/v1/reader-resolution/${encodeURIComponent(slug)}`,
+    profileID,
     { signal },
   );
-  return parseReaderStoryPayload(data);
+  return parseReaderResolutionPayload(data);
+}
+
+export async function setReaderStoryEdition(
+  slug: string,
+  profileID: string,
+  editionKey: ReaderEditionKey,
+  signal?: AbortSignal,
+): Promise<void> {
+  const data = await profileScopedRequest<unknown>(
+    `/api/v1/reader-edition/${encodeURIComponent(slug)}`,
+    profileID,
+    {
+      method: "PUT",
+      body: JSON.stringify({ editionKey }),
+      signal,
+    },
+  );
+  parseReaderEditionMutation(data);
+}
+
+export async function clearReaderStoryEdition(
+  slug: string,
+  profileID: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const data = await profileScopedRequest<unknown>(
+    `/api/v1/reader-edition/${encodeURIComponent(slug)}`,
+    profileID,
+    { method: "DELETE", signal },
+  );
+  parseReaderEditionMutation(data);
 }
 
 /* ----------------------------- Admin ---------------------------- */

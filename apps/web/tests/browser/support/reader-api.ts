@@ -10,6 +10,21 @@ import type { Page, Request, Route } from '@playwright/test'
 
 export const READER_SLUG = 'test-only-moonlit-cafe'
 
+export type ReaderEditionKeyFixture =
+  | 'classic'
+  | 'confident-readers'
+  | 'growing-readers'
+  | 'story-explorers'
+  | 'little-listeners'
+
+const readerEditionOrder: readonly ReaderEditionKeyFixture[] = [
+  'classic',
+  'confident-readers',
+  'growing-readers',
+  'story-explorers',
+  'little-listeners',
+]
+
 export type ReaderSegmentFixture = {
   ordinal: number
   kind: 'heading' | 'paragraph' | 'other'
@@ -311,6 +326,9 @@ export class ReaderApiMock {
   readonly unhandledRequests: CapturedRequest[] = []
   readonly stories = new Map<string, ReaderStoryFixture>()
   readonly progress = new Map<string, ProgressFixture | null>()
+  private readonly editionStories = new Map<string, Map<ReaderEditionKeyFixture, ReaderStoryFixture>>()
+  private readonly eligibleReaderEditions = new Map<string, ReaderEditionKeyFixture[]>()
+  private readonly readerEditionOverrides = new Map<string, ReaderEditionKeyFixture>()
   profiles: BrowserProfile[] = [{
     id: fixtureProfileID,
     name: 'Mina',
@@ -330,9 +348,7 @@ export class ReaderApiMock {
   constructor(page: Page) {
     this.page = page
     const story = makeReaderStory()
-    this.stories.set(story.slug, story)
-    this.progress.set(story.slug, null)
-    this.profileProgress.set(this.progressKey(fixtureProfileID, story.slug), null)
+    this.setStory(story)
     this.libraryItems = [
       { slug: story.slug, title: story.title, author: story.author },
     ]
@@ -346,10 +362,54 @@ export class ReaderApiMock {
 
   setStory(story: ReaderStoryFixture): void {
     this.stories.set(story.slug, story)
+    const editions = this.editionStories.get(story.slug) ?? new Map()
+    editions.set('classic', story)
+    this.editionStories.set(story.slug, editions)
+    if (!this.eligibleReaderEditions.has(story.slug)) {
+      this.eligibleReaderEditions.set(story.slug, ['classic'])
+    }
     if (!this.progress.has(story.slug)) this.progress.set(story.slug, null)
     if (!this.profileProgress.has(this.progressKey(fixtureProfileID, story.slug))) {
       this.profileProgress.set(this.progressKey(fixtureProfileID, story.slug), null)
     }
+  }
+
+  setEditionStory(
+    editionKey: ReaderEditionKeyFixture,
+    story: ReaderStoryFixture,
+  ): void {
+    const editions = this.editionStories.get(story.slug) ?? new Map()
+    editions.set(editionKey, story)
+    this.editionStories.set(story.slug, editions)
+    if (editionKey === 'classic') this.stories.set(story.slug, story)
+    const eligible = new Set(this.eligibleReaderEditions.get(story.slug) ?? [])
+    eligible.add(editionKey)
+    this.eligibleReaderEditions.set(
+      story.slug,
+      readerEditionOrder.filter((key) => eligible.has(key)),
+    )
+    if (!this.progress.has(story.slug)) this.progress.set(story.slug, null)
+    if (!this.profileProgress.has(this.progressKey(fixtureProfileID, story.slug))) {
+      this.profileProgress.set(this.progressKey(fixtureProfileID, story.slug), null)
+    }
+  }
+
+  setEligibleEditions(
+    slug: string,
+    editions: readonly ReaderEditionKeyFixture[],
+  ): void {
+    this.eligibleReaderEditions.set(
+      slug,
+      readerEditionOrder.filter((key) => editions.includes(key)),
+    )
+  }
+
+  setReaderEditionOverride(
+    slug: string,
+    editionKey: ReaderEditionKeyFixture,
+    profileID = fixtureProfileID,
+  ): void {
+    this.readerEditionOverrides.set(this.progressKey(profileID, slug), editionKey)
   }
 
   setProgress(
@@ -381,7 +441,7 @@ export class ReaderApiMock {
   }
 
   deferStory(slug: string): ResponseGate {
-    const gate = createGate(this.stories.get(slug))
+    const gate = createGate(this.readerResolution(slug, fixtureProfileID))
     queueFor(this.storyResponses, slug).push(gate)
     return gate.publicGate
   }
@@ -410,6 +470,39 @@ export class ReaderApiMock {
         request.method === 'PUT' &&
         request.pathname === `/api/v1/progress/${encodeURIComponent(slug)}`,
     )
+  }
+
+  private readerResolution(slug: string, profileID: string) {
+    const eligible = this.eligibleReaderEditions.get(slug) ?? []
+    const editions = this.editionStories.get(slug)
+    if (!editions || eligible.length === 0) {
+      return jsonError('not_found', 'Story not found')
+    }
+
+    const override = this.readerEditionOverrides.get(this.progressKey(profileID, slug))
+    const progress = this.progressForProfile(slug, profileID)
+    let selected: ReaderEditionKeyFixture | null = null
+    if (override && eligible.includes(override) && editions.has(override)) {
+      selected = override
+    }
+    if (!selected && progress) {
+      selected =
+        eligible.find((key) => editions.get(key)?.version === progress.version) ?? null
+    }
+    if (!selected && eligible.length === 1) {
+      selected = eligible[0] ?? null
+    }
+
+    if (!selected) {
+      return { state: 'chooser', eligibleEditions: eligible, story: null }
+    }
+    const story = editions.get(selected)
+    if (!story) return jsonError('not_found', 'Story not found')
+    return {
+      state: 'selected',
+      eligibleEditions: eligible,
+      story: { ...story, editionKey: selected },
+    }
   }
 
   private libraryReadModelItems() {
@@ -501,6 +594,8 @@ export class ReaderApiMock {
 	}
 	if (
 		url.pathname.startsWith('/api/v1/progress/') ||
+		url.pathname.startsWith('/api/v1/reader-resolution/') ||
+		url.pathname.startsWith('/api/v1/reader-edition/') ||
 		url.pathname === '/api/v1/continue'
 	) {
 		const profileID = request.headers()['x-pp-profile-id']
@@ -528,18 +623,61 @@ export class ReaderApiMock {
       return
     }
 
-    const readerPrefix = '/api/v1/reader/'
-    if (request.method() === 'GET' && url.pathname.startsWith(readerPrefix)) {
-      const slug = safeDecode(url.pathname.slice(readerPrefix.length))
-      const story = this.stories.get(slug)
-      const fallback = story ?? jsonError('not_found', 'Story not found')
-      const queued = this.take(this.storyResponses, slug)
+    const resolutionPrefix = '/api/v1/reader-resolution/'
+    if (request.method() === 'GET' && url.pathname.startsWith(resolutionPrefix)) {
+      const slug = safeDecode(url.pathname.slice(resolutionPrefix.length))
+      const profileID = request.headers()['x-pp-profile-id'] ?? ''
+      const fallback = this.readerResolution(slug, profileID)
+      const notFound =
+        typeof fallback === 'object' &&
+        fallback !== null &&
+        'error' in fallback
       await this.respond(
         route,
         captured,
-        queued ?? (story ? undefined : { status: 404, body: fallback }),
+        this.take(this.storyResponses, slug) ??
+          (notFound ? { status: 404, body: fallback } : undefined),
         fallback,
       )
+      return
+    }
+
+    const editionPrefix = '/api/v1/reader-edition/'
+    if (url.pathname.startsWith(editionPrefix)) {
+      const slug = safeDecode(url.pathname.slice(editionPrefix.length))
+      const profileID = request.headers()['x-pp-profile-id'] ?? ''
+      if (request.method() === 'PUT') {
+        const body = captured.body as { editionKey?: ReaderEditionKeyFixture } | null
+        const editionKey = body?.editionKey
+        const eligible = this.eligibleReaderEditions.get(slug) ?? []
+        const exists =
+          editionKey !== undefined &&
+          eligible.includes(editionKey) &&
+          this.editionStories.get(slug)?.has(editionKey)
+        if (!exists || editionKey === undefined) {
+          await this.respond(
+            route,
+            captured,
+            { status: 404, body: jsonError('not_found', 'Story edition not found') },
+            null,
+          )
+          return
+        }
+        this.readerEditionOverrides.set(this.progressKey(profileID, slug), editionKey)
+        await this.respond(route, captured, undefined, { ok: true })
+        return
+      }
+      if (request.method() === 'DELETE') {
+        this.readerEditionOverrides.delete(this.progressKey(profileID, slug))
+        await this.respond(route, captured, undefined, { ok: true })
+        return
+      }
+    }
+
+    const retiredReaderPrefix = '/api/v1/reader/'
+    if (url.pathname.startsWith(retiredReaderPrefix)) {
+      this.legacyRequests.push(captured)
+      await this.respond(route, captured, { status: 404, body: jsonError('not_found', 'Not found') }, null)
       return
     }
 
@@ -620,7 +758,7 @@ export const test = base.extend<{ api: ReaderApiMock }>({
     await api.install()
     await use(api)
     expect(api.unhandledRequests, 'browser test left API requests unhandled').toEqual([])
-    expect(api.legacyRequests, 'Reader requested a removed Reader 1 endpoint').toEqual([])
+    expect(api.legacyRequests, 'Reader requested a retired Reader endpoint').toEqual([])
   },
 })
 

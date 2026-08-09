@@ -30,7 +30,6 @@ type Store interface {
 	CheckReadiness(context.Context) error
 
 	Library(accountID string) (model.LibraryReadModel, error)
-	ReaderStory(accountID, slug string) (model.ReaderStory, error)
 	ReaderResolve(accountID, profileID, slug string) (model.ReaderResolution, error)
 	ReaderStoryEditionOverridePut(accountID, profileID, slug string, editionKey model.ReaderEditionKey) error
 	ReaderStoryEditionOverrideClear(accountID, profileID, slug string) (bool, error)
@@ -146,9 +145,9 @@ func New(cfg Config, store Store) http.Handler {
 		writeJSON(w, http.StatusOK, library)
 	}))
 
-	// Reader release resolution is profile scoped. This additive endpoint is
-	// consumed by the L7.2 Reader client before the legacy account-scoped Reader
-	// payload route is retired.
+	// Reader release resolution is profile scoped and is the sole public Reader
+	// content route. It returns either one exact immutable selected edition or a
+	// finite chooser without story content.
 	mux.HandleFunc("/api/v1/reader-resolution/", withBearerProfile(func(w http.ResponseWriter, r *http.Request, profile httpprofile.Context) {
 		if r.Method != http.MethodGet {
 			methodNotAllowed(w, []string{http.MethodGet})
@@ -244,37 +243,6 @@ func New(cfg Config, store Store) http.Handler {
 			methodNotAllowed(w, []string{http.MethodPut, http.MethodDelete})
 			return
 		}
-	}))
-
-	// Reader 2: one coherent published-version payload.
-	mux.HandleFunc("/api/v1/reader/", withBearerAccount(func(w http.ResponseWriter, r *http.Request, accountID string) {
-		if r.Method != http.MethodGet {
-			methodNotAllowed(w, []string{http.MethodGet})
-			return
-		}
-
-		slug := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/reader/"), "/")
-		if slug == "" {
-			writeErr(w, http.StatusBadRequest, "slug", "missing slug")
-			return
-		}
-		if strings.Contains(slug, "/") {
-			writeErr(w, http.StatusNotFound, "not_found", "reader story not found")
-			return
-		}
-
-		p, err := store.ReaderStory(accountID, slug)
-		if errors.Is(err, sql.ErrNoRows) {
-			writeErr(w, http.StatusNotFound, "not_found", "story not found")
-			return
-		}
-		if err != nil {
-			writeErr(w, http.StatusInternalServerError, "db", "reader query failed")
-			return
-		}
-
-		noStore(w)
-		writeJSON(w, http.StatusOK, p)
 	}))
 
 	// Progress
