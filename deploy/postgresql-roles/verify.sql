@@ -151,30 +151,33 @@ WHERE namespace.nspname = 'public'
   SELECT 1 / 0;
 \endif
 
-WITH runtime_table(name) AS (
+WITH runtime_table(name, immutable) AS (
   VALUES
-    ('accounts'),
-    ('account_settings'),
-    ('account_memberships'),
-    ('child_profiles'),
-    ('contributors'),
-    ('external_identities'),
-    ('principals'),
-    ('profile_settings'),
-    ('profiles'),
-    ('prompt_profiles'),
-    ('reading_progress'),
-    ('stories'),
-    ('story_editions'),
-    ('story_contributors'),
-    ('story_sections'),
-    ('story_source_versions'),
-    ('story_sources'),
-    ('story_segments'),
-    ('story_versions')
+    ('accounts', false),
+    ('account_settings', false),
+    ('account_memberships', false),
+    ('child_profiles', false),
+    ('contributors', false),
+    ('external_identities', false),
+    ('principals', false),
+    ('profile_settings', false),
+    ('profiles', false),
+    ('prompt_profiles', false),
+    ('reading_progress', false),
+    ('stories', false),
+    ('story_editions', false),
+    ('story_release_editions', true),
+    ('story_releases', true),
+    ('story_contributors', false),
+    ('story_sections', false),
+    ('story_source_versions', false),
+    ('story_sources', false),
+    ('story_segments', false),
+    ('story_versions', false)
 ), checked AS (
   SELECT
     runtime_table.name,
+    runtime_table.immutable,
     class.oid,
     has_table_privilege(:'application_role', class.oid, 'SELECT') AS can_select,
     has_table_privilege(:'application_role', class.oid, 'INSERT') AS can_insert,
@@ -194,19 +197,23 @@ SELECT
     + CASE WHEN to_regclass('public.story_editions') IS NULL THEN 0 ELSE 1 END
     + CASE WHEN to_regclass('public.story_sources') IS NULL THEN 0 ELSE 1 END
     + CASE WHEN to_regclass('public.story_source_versions') IS NULL THEN 0 ELSE 1 END
+    + CASE WHEN to_regclass('public.story_releases') IS NULL THEN 0 ELSE 1 END
+    + CASE WHEN to_regclass('public.story_release_editions') IS NULL THEN 0 ELSE 1 END
   AND (to_regclass('public.profile_settings') IS NULL)
       <> (to_regclass('public.account_settings') IS NULL)
   AND bool_and(
-  oid IS NOT NULL
-  AND can_select
-  AND can_insert
-  AND can_update
-  AND can_delete
-  AND NOT can_truncate
-  AND NOT can_reference
-  AND NOT can_trigger
-  AND NOT can_maintain
-) AS assertion
+    oid IS NOT NULL
+    AND can_select
+    AND can_insert
+    AND (immutable OR can_update)
+    AND (immutable OR can_delete)
+    AND (NOT immutable OR NOT can_update)
+    AND (NOT immutable OR NOT can_delete)
+    AND NOT can_truncate
+    AND NOT can_reference
+    AND NOT can_trigger
+    AND NOT can_maintain
+  ) AS assertion
 FROM checked
 \gset
 \if :assertion
@@ -252,6 +259,8 @@ WITH runtime_table(name) AS (
     ('reading_progress'),
     ('stories'),
     ('story_editions'),
+    ('story_release_editions'),
+    ('story_releases'),
     ('story_contributors'),
     ('story_sections'),
     ('story_source_versions'),

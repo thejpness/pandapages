@@ -8,8 +8,8 @@ import (
 	"pandapages/api/internal/storyingest"
 )
 
-// AdminUnpublish atomically removes only the public pointer. Immutable
-// versions, the draft pointer, and reading progress remain untouched.
+// AdminUnpublish withdraws the current release atomically. Immutable release
+// history, edition versions, draft pointers, and reading progress remain.
 func (s *Store) AdminUnpublish(accountID, slug string) (model.AdminStoryStatusResponse, error) {
 	accountID = strings.TrimSpace(accountID)
 	slug = strings.TrimSpace(slug)
@@ -29,19 +29,19 @@ func (s *Store) AdminUnpublish(accountID, slug string) (model.AdminStoryStatusRe
 	if err != nil {
 		return model.AdminStoryStatusResponse{}, err
 	}
-	classicEditionID, err := loadClassicEditionID(ctx, tx, story.ID, true)
-	if err != nil {
-		return model.AdminStoryStatusResponse{}, err
-	}
-	if err := clearEditionPublishedPointer(ctx, tx, classicEditionID); err != nil {
+	if err := clearStoryEditionPublishedPointers(ctx, tx, story.ID); err != nil {
 		return model.AdminStoryStatusResponse{}, err
 	}
 	if err := tx.QueryRowContext(ctx, `
 		UPDATE stories
-		SET published_version_id = NULL,
+		SET current_release_id = NULL,
+		    published_version_id = NULL,
 		    is_published = false,
 		    updated_at = CASE
-		      WHEN published_version_id IS NOT NULL OR is_published THEN now()
+		      WHEN current_release_id IS NOT NULL
+		        OR published_version_id IS NOT NULL
+		        OR is_published
+		      THEN now()
 		      ELSE updated_at
 		    END
 		WHERE id = $1
@@ -51,6 +51,7 @@ func (s *Store) AdminUnpublish(accountID, slug string) (model.AdminStoryStatusRe
 	}
 	story.IsPublished = false
 	story.PublishedVersionID = nil
+	story.CurrentReleaseID = nil
 
 	inspected, err := inspectAdminStory(ctx, tx, story)
 	if err != nil {

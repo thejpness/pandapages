@@ -226,9 +226,15 @@ func inspectAdminStoryByEdition(
 		}
 	}
 
-	// Edition rows are authoritative for adapted reading state. Canonical
-	// source metadata is authoritative for Story Studio identity whenever an
-	// explicit source exists; an edition is never treated as the original.
+	// Release membership is authoritative for story-wide publication. Edition
+	// published pointers are projections of the current immutable release.
+	releaseState, err := inspectAdminReleaseState(ctx, tx, story, inspectedByKey)
+	if err != nil {
+		return inspectedAdminStory{}, err
+	}
+
+	// Canonical source metadata is authoritative for Story Studio identity
+	// whenever an explicit source exists; an edition is never the original.
 	source, err := inspectAdminStorySource(ctx, tx, story.ID)
 	if err != nil {
 		return inspectedAdminStory{}, err
@@ -265,8 +271,18 @@ func inspectAdminStoryByEdition(
 	}
 
 	classic := inspectedByKey[model.AdminStoryEditionClassic]
-	topLevelStatus := adminStoryStatusFromEdition(classic.Summary.Status)
-	if !metadataAvailable || source.Summary.Status == model.AdminSourceStatusRepairRequired {
+	topLevelStatus := model.AdminStoryStatusUnpublished
+	if releaseState.Current != nil {
+		topLevelStatus = model.AdminStoryStatusPublished
+		if releaseState.HasUnreleasedDraft {
+			topLevelStatus = model.AdminStoryStatusPublishedWithDraft
+		}
+	} else if releaseState.HasAnyDraft {
+		topLevelStatus = model.AdminStoryStatusDraftOnly
+	}
+	if !metadataAvailable ||
+		source.Summary.Status == model.AdminSourceStatusRepairRequired ||
+		releaseState.RepairRequired {
 		topLevelStatus = model.AdminStoryStatusRepairRequired
 	}
 
@@ -280,18 +296,20 @@ func inspectAdminStoryByEdition(
 			Rights:           rights,
 			SourceURL:        sourceURL,
 			Status:           topLevelStatus,
-			PublishedVersion: classic.Summary.PublishedVersion,
+			PublishedVersion: releaseState.CompatibilityPublished,
 			DraftVersion:     classic.Summary.DraftVersion,
 			VersionCount:     classic.Summary.VersionCount,
 			UpdatedAt:        story.UpdatedAt.UTC().Format(time.RFC3339Nano),
 			Source:           source.Summary,
 			Editions:         editionSummaries,
+			CurrentRelease:   releaseState.Current,
+			ReleaseCount:     len(releaseState.Releases),
 		},
 		Versions: classic.Detail.Versions,
 		Editions: editionDetails,
+		Releases: releaseState.Releases,
 	}, nil
 }
-
 func adminEditionStatus(
 	row *adminEditionRow,
 	versionCount int,

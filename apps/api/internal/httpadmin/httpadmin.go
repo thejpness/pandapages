@@ -9,7 +9,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"regexp"
 	"strings"
 	"unicode/utf8"
 
@@ -20,7 +19,7 @@ import (
 type Store interface {
 	AdminDraftUpsert(accountID string, req model.AdminDraftUpsertRequest) (model.AdminDraftUpsertResponse, error)
 	AdminEditionBundleUpsert(accountID string, req model.AdminEditionBundleUpsertRequest) (model.AdminEditionBundleUpsertResponse, error)
-	AdminPublishStory(accountID string, slug string, versionID string) (model.AdminStoryStatusResponse, error)
+	AdminCreateRelease(accountID string, slug string, req model.AdminCreateReleaseRequest) (model.AdminCreateReleaseResponse, error)
 	AdminUnpublish(accountID string, slug string) (model.AdminStoryStatusResponse, error)
 	AdminPreview(req model.AdminPreviewRequest) (model.AdminPreviewResponse, error)
 
@@ -39,8 +38,6 @@ const (
 	// Keep public APIs small; only admin gets this.
 	maxJSONBodyBytes = 20 << 20 // 20MB
 )
-
-var adminVersionIDPattern = regexp.MustCompile("(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 
 type ctxKey string
 
@@ -307,42 +304,29 @@ func New(cfg Config, store Store) http.Handler {
 		writeJSON(w, http.StatusOK, out)
 	}))
 
-	// POST /api/v1/admin/stories/{slug}/publish
-	mux.HandleFunc("POST /api/v1/admin/stories/{slug}/publish", withAdmin(func(w http.ResponseWriter, r *http.Request) {
+	// POST /api/v1/admin/stories/{slug}/releases
+	mux.HandleFunc("POST /api/v1/admin/stories/{slug}/releases", withAdmin(func(w http.ResponseWriter, r *http.Request) {
 		slug := strings.TrimSpace(r.PathValue("slug"))
-		if slug == "" {
-			writeErr(w, http.StatusBadRequest, "bad_request", "slug required")
-			return
-		}
-
-		var body struct {
-			VersionID string `json:"versionId"`
-		}
+		var body model.AdminCreateReleaseRequest
 		if err := decodeJSON(w, r, &body); err != nil {
 			writeDecodeError(w, err)
 			return
 		}
 
-		aid := accountIDFromCtx(r)
-		body.VersionID = strings.TrimSpace(body.VersionID)
-		if !adminVersionIDPattern.MatchString(body.VersionID) {
-			writeErr(w, http.StatusBadRequest, "publish_invalid", "versionId must be a valid identifier")
-			return
-		}
-		out, err := store.AdminPublishStory(aid, slug, body.VersionID)
+		out, err := store.AdminCreateRelease(accountIDFromCtx(r), slug, body)
 		if err != nil {
-			if errors.Is(err, model.ErrAdminPublishNotFound) {
-				writeErr(w, http.StatusNotFound, "publish_not_found", "story version was not found")
-				return
+			var validationErr *model.AdminValidationError
+			switch {
+			case errors.As(err, &validationErr):
+				writeIssues(w, http.StatusBadRequest, "release_invalid", "Story release is invalid", validationErr.Issues)
+			case errors.Is(err, model.ErrAdminReleaseNotFound), errors.Is(err, model.ErrAdminStoryNotFound):
+				writeErr(w, http.StatusNotFound, "release_not_found", "story edition version was not found")
+			case errors.Is(err, model.ErrAdminReleaseInvalid):
+				writeErr(w, http.StatusConflict, "release_repair_required", "stored release state or edition version requires repair")
+			default:
+				slog.Error("admin story release failed")
+				writeErr(w, http.StatusInternalServerError, "release_failed", "story release could not be published")
 			}
-			if errors.Is(err, model.ErrAdminPublishInvalid) {
-				writeErr(w, http.StatusConflict, "publish_repair_required", "story version is unavailable or unreadable")
-				return
-			}
-			// Driver errors may contain connection or query detail. Keep both the
-			// browser response and application logs on a fixed safe boundary.
-			slog.Error("admin story publication failed")
-			writeErr(w, http.StatusInternalServerError, "publish_failed", "story publication failed")
 			return
 		}
 

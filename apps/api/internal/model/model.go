@@ -14,6 +14,12 @@ var (
 	// ErrAdminPublishInvalid marks an expected publish refusal whose public
 	// response must not reveal which internal invariant failed.
 	ErrAdminPublishInvalid = errors.New("story version cannot be published")
+	// ErrAdminReleaseNotFound covers missing story, edition, and version release
+	// targets without disclosing ownership boundaries.
+	ErrAdminReleaseNotFound = errors.New("story release target was not found")
+	// ErrAdminReleaseInvalid marks a release refusal caused by unreadable
+	// immutable content or inconsistent current-release projections.
+	ErrAdminReleaseInvalid = errors.New("story release requires repair")
 	// ErrAdminVersionRepairRequired marks a corrupt idempotency target that must
 	// not be reused or mutated as though it were a healthy immutable version.
 	ErrAdminVersionRepairRequired = errors.New("stored story version requires repair")

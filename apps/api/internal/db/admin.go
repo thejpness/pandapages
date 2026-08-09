@@ -1054,84 +1054,40 @@ func (s *Store) AdminPublish(accountID string, slug string, versionID string) er
 	return err
 }
 
+// AdminPublishStory is retained only as an internal Classic compatibility
+// helper for existing Store-level fixtures. Story Studio publication uses
+// AdminCreateRelease and can publish any canonical one-to-five edition subset.
 func (s *Store) AdminPublishStory(accountID string, slug string, versionID string) (model.AdminStoryStatusResponse, error) {
-	ctx, cancel := s.ctx()
-	defer cancel()
-
-	accountID = strings.TrimSpace(accountID)
-	slug = strings.TrimSpace(slug)
-	versionID = strings.TrimSpace(versionID)
-
-	if !accountIDRe.MatchString(accountID) || storyingest.ValidateSlug(slug) != nil || !accountIDRe.MatchString(versionID) {
-		return model.AdminStoryStatusResponse{}, fmt.Errorf("%w", model.ErrAdminPublishInvalid)
-	}
-
-	// READ COMMITTED lets the segment-locking query observe a mutation that
-	// completed while it waited for the version lock. The locks then keep the
-	// validated version stable until the pointer update commits.
-	tx, err := s.db.BeginTx(ctx, nil)
+	_, err := s.AdminCreateRelease(accountID, slug, model.AdminCreateReleaseRequest{
+		Editions: []model.AdminReleaseEditionRequest{{
+			EditionKey: model.AdminStoryEditionClassic,
+			VersionID:  strings.TrimSpace(versionID),
+		}},
+	})
 	if err != nil {
-		return model.AdminStoryStatusResponse{}, err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	// Lock the account-owned story first. The old pointer remains unchanged
-	// unless every immutable version invariant validates and the transaction
-	// commits.
-	story, err := loadAdminStory(ctx, tx, accountID, slug, true)
-	if errors.Is(err, model.ErrAdminStoryNotFound) {
-		return model.AdminStoryStatusResponse{}, fmt.Errorf("%w", model.ErrAdminPublishNotFound)
-	}
-	if err != nil {
-		return model.AdminStoryStatusResponse{}, err
-	}
-
-	classicEditionID, err := loadClassicEditionID(ctx, tx, story.ID, true)
-	if errors.Is(err, sql.ErrNoRows) {
-		return model.AdminStoryStatusResponse{}, fmt.Errorf("%w", model.ErrAdminPublishInvalid)
-	}
-	if err != nil {
-		return model.AdminStoryStatusResponse{}, err
-	}
-	if err := requireVersionInEdition(ctx, tx, story.ID, classicEditionID, versionID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		var validationErr *model.AdminValidationError
+		switch {
+		case errors.Is(err, model.ErrAdminReleaseNotFound), errors.Is(err, model.ErrAdminStoryNotFound):
 			return model.AdminStoryStatusResponse{}, fmt.Errorf("%w", model.ErrAdminPublishNotFound)
-		}
-		return model.AdminStoryStatusResponse{}, err
-	}
-
-	if _, err := validateStoredReaderVersion(ctx, tx, story.ID, versionID, slug); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return model.AdminStoryStatusResponse{}, fmt.Errorf("%w", model.ErrAdminPublishNotFound)
-		}
-		if errors.Is(err, errStoredVersionInvalid) {
+		case errors.Is(err, model.ErrAdminReleaseInvalid), errors.As(err, &validationErr):
 			return model.AdminStoryStatusResponse{}, fmt.Errorf("%w", model.ErrAdminPublishInvalid)
+		default:
+			return model.AdminStoryStatusResponse{}, err
 		}
-		return model.AdminStoryStatusResponse{}, err
 	}
 
-	if err := setEditionPublishedPointer(ctx, tx, classicEditionID, versionID); err != nil {
-		return model.AdminStoryStatusResponse{}, err
-	}
-	if err := tx.QueryRowContext(ctx, `
-		UPDATE stories
-		SET published_version_id = $2,
-		    is_published = true,
-		    updated_at = now()
-		WHERE id = $1
-		RETURNING updated_at
-	`, story.ID, versionID).Scan(&story.UpdatedAt); err != nil {
-		return model.AdminStoryStatusResponse{}, err
-	}
-	story.IsPublished = true
-	story.PublishedVersionID = cloneString(&versionID)
-
-	inspected, err := inspectAdminStory(ctx, tx, story)
+	detail, err := s.AdminGetStory(accountID, slug)
 	if err != nil {
 		return model.AdminStoryStatusResponse{}, err
 	}
-	if err := tx.Commit(); err != nil {
-		return model.AdminStoryStatusResponse{}, err
-	}
-	return adminStoryStatusResponse(inspected), nil
+	return model.AdminStoryStatusResponse{
+		Slug:             detail.Slug,
+		Status:           detail.Status,
+		PublishedVersion: detail.PublishedVersion,
+		DraftVersion:     detail.DraftVersion,
+		VersionCount:     detail.VersionCount,
+		UpdatedAt:        detail.UpdatedAt,
+		CurrentRelease:   detail.CurrentRelease,
+		ReleaseCount:     detail.ReleaseCount,
+	}, nil
 }
