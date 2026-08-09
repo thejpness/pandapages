@@ -22,7 +22,7 @@ BEGIN
       AND (
         account_id IS DISTINCT FROM 'f17e0000-0000-4000-8000-000000000001'
         OR name IS DISTINCT FROM 'TEST ONLY — Reader'
-        OR preferred_edition IS DISTINCT FROM 'classic'
+        OR reading_level IS DISTINCT FROM 'classic'
         OR pin_hash IS NOT NULL
         OR pin_failed_attempts <> 0
         OR pin_lock_until IS NOT NULL
@@ -72,7 +72,7 @@ VALUES (
 )
 ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO profiles (id, account_id, name, preferred_edition)
+INSERT INTO profiles (id, account_id, name, reading_level)
 VALUES (
   'f17e0000-0000-4000-8000-000000000002',
   'f17e0000-0000-4000-8000-000000000001',
@@ -92,7 +92,7 @@ ON CONFLICT (id) DO UPDATE SET
   sort_name = EXCLUDED.sort_name;
 
 INSERT INTO stories (
-  id, account_id, slug, title, author, is_published, language, rights
+  id, account_id, slug, title, author, language, rights
 )
 VALUES (
   'f17e0000-0000-4000-8000-000000000010',
@@ -100,7 +100,6 @@ VALUES (
   'test-only-moonlit-cafe',
   'TEST ONLY — Moonlit Café',
   'Panda Pages Test Fixture',
-  false,
   'en-GB',
   '{"license":"test-only","test_fixture":true}'::jsonb
 )
@@ -261,22 +260,14 @@ VALUES
     7
   );
 
-UPDATE stories
-SET published_version_id = 'f17e0000-0000-4000-8000-000000000011',
-    draft_version_id = 'f17e0000-0000-4000-8000-000000000011',
-    is_published = true,
-    updated_at = now()
-WHERE id = 'f17e0000-0000-4000-8000-000000000010';
-
 UPDATE story_editions
-SET published_version_id = 'f17e0000-0000-4000-8000-000000000011',
-    draft_version_id = 'f17e0000-0000-4000-8000-000000000011',
+SET draft_version_id = 'f17e0000-0000-4000-8000-000000000011',
     updated_at = now()
 WHERE story_id = 'f17e0000-0000-4000-8000-000000000010'
   AND edition_key = 'classic';
 
-INSERT INTO story_releases (story_id, release_number, migration_backfill)
-VALUES ('f17e0000-0000-4000-8000-000000000010', 1, false)
+INSERT INTO story_releases (story_id, release_number)
+VALUES ('f17e0000-0000-4000-8000-000000000010', 1)
 ON CONFLICT (story_id, release_number) DO NOTHING;
 
 INSERT INTO story_release_editions (release_id, story_id, edition_id, story_version_id)

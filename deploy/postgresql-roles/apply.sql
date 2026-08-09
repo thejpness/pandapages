@@ -296,21 +296,16 @@ WHERE namespace.nspname = 'public'
   )
 \gexec
 
--- Runtime access covers current tables plus historical compatibility tables
--- exercised by migration integration tests. Only relations that actually exist
--- at the database's migration boundary receive grants.
+-- Runtime access is defined against the current greenfield baseline only.
+-- Retired Journey/generation tables are intentionally not part of the policy.
 WITH runtime_table(name) AS (
   VALUES
     ('accounts'),
-    ('account_settings'),
     ('account_memberships'),
-    ('child_profiles'),
     ('contributors'),
     ('external_identities'),
     ('principals'),
-    ('profile_settings'),
     ('profiles'),
-    ('prompt_profiles'),
     ('reading_progress'),
     ('stories'),
     ('story_editions'),
@@ -323,6 +318,7 @@ WITH runtime_table(name) AS (
     ('story_segments'),
     ('story_versions')
 )
+
 SELECT format(
   'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.%I TO %I',
   class.relname,

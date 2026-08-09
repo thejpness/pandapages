@@ -201,23 +201,28 @@ func (s *Store) Library(accountID string) (model.LibraryReadModel, error) {
 				story.slug,
 				story.created_at,
 				story.updated_at,
-				story.published_version_id AS requested_published_version_id,
-				version.id AS published_version_id,
+				version.id AS live_version_id,
 				version.version AS published_version,
 				version.frontmatter::text AS frontmatter
 			FROM stories AS story
-			LEFT JOIN story_versions AS version
-			  ON version.id = story.published_version_id
+			JOIN story_release_editions AS member
+			  ON member.release_id = story.current_release_id
+			 AND member.story_id = story.id
+			JOIN story_editions AS edition
+			  ON edition.id = member.edition_id
+			 AND edition.story_id = story.id
+			 AND edition.edition_key = 'classic'
+			JOIN story_versions AS version
+			  ON version.id = member.story_version_id
 			 AND version.story_id = story.id
+			 AND version.edition_id = edition.id
 			WHERE story.account_id = $1
-			  AND story.is_published = true
 		)
 		SELECT
 			candidates.story_id,
 			candidates.slug,
 			candidates.frontmatter,
-			candidates.requested_published_version_id,
-			candidates.published_version_id,
+			candidates.live_version_id,
 			candidates.published_version,
 			segment.id,
 			segment.ordinal,
@@ -230,7 +235,7 @@ func (s *Store) Library(accountID string) (model.LibraryReadModel, error) {
 			segment.word_count
 		FROM candidates
 		LEFT JOIN story_segments AS segment
-		  ON segment.story_version_id = candidates.published_version_id
+		  ON segment.story_version_id = candidates.live_version_id
 		ORDER BY
 			candidates.updated_at DESC,
 			candidates.created_at DESC,
@@ -286,7 +291,6 @@ func (s *Store) Library(accountID string) (model.LibraryReadModel, error) {
 			storyID              string
 			slug                 string
 			frontmatterJSON      sql.NullString
-			requestedVersionID   sql.NullString
 			publishedVersionID   sql.NullString
 			publishedVersion     sql.NullInt64
 			segmentID            sql.NullString
@@ -303,7 +307,6 @@ func (s *Store) Library(accountID string) (model.LibraryReadModel, error) {
 			&storyID,
 			&slug,
 			&frontmatterJSON,
-			&requestedVersionID,
 			&publishedVersionID,
 			&publishedVersion,
 			&segmentID,
@@ -330,9 +333,7 @@ func (s *Store) Library(accountID string) (model.LibraryReadModel, error) {
 			}
 
 			if strings.TrimSpace(storyID) == "" || !validLibrarySlug(slug) ||
-				!requestedVersionID.Valid || strings.TrimSpace(requestedVersionID.String) == "" ||
 				!publishedVersionID.Valid || strings.TrimSpace(publishedVersionID.String) == "" ||
-				requestedVersionID.String != publishedVersionID.String ||
 				!frontmatterJSON.Valid || !publishedVersion.Valid {
 				current.invalid = true
 			} else {
@@ -421,6 +422,45 @@ func (s *Store) Library(accountID string) (model.LibraryReadModel, error) {
 
 /* ----------------------------- Reader ----------------------------- */
 
+func lockClassicReaderVersion(
+	ctx context.Context,
+	tx *sql.Tx,
+	accountID string,
+	slug string,
+) (string, string, error) {
+	var (
+		storyID          string
+		currentReleaseID sql.NullString
+	)
+	if err := tx.QueryRowContext(ctx, `
+		SELECT story.id, story.current_release_id
+		FROM stories AS story
+		WHERE story.account_id = $1
+		  AND story.slug = $2
+		FOR SHARE OF story
+	`, accountID, slug).Scan(&storyID, &currentReleaseID); err != nil {
+		return "", "", err
+	}
+	if !currentReleaseID.Valid {
+		return "", "", sql.ErrNoRows
+	}
+
+	var versionID string
+	if err := tx.QueryRowContext(ctx, `
+		SELECT member.story_version_id
+		FROM story_release_editions AS member
+		JOIN story_editions AS edition
+		  ON edition.id = member.edition_id
+		 AND edition.story_id = member.story_id
+		WHERE member.release_id = $1
+		  AND member.story_id = $2
+		  AND edition.edition_key = 'classic'
+	`, currentReleaseID.String, storyID).Scan(&versionID); err != nil {
+		return "", "", err
+	}
+	return storyID, versionID, nil
+}
+
 func (s *Store) ReaderStory(accountID, slug string) (model.ReaderStory, error) {
 	ctx, cancel := s.ctx()
 	defer cancel()
@@ -431,16 +471,7 @@ func (s *Store) ReaderStory(accountID, slug string) (model.ReaderStory, error) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var storyID, versionID string
-	err = tx.QueryRowContext(ctx, `
-		SELECT id, published_version_id
-		FROM stories
-		WHERE account_id = $1
-		  AND slug = $2
-		  AND is_published = true
-		  AND published_version_id IS NOT NULL
-		FOR SHARE
-	`, accountID, slug).Scan(&storyID, &versionID)
+	storyID, versionID, err := lockClassicReaderVersion(ctx, tx, accountID, slug)
 	if err != nil {
 		return model.ReaderStory{}, err
 	}
@@ -450,10 +481,9 @@ func (s *Store) ReaderStory(accountID, slug string) (model.ReaderStory, error) {
 		}
 		return model.ReaderStory{}, err
 	}
-	// The story-row lock keeps the publication pointer stable while the selected
-	// immutable version is revalidated. This statement then returns one coherent
-	// PostgreSQL snapshot for that validated published version.
-	// from another.
+	// The story-row lock keeps current release selection stable while the
+	// immutable Classic member is revalidated and read. Release manifests are
+	// immutable, so the validated version remains authoritative through commit.
 	rows, err := tx.QueryContext(ctx, `
 		SELECT
 			st.slug,
@@ -472,16 +502,15 @@ func (s *Store) ReaderStory(accountID, slug string) (model.ReaderStory, error) {
 			segment.word_count
 		FROM stories st
 		JOIN story_versions AS version
-		  ON version.id = st.published_version_id
+		  ON version.id = $3
 		 AND version.story_id = st.id
 		LEFT JOIN story_segments AS segment
 		  ON segment.story_version_id = version.id
 		WHERE st.account_id = $1
 		  AND st.slug = $2
-		  AND st.is_published = true
-		  AND st.published_version_id IS NOT NULL
+		  AND st.id = $4
 		ORDER BY segment.ordinal
-	`, accountID, slug)
+	`, accountID, slug, versionID, storyID)
 	if err != nil {
 		return model.ReaderStory{}, err
 	}
@@ -612,8 +641,16 @@ func (s *Store) ProgressGet(accountID, profileID, slug string) (model.ProgressRe
 		 AND sv.story_id = st.id
 		WHERE st.account_id = $1
 		  AND st.slug = $3
-		  AND st.is_published = true
-		  AND st.published_version_id IS NOT NULL
+		  AND EXISTS (
+			SELECT 1
+			FROM story_release_editions AS member
+			JOIN story_editions AS edition
+			  ON edition.id = member.edition_id
+			 AND edition.story_id = member.story_id
+			WHERE member.release_id = st.current_release_id
+			  AND member.story_id = st.id
+			  AND edition.edition_key = 'classic'
+		  )
 	`, accountID, profileID, slug).Scan(&hasProgress, &version, &locatorJSON, &percent)
 	if err != nil {
 		return model.ProgressResponse{}, err
@@ -656,22 +693,21 @@ func (s *Store) ProgressPut(accountID, profileID, slug string, version int, loca
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var storyID, versionID string
-	if err := tx.QueryRowContext(ctx, `
-		SELECT story.id, version.id
-		FROM stories AS story
-		JOIN story_versions AS version
-		  ON version.id = story.published_version_id
-		 AND version.story_id = story.id
-		 AND version.version = $3
-		WHERE story.account_id = $1
-		  AND story.slug = $2
-		  AND story.is_published = true
-		  AND story.published_version_id IS NOT NULL
-		FOR SHARE OF story
-	`, accountID, slug, version).Scan(&storyID, &versionID); err != nil {
+	storyID, versionID, err := lockClassicReaderVersion(ctx, tx, accountID, slug)
+	if err != nil {
 		return err
 	}
+	var currentVersionID string
+	if err := tx.QueryRowContext(ctx, `
+		SELECT id
+		FROM story_versions
+		WHERE id = $1
+		  AND story_id = $2
+		  AND version = $3
+	`, versionID, storyID, version).Scan(&currentVersionID); err != nil {
+		return err
+	}
+	versionID = currentVersionID
 
 	var (
 		storedKey               string
@@ -758,7 +794,16 @@ func (s *Store) ContinueRecent(accountID, profileID string, limit int) ([]model.
 		WHERE rp.account_id = $2
 		  AND rp.profile_id = $3
 		  AND st.account_id = $2
-		  AND st.published_version_id IS NOT NULL
+		  AND EXISTS (
+			SELECT 1
+			FROM story_release_editions AS member
+			JOIN story_editions AS edition
+			  ON edition.id = member.edition_id
+			 AND edition.story_id = member.story_id
+			WHERE member.release_id = st.current_release_id
+			  AND member.story_id = st.id
+			  AND edition.edition_key = 'classic'
+		  )
 		ORDER BY rp.updated_at DESC
 		LIMIT $1
 	`, limit, accountID, profileID)

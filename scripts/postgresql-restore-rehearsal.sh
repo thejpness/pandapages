@@ -348,7 +348,15 @@ SELECT 'foreign_keys', count(*), bool_and(convalidated) FROM pg_constraint JOIN 
 JOIN pg_namespace ON pg_namespace.oid = pg_class.relnamespace
 WHERE contype = 'f' AND pg_namespace.nspname = 'public';
 SELECT 'indexes', count(*), bool_and(indisvalid AND indisready) FROM pg_index JOIN pg_class ON pg_class.oid = indexrelid JOIN pg_namespace ON pg_namespace.oid = pg_class.relnamespace WHERE pg_namespace.nspname = 'public';
-SELECT 'application_library_rows', count(*) FROM stories AS story JOIN story_versions AS version ON version.id = story.published_version_id WHERE story.published_version_id IS NOT NULL;
+SELECT 'application_library_rows', count(*)
+FROM stories AS story
+JOIN story_release_editions AS member
+  ON member.release_id = story.current_release_id
+ AND member.story_id = story.id
+JOIN story_editions AS edition
+  ON edition.id = member.edition_id
+ AND edition.story_id = story.id
+WHERE edition.edition_key = 'classic';
 SELECT 'utf8_roundtrip_failures', count(*) FROM story_versions WHERE markdown <> convert_from(convert_to(markdown, 'UTF8'), 'UTF8');
 SELECT 'utf8_multibyte_story_versions', count(*) FROM story_versions WHERE octet_length(markdown) > char_length(markdown);
 SELECT 'sequence', schemaname, sequencename, COALESCE(last_value::text, '<unavailable>') FROM pg_sequences WHERE schemaname = 'public' ORDER BY schemaname, sequencename;

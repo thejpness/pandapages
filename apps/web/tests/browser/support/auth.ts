@@ -10,7 +10,7 @@ export type BrowserProfile = {
   id: string
   name: string
   pin_enabled?: boolean
-  preferred_edition?:
+  reading_level?:
     | 'classic'
     | 'confident-readers'
     | 'growing-readers'
@@ -68,7 +68,7 @@ export const test = base.extend<{ auth: BrowserAuth }>({
       id: fixtureProfileID,
       name: 'Mina',
       pin_enabled: false,
-      preferred_edition: 'classic',
+      reading_level: 'classic',
     }]
     await installOfficialSession(page)
     await page.route('**/api/auth/**', async (route) => {
@@ -96,7 +96,7 @@ export const test = base.extend<{ auth: BrowserAuth }>({
         await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
           profiles: profiles.map((profile) => ({
             ...profile,
-            preferred_edition: profile.preferred_edition ?? 'classic',
+            reading_level: profile.reading_level ?? 'classic',
           })),
         }) })
         return

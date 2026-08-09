@@ -7,7 +7,7 @@ const profile = {
   id: '123e4567-e89b-42d3-a456-426614174300',
   name: 'Mina',
   pin_enabled: false,
-  preferred_edition: 'classic',
+  reading_level: 'classic',
 }
 
 async function apiModule() {
@@ -58,12 +58,12 @@ test('profile management stays account scoped and sends bearer plus account cont
   assert.equal(requests[1].method, 'POST')
   assert.deepEqual(JSON.parse(requests[1].body), {
     name: 'Mina',
-    preferredEdition: 'little-listeners',
+    readingLevel: 'little-listeners',
   })
   assert.equal(requests[2].method, 'PATCH')
   assert.deepEqual(JSON.parse(requests[2].body), {
     name: 'Mina Panda',
-    preferredEdition: 'classic',
+    readingLevel: 'classic',
   })
   assert.equal(requests[3].method, 'DELETE')
 })

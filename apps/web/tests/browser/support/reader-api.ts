@@ -315,7 +315,7 @@ export class ReaderApiMock {
     id: fixtureProfileID,
     name: 'Mina',
     pin_enabled: false,
-    preferred_edition: 'classic',
+    reading_level: 'classic',
   }]
 
   authSignedIn = true
@@ -595,7 +595,7 @@ export class ReaderApiMock {
       await this.respond(route, captured, undefined, {
         profiles: this.profiles.map((profile) => ({
           ...profile,
-          preferred_edition: profile.preferred_edition ?? 'classic',
+          reading_level: profile.reading_level ?? 'classic',
         })),
       })
       return

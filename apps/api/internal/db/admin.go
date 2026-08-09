@@ -667,22 +667,11 @@ func adminDraftEditionKey(req model.AdminDraftUpsertRequest) (model.AdminStoryEd
 	return key, nil
 }
 
-func updateStoryDraftCompatibility(
+func touchStoryAfterDraft(
 	ctx context.Context,
 	tx *sql.Tx,
 	storyID string,
-	editionKey model.AdminStoryEditionKey,
-	versionID string,
 ) error {
-	if editionKey == model.AdminStoryEditionClassic {
-		_, err := tx.ExecContext(ctx, `
-			UPDATE stories
-			SET draft_version_id = $2,
-			    updated_at = now()
-			WHERE id = $1
-		`, storyID, versionID)
-		return err
-	}
 	_, err := tx.ExecContext(ctx, `
 		UPDATE stories
 		SET updated_at = now()
@@ -821,12 +810,11 @@ func adminDraftUpsertTx(ctx context.Context, tx *sql.Tx, accountID string, req m
 			return model.AdminDraftUpsertResponse{}, fmt.Errorf("%w", model.ErrAdminVersionRepairRequired)
 		}
 
-		// The requested edition owns its draft pointer. Only Classic mirrors that
-		// pointer onto stories.draft_version_id for the existing Reader contract.
+		// The requested edition exclusively owns its draft pointer.
 		if err := setEditionDraftPointer(ctx, tx, editionID, existingVersionID); err != nil {
 			return model.AdminDraftUpsertResponse{}, err
 		}
-		if err := updateStoryDraftCompatibility(ctx, tx, storyID, editionKey, existingVersionID); err != nil {
+		if err := touchStoryAfterDraft(ctx, tx, storyID); err != nil {
 			return model.AdminDraftUpsertResponse{}, err
 		}
 
@@ -997,12 +985,11 @@ func adminDraftUpsertTx(ctx context.Context, tx *sql.Tx, accountID string, req m
 		}
 	}
 
-	// Update the requested edition's draft pointer. Classic alone mirrors the
-	// pointer onto the temporary story-level compatibility contract.
+	// Update only the requested edition's draft pointer.
 	if err := setEditionDraftPointer(ctx, tx, editionID, versionID); err != nil {
 		return model.AdminDraftUpsertResponse{}, err
 	}
-	if err := updateStoryDraftCompatibility(ctx, tx, storyID, editionKey, versionID); err != nil {
+	if err := touchStoryAfterDraft(ctx, tx, storyID); err != nil {
 		return model.AdminDraftUpsertResponse{}, err
 	}
 

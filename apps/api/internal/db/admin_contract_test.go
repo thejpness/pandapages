@@ -165,23 +165,34 @@ func TestImmutableAdminMetadataIncludesRightsAndRejectsMalformedUTF8(t *testing.
 	}
 }
 
-func TestAdminStoryStatusPolicyIsFinite(t *testing.T) {
+func TestAdminEditionStatusPolicyIsFinite(t *testing.T) {
 	draft := "11111111-1111-4111-8111-111111111111"
 	published := "22222222-2222-4222-8222-222222222222"
 	tests := []struct {
-		story  adminStoryRow
-		repair bool
-		want   model.AdminStoryStatus
+		row              *adminEditionRow
+		versionCount     int
+		repair           bool
+		publishedVersion *string
+		want             model.AdminEditionStatus
 	}{
-		{story: adminStoryRow{DraftVersionID: &draft}, want: model.AdminStoryStatusDraftOnly},
-		{story: adminStoryRow{IsPublished: true, DraftVersionID: &published, PublishedVersionID: &published}, want: model.AdminStoryStatusPublished},
-		{story: adminStoryRow{IsPublished: true, DraftVersionID: &draft, PublishedVersionID: &published}, want: model.AdminStoryStatusPublishedWithDraft},
-		{story: adminStoryRow{}, want: model.AdminStoryStatusUnpublished},
-		{story: adminStoryRow{}, repair: true, want: model.AdminStoryStatusRepairRequired},
+		{row: nil, versionCount: 0, want: model.AdminEditionStatusEmpty},
+		{row: &adminEditionRow{DraftVersionID: &draft}, versionCount: 1, want: model.AdminEditionStatusDraftOnly},
+		{row: &adminEditionRow{DraftVersionID: &published}, versionCount: 1, publishedVersion: &published, want: model.AdminEditionStatusPublished},
+		{row: &adminEditionRow{DraftVersionID: &draft}, versionCount: 2, publishedVersion: &published, want: model.AdminEditionStatusPublishedWithDraft},
+		{row: &adminEditionRow{}, versionCount: 1, want: model.AdminEditionStatusUnpublished},
+		{row: &adminEditionRow{}, versionCount: 1, repair: true, want: model.AdminEditionStatusRepairRequired},
 	}
 	for _, test := range tests {
-		if got := adminStoryStatus(test.story, test.repair); got != test.want {
-			t.Errorf("adminStoryStatus(%#v, %v) = %q, want %q", test.story, test.repair, got, test.want)
+		if got := adminEditionStatus(test.row, test.versionCount, test.repair, test.publishedVersion); got != test.want {
+			t.Errorf(
+				"adminEditionStatus(%#v, %d, %v, %#v) = %q, want %q",
+				test.row,
+				test.versionCount,
+				test.repair,
+				test.publishedVersion,
+				got,
+				test.want,
+			)
 		}
 	}
 }

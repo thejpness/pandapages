@@ -52,16 +52,16 @@ jobs:
       - name: Run Go vet
         run: go vet ./...
 
-      - name: Build migration image for Reader contract tests
+      - name: Build migration image for baseline Store tests
         run: docker build --target migrate --tag pandapages-migrate:reader-test .
 
-      - name: Test identity migration and concurrent onboarding
+      - name: Test identity Store on baseline schema
         working-directory: .
         env:
           PP_IDENTITY_STORE_TEST_MIGRATION_IMAGE: pandapages-migrate:reader-test
         run: scripts/tests/identity-store-integration.sh
 
-      - name: Test Reader 2 migrations, Store, and HTTP contract
+      - name: Test Reader Store and release contract on baseline schema
         working-directory: .
         run: scripts/tests/reader-store-integration.sh
 
@@ -208,7 +208,7 @@ jobs:
             scripts/postgresql-roles.sh \
             scripts/postgresql-restore-rehearsal.sh \
             scripts/tests/account-store-integration.sh \
-            scripts/tests/account-integrity-migration-integration.sh \
+            scripts/tests/account-integrity-integration.sh \
             scripts/tests/env-example-contract.sh \
             scripts/tests/identity-store-integration.sh \
             scripts/tests/postgresql-backup-integration.sh \
@@ -237,13 +237,13 @@ jobs:
           docker build --target prod --build-arg API_MAIN=./cmd/api --tag pandapages-api:role-test apps/api
           docker build --target migrate --tag pandapages-migrate:role-test apps/api
 
-      - name: Test production-clean migrations and explicit fixtures
+      - name: Test production-clean baseline and explicit fixtures
         shell: bash
         run: scripts/tests/postgresql-fixtures-integration.sh
 
-      - name: Test account ownership migration integrity
+      - name: Test account ownership constraints
         shell: bash
-        run: scripts/tests/account-integrity-migration-integration.sh
+        run: scripts/tests/account-integrity-integration.sh
 
       - name: Test PostgreSQL roles and backup automation with generated data
         shell: bash

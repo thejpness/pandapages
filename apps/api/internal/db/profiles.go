@@ -23,7 +23,7 @@ func (s *Store) Profiles(accountID string) ([]model.ReaderProfile, error) {
 	defer cancel()
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, pin_hash IS NOT NULL, preferred_edition
+		SELECT id, name, pin_hash IS NOT NULL, reading_level
 		FROM profiles
 		WHERE account_id = $1
 		ORDER BY name ASC, id ASC
@@ -40,7 +40,7 @@ func (s *Store) Profiles(accountID string) ([]model.ReaderProfile, error) {
 			&profile.ID,
 			&profile.Name,
 			&profile.PINEnabled,
-			&profile.PreferredEdition,
+			&profile.ReadingLevel,
 		); err != nil {
 			return nil, err
 		}
@@ -194,25 +194,25 @@ func (s *Store) ProfileExists(accountID, profileID string) (bool, error) {
 func (s *Store) CreateProfile(
 	accountID string,
 	name string,
-	preferredEdition model.ReaderEditionKey,
+	readingLevel model.ReaderEditionKey,
 ) (model.ReaderProfile, error) {
 	ctx, cancel := s.ctx()
 	defer cancel()
 
-	if !model.ValidReaderEditionKey(preferredEdition) {
-		return model.ReaderProfile{}, fmt.Errorf("invalid reader preferred edition")
+	if !model.ValidReaderEditionKey(readingLevel) {
+		return model.ReaderProfile{}, fmt.Errorf("invalid reader reading level")
 	}
 
 	var profile model.ReaderProfile
 	err := s.db.QueryRowContext(ctx, `
-		INSERT INTO profiles (account_id, name, preferred_edition)
+		INSERT INTO profiles (account_id, name, reading_level)
 		VALUES ($1, $2, $3)
-		RETURNING id::text, name, false, preferred_edition
-	`, accountID, name, preferredEdition).Scan(
+		RETURNING id::text, name, false, reading_level
+	`, accountID, name, readingLevel).Scan(
 		&profile.ID,
 		&profile.Name,
 		&profile.PINEnabled,
-		&profile.PreferredEdition,
+		&profile.ReadingLevel,
 	)
 	if isProfileNameConflict(err) {
 		return model.ReaderProfile{}, model.ErrProfileNameConflict
@@ -227,28 +227,28 @@ func (s *Store) UpdateProfile(
 	accountID string,
 	profileID string,
 	name string,
-	preferredEdition model.ReaderEditionKey,
+	readingLevel model.ReaderEditionKey,
 ) (model.ReaderProfile, error) {
 	ctx, cancel := s.ctx()
 	defer cancel()
 
-	if !model.ValidReaderEditionKey(preferredEdition) {
-		return model.ReaderProfile{}, fmt.Errorf("invalid reader preferred edition")
+	if !model.ValidReaderEditionKey(readingLevel) {
+		return model.ReaderProfile{}, fmt.Errorf("invalid reader reading level")
 	}
 
 	var profile model.ReaderProfile
 	err := s.db.QueryRowContext(ctx, `
 		UPDATE profiles
 		SET name = $3,
-			preferred_edition = $4,
+			reading_level = $4,
 			updated_at = now()
 		WHERE account_id = $1 AND id = $2
-		RETURNING id::text, name, pin_hash IS NOT NULL, preferred_edition
-	`, accountID, profileID, name, preferredEdition).Scan(
+		RETURNING id::text, name, pin_hash IS NOT NULL, reading_level
+	`, accountID, profileID, name, readingLevel).Scan(
 		&profile.ID,
 		&profile.Name,
 		&profile.PINEnabled,
-		&profile.PreferredEdition,
+		&profile.ReadingLevel,
 	)
 	if isProfileNameConflict(err) {
 		return model.ReaderProfile{}, model.ErrProfileNameConflict

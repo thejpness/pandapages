@@ -132,5 +132,5 @@ type ReaderProfile struct {
 	ID               string           `json:"id"`
 	Name             string           `json:"name"`
 	PINEnabled       bool             `json:"pin_enabled"`
-	PreferredEdition ReaderEditionKey `json:"preferred_edition"`
+	ReadingLevel ReaderEditionKey `json:"reading_level"`
 }
