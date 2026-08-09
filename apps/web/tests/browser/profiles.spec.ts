@@ -179,6 +179,65 @@ test.describe('reader profile lifecycle', () => {
   test('edit supports rename, level, PIN controls, and exact deletion cleanup', async ({ page }) => {
     const api = new ProfilesApiMock(page); api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false, reading_level: 'classic' }]; await api.install(); await page.addInitScript((id) => window.localStorage.setItem('pandapages.selected-reader-profile-id', id), fixtureProfileID); await page.goto(`/profiles/${fixtureProfileID}/edit`); await page.getByLabel('Reader name').fill('Theo'); await page.getByLabel('Reading level').selectOption('little-listeners'); await page.getByRole('button', { name: 'Save profile' }).click(); await expect(page).toHaveURL('/profiles/manage'); await page.getByRole('button', { name: 'Edit Theo' }).click(); await page.getByRole('button', { name: 'Set PIN' }).click(); await page.getByLabel('Four-digit PIN').fill('1234'); await page.getByRole('button', { name: 'Save PIN' }).click(); await expect(page.getByRole('button', { name: 'Remove PIN' })).toBeVisible(); await page.getByRole('button', { name: 'Delete profile' }).click(); await page.getByRole('alertdialog').getByRole('button', { name: 'Delete profile' }).click(); await expect(page).toHaveURL('/profiles/manage'); await expect.poll(() => page.evaluate(() => window.localStorage.getItem('pandapages.selected-reader-profile-id'))).toBeNull();
   });
+  test("parent management is structured, responsive, and keeps reader entry separate", async ({ page }) => {
+    const api = new ProfilesApiMock(page)
+    api.profiles = [{ id: fixtureProfileID, name: "Mina", pin_enabled: true, reading_level: "little-listeners" }]
+    await api.install()
+    await page.setViewportSize({ width: 320, height: 700 })
+
+    await page.goto("/profiles/manage")
+    await expect(page.getByRole("heading", { level: 1, name: "Manage profiles" })).toBeVisible()
+    await expect(page.getByRole("heading", { level: 2, name: "Reader profiles" })).toBeVisible()
+    await expect(page.getByText("Little Listeners", { exact: true })).toBeVisible()
+    await expect(page.getByText("PIN protected", { exact: true })).toBeVisible()
+    await expect(page.getByRole("heading", { level: 2, name: "Account" })).toBeVisible()
+    await expect(page.getByRole("button", { name: "Start reading as Mina" })).toHaveCount(0)
+    const violations = (await new AxeBuilder({ page }).analyze()).violations
+      .filter((violation) => violation.impact === "serious" || violation.impact === "critical")
+      .map((violation) => violation.id)
+    expect(violations).toEqual([])
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
+
+    await page.goto("/profiles/new?from=manage")
+    await expect(page.getByRole("heading", { level: 1, name: "Add profile" })).toBeVisible()
+    await expect(page.getByRole("group", { name: "Reader details" })).toBeVisible()
+    await expect(page.getByLabel("Reader name")).toBeVisible()
+    await expect(page.getByLabel("Reading level")).toBeVisible()
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
+
+    await page.goto("/profiles/" + fixtureProfileID + "/edit")
+    await expect(page.getByRole("heading", { level: 1, name: "Edit Mina" })).toBeVisible()
+    await expect(page.getByRole("heading", { level: 2, name: "PIN and access" })).toBeVisible()
+    await expect(page.getByRole("heading", { level: 2, name: "Delete profile" })).toBeVisible()
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
+
+    const deleteTrigger = page.getByRole("button", { name: "Delete profile" })
+    await deleteTrigger.click()
+    const deleteDialog = page.getByRole("alertdialog", { name: "Delete Mina?" })
+    await expect(deleteDialog).toBeVisible()
+    await expect(deleteDialog.getByRole("button", { name: "Cancel" })).toBeFocused()
+    await page.keyboard.press("Escape")
+    await expect(deleteDialog).toBeHidden()
+    await expect(deleteTrigger).toBeFocused()
+
+    const pinTrigger = page.getByRole("button", { name: "Change PIN" })
+    await pinTrigger.click()
+    const pinDialog = page.getByRole("dialog", { name: "Change Mina’s PIN" })
+    await expect(pinDialog.getByLabel("Four-digit PIN")).toBeFocused()
+    await page.keyboard.press("Escape")
+    await expect(pinDialog).toBeHidden()
+    await expect(pinTrigger).toBeFocused()
+
+    const removeTrigger = page.getByRole("button", { name: "Remove PIN" })
+    await removeTrigger.click()
+    const removeDialog = page.getByRole("alertdialog", { name: "Remove Mina’s PIN?" })
+    await expect(removeDialog).toBeVisible()
+    await expect(removeDialog.getByRole("button", { name: "Cancel" })).toBeFocused()
+    await page.keyboard.press("Escape")
+    await expect(removeDialog).toBeHidden()
+    await expect(removeTrigger).toBeFocused()
+  })
+
   test('management routes remain contained in reader mode', async ({ page }) => {
     const api = new ProfilesApiMock(page); api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false, reading_level: 'classic' }]; await api.install(); await page.goto('/profiles'); await page.getByRole('button', { name: 'Start reading as Mina' }).click(); await expect(page).toHaveURL('/library'); for (const path of ['/profiles/new', '/profiles/manage', `/profiles/${fixtureProfileID}/edit`]) { await page.evaluate(async (target) => { const app = (document.querySelector('#app') as HTMLElement & { __vue_app__?: { config: { globalProperties: { $router: { push: (value: string) => Promise<unknown> } } } } }).__vue_app__; if (!app) throw new Error('Vue application was not mounted'); await app.config.globalProperties.$router.push(target); }, path); await expect(page).toHaveURL('/library'); }
   });
