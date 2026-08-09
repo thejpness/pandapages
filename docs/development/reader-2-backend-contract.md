@@ -89,14 +89,14 @@ first H2; when the selected segment has a chapter, both chapter fields are
 required and must match the stored segment. Unknown fields are rejected.
 
 Go validates the typed model before storage. `ProgressPut` also verifies in
-one transaction that the account owns a published story, the requested version
-is exactly its current `published_version_id`, and
-ordinal/key/content occurrence/chapter identity all describe one real segment.
-The current story/version selection holds a story-row `FOR SHARE` lock through
-locator validation, progress persistence, and commit. `AdminPublish` updates
-that same row, so publication changes serialise with progress writes. Draft and
-previously published versions are not currently readable and return 404 rather
-than `locator_mismatch`. PostgreSQL provides the
+one transaction that the account owns the story and the requested version is
+the Classic member of its current immutable release; ordinal/key/content
+occurrence/chapter identity must all describe one real segment. The current
+story/release selection holds a story-row `FOR SHARE` lock through locator
+validation, progress persistence, and commit. Release publication updates that
+same story row, so publication changes serialise with progress writes. Draft,
+withdrawn, and non-current versions are not currently readable and return 404
+rather than `locator_mismatch`. PostgreSQL provides the
 `reading_progress_reader_locator_v2_check` defence in depth. Percentage is
 rejected outside 0–1 rather than clamped on PUT.
 
@@ -122,9 +122,10 @@ version's ordered segment read model. Segments include identity fields,
 rendered HTML, and word count. They do not include Markdown, internal IDs, the
 old locator JSON, or a duplicate full-story HTML representation.
 
-`Store.ReaderStory` uses one SQL statement, so publication cannot change
-between independent metadata and segment queries. Account ownership and the
-published pointer are part of that statement. The former
+`Store.ReaderStory` first takes a story-row `FOR SHARE` lock and reads the
+current release identifier, then resolves that immutable release's Classic
+member while the lock is held. Publication therefore cannot change between
+release selection, validation, metadata, and segment reads. The former
 `GET /api/v1/story/{slug}` and `/segments` routes, `StoryLatest`,
 `StorySegments`, and their frontend wrappers are removed, not aliased.
 

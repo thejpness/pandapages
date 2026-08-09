@@ -109,30 +109,42 @@ func TestReaderStoreIntegration(t *testing.T) {
 	}
 
 	var (
-		classicEditionID        string
-		classicDraftVersionID   string
-		classicPublishedVersion string
-		classicVersionCount     int
-		editionCount            int
+		classicEditionID      string
+		classicDraftVersionID string
+		classicLiveVersionID  string
+		classicVersionCount   int
+		editionCount          int
 	)
 	if err := adminDB.QueryRow(`
 		SELECT
 			edition.id,
 			edition.draft_version_id,
-			edition.published_version_id,
 			count(version.id)
 		FROM story_editions AS edition
 		JOIN story_versions AS version ON version.edition_id = edition.id
 		WHERE edition.story_id = $1
 		  AND edition.edition_key = 'classic'
-		GROUP BY edition.id, edition.draft_version_id, edition.published_version_id
+		GROUP BY edition.id, edition.draft_version_id
 	`, firstDraft.StoryID).Scan(
 		&classicEditionID,
 		&classicDraftVersionID,
-		&classicPublishedVersion,
 		&classicVersionCount,
 	); err != nil {
 		t.Fatalf("read Classic edition lifecycle: %v", err)
+	}
+	if err := adminDB.QueryRow(`
+		SELECT member.story_version_id
+		FROM stories AS story
+		JOIN story_release_editions AS member
+		  ON member.release_id = story.current_release_id
+		 AND member.story_id = story.id
+		JOIN story_editions AS edition
+		  ON edition.id = member.edition_id
+		 AND edition.story_id = story.id
+		WHERE story.id = $1
+		  AND edition.edition_key = 'classic'
+	`, firstDraft.StoryID).Scan(&classicLiveVersionID); err != nil {
+		t.Fatalf("read Classic current-release version: %v", err)
 	}
 	if err := adminDB.QueryRow(`
 		SELECT count(*)
@@ -143,14 +155,14 @@ func TestReaderStoreIntegration(t *testing.T) {
 	}
 	if classicEditionID == "" || editionCount != 1 || classicVersionCount != 2 ||
 		classicDraftVersionID != secondDraft.VersionID ||
-		classicPublishedVersion != firstDraft.VersionID {
+		classicLiveVersionID != firstDraft.VersionID {
 		t.Fatalf(
-			"Classic edition lifecycle = id %q, editions %d, versions %d, draft %q, published %q",
+			"Classic edition lifecycle = id %q, editions %d, versions %d, draft %q, live %q",
 			classicEditionID,
 			editionCount,
 			classicVersionCount,
 			classicDraftVersionID,
-			classicPublishedVersion,
+			classicLiveVersionID,
 		)
 	}
 
@@ -680,51 +692,39 @@ func TestReaderStoreIntegration(t *testing.T) {
 			unpublishedStatus.DraftVersion.VersionID != unpublishDraft.VersionID || unpublishedStatus.VersionCount != 1 {
 			t.Fatalf("unpublish response = %#v", unpublishedStatus)
 		}
-		var (
-			editionDraftAfterUnpublish     string
-			editionPublishedAfterUnpublish sql.NullString
-		)
+		var editionDraftAfterUnpublish string
 		if err := adminDB.QueryRow(`
-			SELECT edition.draft_version_id, edition.published_version_id
+			SELECT edition.draft_version_id
 			FROM story_editions AS edition
 			WHERE edition.story_id = $1
 			  AND edition.edition_key = 'classic'
-		`, unpublishDraft.StoryID).Scan(
-			&editionDraftAfterUnpublish,
-			&editionPublishedAfterUnpublish,
-		); err != nil {
+		`, unpublishDraft.StoryID).Scan(&editionDraftAfterUnpublish); err != nil {
 			t.Fatalf("read Classic edition after unpublish: %v", err)
 		}
-		if editionDraftAfterUnpublish != unpublishDraft.VersionID || editionPublishedAfterUnpublish.Valid {
-			t.Fatalf(
-				"Classic edition after unpublish = draft %q, published %#v",
-				editionDraftAfterUnpublish,
-				editionPublishedAfterUnpublish,
-			)
+		if editionDraftAfterUnpublish != unpublishDraft.VersionID {
+			t.Fatalf("Classic draft after unpublish = %q", editionDraftAfterUnpublish)
 		}
 		repeatedUnpublish, err := store.AdminUnpublish(readerAccountA, unpublishSlug)
 		if err != nil || !reflect.DeepEqual(repeatedUnpublish, unpublishedStatus) {
 			t.Fatalf("repeated unpublish response/error = %#v / %v; first %#v", repeatedUnpublish, err, unpublishedStatus)
 		}
 		var (
-			publishedPointer *string
-			draftPointer     *string
-			isPublished      bool
-			versionCount     int
-			progressAfter    int
+			currentReleaseAfter sql.NullString
+			versionCount        int
+			progressAfter       int
 		)
 		if err := adminDB.QueryRow(`
-			SELECT published_version_id, draft_version_id, is_published,
+			SELECT current_release_id,
 			       (SELECT count(*) FROM story_versions WHERE story_id = stories.id),
 			       (SELECT count(*) FROM reading_progress WHERE story_id = stories.id)
 			FROM stories
 			WHERE id = $1
-		`, unpublishDraft.StoryID).Scan(&publishedPointer, &draftPointer, &isPublished, &versionCount, &progressAfter); err != nil {
+		`, unpublishDraft.StoryID).Scan(&currentReleaseAfter, &versionCount, &progressAfter); err != nil {
 			t.Fatalf("read unpublish persistence state: %v", err)
 		}
-		if publishedPointer != nil || draftPointer == nil || *draftPointer != unpublishDraft.VersionID ||
-			isPublished || versionCount != 1 || progressAfter != progressBefore || progressAfter != 1 {
-			t.Fatalf("unpublish persistence state = published %#v, draft %#v, active %v, versions %d, progress %d", publishedPointer, draftPointer, isPublished, versionCount, progressAfter)
+		if currentReleaseAfter.Valid || versionCount != 1 ||
+			progressAfter != progressBefore || progressAfter != 1 {
+			t.Fatalf("unpublish persistence state = current %#v, versions %d, progress %d", currentReleaseAfter, versionCount, progressAfter)
 		}
 		if _, err := store.ReaderStory(readerAccountA, unpublishSlug); !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("unpublished Reader lookup error = %v", err)
@@ -742,13 +742,6 @@ func TestReaderStoreIntegration(t *testing.T) {
 			t.Fatalf("cross-account unpublish error = %v", err)
 		}
 
-		if _, err := adminDB.Exec(`
-			UPDATE stories
-			SET draft_version_id = NULL
-			WHERE id = $1
-		`, unpublishDraft.StoryID); err != nil {
-			t.Fatalf("prepare retained-version unpublished state: %v", err)
-		}
 		retained, err := store.AdminGetStory(readerAccountA, unpublishSlug)
 		if err != nil || retained.Status != model.AdminStoryStatusDraftOnly ||
 			retained.VersionCount != 1 || retained.DraftVersion == nil ||
@@ -761,7 +754,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 			retained.Editions[0].Status != model.AdminEditionStatusDraftOnly ||
 			retained.Editions[0].DraftVersion == nil ||
 			retained.Editions[0].DraftVersion.VersionID != unpublishDraft.VersionID {
-			t.Fatalf("Classic edition stopped being authoritative after story pointer drift: %#v", retained.Editions)
+			t.Fatalf("Classic edition stopped being authoritative after unpublish: %#v", retained.Editions)
 		}
 	})
 
@@ -912,7 +905,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 		}
 	})
 
-	t.Run("database rejects a foreign story pointer and repair state never leaks corrupt content", func(t *testing.T) {
+	t.Run("database rejects a foreign edition draft pointer and repair state never leaks corrupt content", func(t *testing.T) {
 		const pointerSlug = "story-studio-foreign-pointer"
 		pointerDraft, err := store.AdminDraftUpsert(readerAccountA, model.AdminDraftUpsertRequest{
 			Slug: pointerSlug, Title: "Account A pointer story", Markdown: "# Account A pointer story\n\nSafe metadata.\n",
@@ -922,13 +915,14 @@ func TestReaderStoreIntegration(t *testing.T) {
 		}
 		t.Cleanup(func() { _, _ = adminDB.Exec(`DELETE FROM stories WHERE id = $1`, pointerDraft.StoryID) })
 		if _, err := adminDB.Exec(`
-			UPDATE stories
+			UPDATE story_editions
 			SET draft_version_id = $2
-			WHERE id = $1
+			WHERE story_id = $1
+			  AND edition_key = 'classic'
 		`, pointerDraft.StoryID, accountBDraft.VersionID); err == nil {
-			t.Fatal("database accepted a cross-story draft pointer")
-		} else if !strings.Contains(err.Error(), "fk_stories_draft_version") {
-			t.Fatalf("cross-story draft pointer failed outside fk_stories_draft_version: %v", err)
+			t.Fatal("database accepted a cross-story edition draft pointer")
+		} else if !strings.Contains(err.Error(), "story_editions_draft_version_fkey") {
+			t.Fatalf("cross-story edition draft pointer failed outside story_editions_draft_version_fkey: %v", err)
 		}
 		pointerDetail, err := store.AdminGetStory(readerAccountA, pointerSlug)
 		if err != nil {
@@ -1032,9 +1026,12 @@ func TestReaderStoreIntegration(t *testing.T) {
 					draftPointer   string
 				)
 				if err := adminDB.QueryRow(`
-					SELECT title, author, language, draft_version_id
-					FROM stories
-					WHERE id = $1
+					SELECT story.title, story.author, story.language, edition.draft_version_id
+					FROM stories AS story
+					JOIN story_editions AS edition
+					  ON edition.story_id = story.id
+					 AND edition.edition_key = 'classic'
+					WHERE story.id = $1
 				`, draft.StoryID).Scan(&storedTitle, &storedAuthor, &storedLanguage, &draftPointer); err != nil {
 					t.Fatalf("read story after metadata-only conflict: %v", err)
 				}
@@ -1078,7 +1075,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 		if err := adminDB.QueryRow(`SELECT count(*) FROM story_segments WHERE story_version_id = $1`, draft.StoryVersionID).Scan(&segmentCount); err != nil {
 			t.Fatalf("count segments after same-count reuse refusal: %v", err)
 		}
-		if err := adminDB.QueryRow(`SELECT draft_version_id FROM stories WHERE id = $1`, draft.StoryID).Scan(&draftPointer); err != nil {
+		if err := adminDB.QueryRow(`SELECT draft_version_id FROM story_editions WHERE story_id = $1 AND edition_key = 'classic'`, draft.StoryID).Scan(&draftPointer); err != nil {
 			t.Fatalf("read draft pointer after same-count reuse refusal: %v", err)
 		}
 		if versionCount != 1 || segmentCount != draft.SegmentsCount ||
@@ -1103,19 +1100,21 @@ func TestReaderStoreIntegration(t *testing.T) {
 		}
 
 		var (
-			isPublished bool
-			publishedID sql.NullString
-			draftID     sql.NullString
+			currentReleaseID sql.NullString
+			draftID          sql.NullString
 		)
 		if err := adminDB.QueryRow(`
-			SELECT is_published, published_version_id, draft_version_id
-			FROM stories
-			WHERE id = $1
-		`, draft.StoryID).Scan(&isPublished, &publishedID, &draftID); err != nil {
+			SELECT story.current_release_id, edition.draft_version_id
+			FROM stories AS story
+			JOIN story_editions AS edition
+			  ON edition.story_id = story.id
+			 AND edition.edition_key = 'classic'
+			WHERE story.id = $1
+		`, draft.StoryID).Scan(&currentReleaseID, &draftID); err != nil {
 			t.Fatalf("read corrupt idempotency target state: %v", err)
 		}
-		if isPublished || publishedID.Valid || !draftID.Valid || draftID.String != draft.StoryVersionID {
-			t.Fatalf("corrupt reuse/publish mutated pointers: published=%t publishedID=%#v draftID=%#v", isPublished, publishedID, draftID)
+		if currentReleaseID.Valid || !draftID.Valid || draftID.String != draft.StoryVersionID {
+			t.Fatalf("corrupt reuse/publish mutated lifecycle: current=%#v draftID=%#v", currentReleaseID, draftID)
 		}
 	})
 
@@ -1145,7 +1144,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 			t.Fatalf("changed additive-frontmatter reuse error = %v, want repair-required", err)
 		}
 		var pointer string
-		if err := adminDB.QueryRow(`SELECT draft_version_id FROM stories WHERE id = $1`, draft.StoryID).Scan(&pointer); err != nil {
+		if err := adminDB.QueryRow(`SELECT draft_version_id FROM story_editions WHERE story_id = $1 AND edition_key = 'classic'`, draft.StoryID).Scan(&pointer); err != nil {
 			t.Fatalf("read additive-frontmatter pointer: %v", err)
 		}
 		if pointer != draft.StoryVersionID {
@@ -1392,7 +1391,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 				if err := adminDB.QueryRow(`SELECT count(*) FROM story_versions WHERE story_id = $1`, draft.StoryID).Scan(&versionCount); err != nil {
 					t.Fatalf("count versions after reuse refusal: %v", err)
 				}
-				if err := adminDB.QueryRow(`SELECT draft_version_id FROM stories WHERE id = $1`, draft.StoryID).Scan(&draftPointer); err != nil {
+				if err := adminDB.QueryRow(`SELECT draft_version_id FROM story_editions WHERE story_id = $1 AND edition_key = 'classic'`, draft.StoryID).Scan(&draftPointer); err != nil {
 					t.Fatalf("read pointer after reuse refusal: %v", err)
 				}
 				if versionCount != 1 || draftPointer != draft.StoryVersionID {
@@ -1484,7 +1483,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 		}
 
 		var draftPointer string
-		if err := adminDB.QueryRow(`SELECT draft_version_id FROM stories WHERE id = $1`, draft.StoryID).Scan(&draftPointer); err != nil {
+		if err := adminDB.QueryRow(`SELECT draft_version_id FROM story_editions WHERE story_id = $1 AND edition_key = 'classic'`, draft.StoryID).Scan(&draftPointer); err != nil {
 			t.Fatalf("read pointer after concurrent reuse refusal: %v", err)
 		}
 		if draftPointer != draft.StoryVersionID {
@@ -1574,7 +1573,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 		}
 
 		var draftPointer string
-		if err := adminDB.QueryRow(`SELECT draft_version_id FROM stories WHERE id = $1`, draft.StoryID).Scan(&draftPointer); err != nil {
+		if err := adminDB.QueryRow(`SELECT draft_version_id FROM story_editions WHERE story_id = $1 AND edition_key = 'classic'`, draft.StoryID).Scan(&draftPointer); err != nil {
 			t.Fatalf("read pointer after concurrent segment reuse refusal: %v", err)
 		}
 		if draftPointer != draft.StoryVersionID {
@@ -1607,21 +1606,25 @@ func TestReaderStoreIntegration(t *testing.T) {
 			t.Fatalf("insert publication validation v2: %v", err)
 		}
 
-		assertPublishedPointer := func(want string) {
+		assertCurrentClassic := func(want string) {
 			t.Helper()
-			var (
-				isPublished bool
-				publishedID string
-			)
+			var liveVersionID string
 			if err := adminDB.QueryRow(`
-				SELECT is_published, published_version_id
-				FROM stories
-				WHERE id = $1
-			`, first.StoryID).Scan(&isPublished, &publishedID); err != nil {
-				t.Fatalf("read publication pointer: %v", err)
+				SELECT member.story_version_id
+				FROM stories AS story
+				JOIN story_release_editions AS member
+				  ON member.release_id = story.current_release_id
+				 AND member.story_id = story.id
+				JOIN story_editions AS edition
+				  ON edition.id = member.edition_id
+				 AND edition.story_id = story.id
+				WHERE story.id = $1
+				  AND edition.edition_key = 'classic'
+			`, first.StoryID).Scan(&liveVersionID); err != nil {
+				t.Fatalf("read current Classic release member: %v", err)
 			}
-			if !isPublished || publishedID != want {
-				t.Fatalf("publication pointer = published %t / %s, want true / %s", isPublished, publishedID, want)
+			if liveVersionID != want {
+				t.Fatalf("current Classic version = %s, want %s", liveVersionID, want)
 			}
 		}
 
@@ -1660,7 +1663,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 				if err := store.AdminPublish(readerAccountA, slug, second.StoryVersionID); !errors.Is(err, model.ErrAdminPublishInvalid) {
 					t.Fatalf("publish noncanonical %s error = %v, want publish-invalid", mutation.name, err)
 				}
-				assertPublishedPointer(first.StoryVersionID)
+				assertCurrentClassic(first.StoryVersionID)
 				if _, err := adminDB.Exec(
 					`UPDATE story_versions SET `+mutation.column+` = $2 WHERE id = $1`,
 					second.StoryVersionID,
@@ -1693,7 +1696,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 				if err := store.AdminPublish(readerAccountA, slug, second.StoryVersionID); !errors.Is(err, model.ErrAdminPublishInvalid) {
 					t.Fatalf("publish %s error = %v, want publish-invalid", mutation.name, err)
 				}
-				assertPublishedPointer(first.StoryVersionID)
+				assertCurrentClassic(first.StoryVersionID)
 				if _, err := adminDB.Exec(`
 					UPDATE story_versions
 					SET frontmatter = jsonb_set(frontmatter, ARRAY[$2]::text[], to_jsonb($3::text), true)
@@ -1739,7 +1742,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 				if err := store.AdminPublish(readerAccountA, slug, second.StoryVersionID); !errors.Is(err, model.ErrAdminPublishInvalid) {
 					t.Fatalf("publish noncanonical %s error = %v, want publish-invalid", mutation.name, err)
 				}
-				assertPublishedPointer(first.StoryVersionID)
+				assertCurrentClassic(first.StoryVersionID)
 				if mutation.assertReader {
 					readerStory, err := store.ReaderStory(readerAccountA, slug)
 					if err != nil {
@@ -1807,7 +1810,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 			if err := store.AdminPublish(readerAccountA, slug, rawVersionID); !errors.Is(err, model.ErrAdminPublishInvalid) {
 				t.Fatalf("publish raw-HTML-only version error = %v, want publish-invalid", err)
 			}
-			assertPublishedPointer(first.StoryVersionID)
+			assertCurrentClassic(first.StoryVersionID)
 			readerStory, err := store.ReaderStory(readerAccountA, slug)
 			if err != nil {
 				t.Fatalf("read prior safe publication after raw-only refusal: %v", err)
@@ -1823,7 +1826,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 		if err := store.AdminPublish(readerAccountA, slug, second.StoryVersionID); !errors.Is(err, model.ErrAdminPublishInvalid) {
 			t.Fatalf("publish missing immutable title error = %v, want publish-invalid", err)
 		}
-		assertPublishedPointer(first.StoryVersionID)
+		assertCurrentClassic(first.StoryVersionID)
 		if _, err := adminDB.Exec(`
 			UPDATE story_versions
 			SET frontmatter = jsonb_set(frontmatter, '{title}', to_jsonb($2::text), true)
@@ -1842,7 +1845,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 		if err := store.AdminPublish(readerAccountA, slug, second.StoryVersionID); !errors.Is(err, model.ErrAdminPublishInvalid) {
 			t.Fatalf("publish invalid chapter identity error = %v, want publish-invalid", err)
 		}
-		assertPublishedPointer(first.StoryVersionID)
+		assertCurrentClassic(first.StoryVersionID)
 		if _, err := adminDB.Exec(`
 			UPDATE story_segments
 			SET chapter_occurrence = 1
@@ -1917,7 +1920,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatal("AdminPublish remained blocked after segment mutation committed")
 		}
-		assertPublishedPointer(first.StoryVersionID)
+		assertCurrentClassic(first.StoryVersionID)
 		if _, err := adminDB.Exec(`
 			UPDATE story_segments
 			SET rendered_html = $2
@@ -1929,11 +1932,11 @@ func TestReaderStoreIntegration(t *testing.T) {
 		if err := store.AdminPublish(readerAccountA, slug, accountBDraft.StoryVersionID); !errors.Is(err, model.ErrAdminPublishNotFound) {
 			t.Fatalf("cross-account version publish error = %v, want existing not-found semantics", err)
 		}
-		assertPublishedPointer(first.StoryVersionID)
+		assertCurrentClassic(first.StoryVersionID)
 		if err := store.AdminPublish(readerAccountA, slug, second.StoryVersionID); err != nil {
 			t.Fatalf("publish restored validation v2: %v", err)
 		}
-		assertPublishedPointer(second.StoryVersionID)
+		assertCurrentClassic(second.StoryVersionID)
 	})
 
 	t.Run("unsafe historical published HTML is unavailable and repairable", func(t *testing.T) {
@@ -2005,7 +2008,39 @@ func TestReaderStoreIntegration(t *testing.T) {
 		}
 	})
 
-	t.Run("one statement never mixes versions during republish", func(t *testing.T) {
+	t.Run("Reader remains coherent during current-release changes", func(t *testing.T) {
+		if err := store.AdminPublish(readerAccountA, readerSlug, secondDraft.StoryVersionID); err != nil {
+			t.Fatalf("publish second Reader version before release race: %v", err)
+		}
+		if err := store.AdminPublish(readerAccountA, readerSlug, firstDraft.StoryVersionID); err != nil {
+			t.Fatalf("restore first Reader version before release race: %v", err)
+		}
+
+		releaseIDForVersion := func(versionID string) string {
+			t.Helper()
+			var releaseID string
+			if err := adminDB.QueryRow(`
+				SELECT release.id
+				FROM story_releases AS release
+				JOIN story_release_editions AS member
+				  ON member.release_id = release.id
+				 AND member.story_id = release.story_id
+				JOIN story_editions AS edition
+				  ON edition.id = member.edition_id
+				 AND edition.story_id = release.story_id
+				WHERE release.story_id = $1
+				  AND member.story_version_id = $2
+				  AND edition.edition_key = 'classic'
+				ORDER BY release.release_number DESC
+				LIMIT 1
+			`, firstDraft.StoryID, versionID).Scan(&releaseID); err != nil {
+				t.Fatalf("find release for version %s: %v", versionID, err)
+			}
+			return releaseID
+		}
+		firstReleaseID := releaseIDForVersion(firstDraft.StoryVersionID)
+		secondReleaseID := releaseIDForVersion(secondDraft.StoryVersionID)
+
 		stop := make(chan struct{})
 		errCh := make(chan error, 1)
 		var wg sync.WaitGroup
@@ -2018,11 +2053,11 @@ func TestReaderStoreIntegration(t *testing.T) {
 					return
 				default:
 				}
-				versionID := firstDraft.StoryVersionID
+				releaseID := firstReleaseID
 				if index%2 == 1 {
-					versionID = secondDraft.StoryVersionID
+					releaseID = secondReleaseID
 				}
-				if _, err := adminDB.Exec(`UPDATE stories SET published_version_id = $1 WHERE id = $2`, versionID, firstDraft.StoryID); err != nil {
+				if _, err := adminDB.Exec(`UPDATE stories SET current_release_id = $1 WHERE id = $2`, releaseID, firstDraft.StoryID); err != nil {
 					select {
 					case errCh <- err:
 					default:
@@ -2036,7 +2071,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 			if err != nil {
 				close(stop)
 				wg.Wait()
-				t.Fatalf("ReaderStory during republish: %v", err)
+				t.Fatalf("ReaderStory during current-release changes: %v", err)
 			}
 			switch story.Version {
 			case 1:
@@ -2051,18 +2086,15 @@ func TestReaderStoreIntegration(t *testing.T) {
 		wg.Wait()
 		select {
 		case err := <-errCh:
-			t.Fatalf("republish loop: %v", err)
+			t.Fatalf("current-release loop: %v", err)
 		default:
 		}
-		// This test deliberately races the temporary Reader compatibility pointer
-		// directly. Restore that same projection directly; release creation is
-		// intentionally fail-closed while a current-release projection is drifted.
 		if _, err := adminDB.Exec(
-			`UPDATE stories SET published_version_id = $1 WHERE id = $2`,
-			firstDraft.StoryVersionID,
+			`UPDATE stories SET current_release_id = $1 WHERE id = $2`,
+			firstReleaseID,
 			firstDraft.StoryID,
 		); err != nil {
-			t.Fatalf("restore Reader compatibility publication after race: %v", err)
+			t.Fatalf("restore first current release after race: %v", err)
 		}
 	})
 
@@ -2170,12 +2202,23 @@ func TestReaderStoreIntegration(t *testing.T) {
 		}
 	})
 
-	t.Run("publication update serialises with progress validation", func(t *testing.T) {
+	t.Run("current release update serialises with progress validation", func(t *testing.T) {
 		if _, err := adminDB.Exec(`DELETE FROM reading_progress WHERE story_id = $1`, firstDraft.StoryID); err != nil {
 			t.Fatalf("clear progress before lock test: %v", err)
 		}
+		if err := store.AdminPublish(readerAccountA, readerSlug, secondDraft.StoryVersionID); err != nil {
+			t.Fatalf("publish second version before lock test: %v", err)
+		}
+		var secondReleaseID string
+		if err := adminDB.QueryRow(`SELECT current_release_id FROM stories WHERE id = $1`, firstDraft.StoryID).Scan(&secondReleaseID); err != nil {
+			t.Fatalf("read second current release before lock test: %v", err)
+		}
 		if err := store.AdminPublish(readerAccountA, readerSlug, firstDraft.StoryVersionID); err != nil {
 			t.Fatalf("publish first version before lock test: %v", err)
+		}
+		var firstReleaseID string
+		if err := adminDB.QueryRow(`SELECT current_release_id FROM stories WHERE id = $1`, firstDraft.StoryID).Scan(&firstReleaseID); err != nil {
+			t.Fatalf("read first current release before lock test: %v", err)
 		}
 
 		publicationTx, err := adminDB.Begin()
@@ -2195,10 +2238,10 @@ func TestReaderStoreIntegration(t *testing.T) {
 		}
 		if _, err := publicationTx.Exec(`
 			UPDATE stories
-			SET published_version_id = $1, updated_at = now()
+			SET current_release_id = $1, updated_at = now()
 			WHERE id = $2
-		`, secondDraft.StoryVersionID, firstDraft.StoryID); err != nil {
-			t.Fatalf("hold uncommitted publication update: %v", err)
+		`, secondReleaseID, firstDraft.StoryID); err != nil {
+			t.Fatalf("hold uncommitted current release update: %v", err)
 		}
 
 		const progressApplicationName = "reader_progress_publication_lock_test"
@@ -2213,7 +2256,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 		for time.Now().Before(lockDeadline) {
 			select {
 			case err := <-progressResult:
-				t.Fatalf("ProgressPut returned before publication committed: %v", err)
+				t.Fatalf("ProgressPut returned before current release committed: %v", err)
 			default:
 			}
 
@@ -2236,21 +2279,21 @@ func TestReaderStoreIntegration(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 		if !lockObserved {
-			t.Fatal("ProgressPut did not wait on the publication story-row lock")
+			t.Fatal("ProgressPut did not wait on the current-release story-row lock")
 		}
 
 		if err := publicationTx.Commit(); err != nil {
-			t.Fatalf("commit publication transaction: %v", err)
+			t.Fatalf("commit current release transaction: %v", err)
 		}
 		publicationFinished = true
 
 		select {
 		case err := <-progressResult:
 			if !errors.Is(err, sql.ErrNoRows) {
-				t.Fatalf("ProgressPut after publication commit = %v, want sql.ErrNoRows", err)
+				t.Fatalf("ProgressPut after current release commit = %v, want sql.ErrNoRows", err)
 			}
 		case <-time.After(5 * time.Second):
-			t.Fatal("ProgressPut remained blocked after publication commit")
+			t.Fatal("ProgressPut remained blocked after current release commit")
 		}
 
 		var staleProgressCount int
@@ -2261,15 +2304,12 @@ func TestReaderStoreIntegration(t *testing.T) {
 			t.Fatalf("stale progress rows = %d, want 0", staleProgressCount)
 		}
 
-		// The lock test deliberately committed drift only in the temporary
-		// Reader compatibility projection. Restore that projection directly;
-		// current release membership remains authoritative and unchanged.
 		if _, err := adminDB.Exec(
-			`UPDATE stories SET published_version_id = $1 WHERE id = $2`,
-			firstDraft.StoryVersionID,
+			`UPDATE stories SET current_release_id = $1 WHERE id = $2`,
+			firstReleaseID,
 			firstDraft.StoryID,
 		); err != nil {
-			t.Fatalf("restore Reader compatibility publication after lock test: %v", err)
+			t.Fatalf("restore first current release after lock test: %v", err)
 		}
 	})
 

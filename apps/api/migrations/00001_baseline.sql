@@ -147,8 +147,7 @@ CREATE TABLE account_memberships (
 CREATE INDEX account_memberships_account_idx
   ON account_memberships(account_id, role, principal_id);
 
--- Story identity. Publication compatibility columns remain temporarily until
--- Slice 1.3 removes them together with the runtime code that still consumes them.
+-- Story identity. Live publication authority is the current immutable release.
 CREATE TABLE stories (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   account_id uuid NOT NULL,
@@ -156,9 +155,6 @@ CREATE TABLE stories (
   title text NOT NULL,
   author text,
   cover_asset_id uuid,
-  is_published boolean NOT NULL DEFAULT false,
-  published_version_id uuid,
-  draft_version_id uuid,
   current_release_id uuid,
   language text NOT NULL DEFAULT 'en-GB',
   rights jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -178,12 +174,6 @@ CREATE TABLE stories (
 
 CREATE INDEX idx_stories_account
   ON stories(account_id);
-
-CREATE INDEX idx_stories_published_version_id
-  ON stories(published_version_id);
-
-CREATE INDEX idx_stories_draft_version_id
-  ON stories(draft_version_id);
 
 CREATE TABLE contributors (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -216,7 +206,6 @@ CREATE TABLE story_editions (
   story_id uuid NOT NULL,
   edition_key text NOT NULL,
   draft_version_id uuid,
-  published_version_id uuid,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
 
@@ -275,21 +264,7 @@ ALTER TABLE story_editions
   ADD CONSTRAINT story_editions_draft_version_fkey
     FOREIGN KEY (draft_version_id, id)
     REFERENCES story_versions(id, edition_id)
-    ON UPDATE NO ACTION ON DELETE SET NULL (draft_version_id),
-  ADD CONSTRAINT story_editions_published_version_fkey
-    FOREIGN KEY (published_version_id, id)
-    REFERENCES story_versions(id, edition_id)
-    ON UPDATE NO ACTION ON DELETE SET NULL (published_version_id);
-
-ALTER TABLE stories
-  ADD CONSTRAINT fk_stories_draft_version
-    FOREIGN KEY (draft_version_id, id)
-    REFERENCES story_versions(id, story_id)
-    ON UPDATE NO ACTION ON DELETE SET NULL (draft_version_id),
-  ADD CONSTRAINT fk_stories_published_version
-    FOREIGN KEY (published_version_id, id)
-    REFERENCES story_versions(id, story_id)
-    ON UPDATE NO ACTION ON DELETE SET NULL (published_version_id);
+    ON UPDATE NO ACTION ON DELETE SET NULL (draft_version_id);
 
 CREATE INDEX idx_story_versions_story_created
   ON story_versions(story_id, created_at DESC);
@@ -300,10 +275,6 @@ CREATE INDEX story_editions_story_updated_idx
 CREATE INDEX story_editions_draft_version_idx
   ON story_editions(draft_version_id)
   WHERE draft_version_id IS NOT NULL;
-
-CREATE INDEX story_editions_published_version_idx
-  ON story_editions(published_version_id)
-  WHERE published_version_id IS NOT NULL;
 
 CREATE INDEX story_versions_edition_version_idx
   ON story_versions(edition_id, version DESC);
@@ -604,13 +575,10 @@ BEGIN;
 
 -- Break the intentional lifecycle cycles before dropping tables.
 ALTER TABLE stories
-  DROP CONSTRAINT stories_current_release_story_fkey,
-  DROP CONSTRAINT fk_stories_draft_version,
-  DROP CONSTRAINT fk_stories_published_version;
+  DROP CONSTRAINT stories_current_release_story_fkey;
 
 ALTER TABLE story_editions
-  DROP CONSTRAINT story_editions_draft_version_fkey,
-  DROP CONSTRAINT story_editions_published_version_fkey;
+  DROP CONSTRAINT story_editions_draft_version_fkey;
 
 ALTER TABLE story_sources
   DROP CONSTRAINT story_sources_current_version_fkey;

@@ -86,25 +86,3 @@ func setEditionDraftPointer(ctx context.Context, tx *sql.Tx, editionID, versionI
 		RETURNING id
 	`, editionID, versionID).Scan(&id)
 }
-
-func setEditionPublishedPointer(ctx context.Context, tx *sql.Tx, editionID, versionID string) error {
-	var id string
-	return tx.QueryRowContext(ctx, `
-		UPDATE story_editions
-		SET published_version_id = $2,
-		    updated_at = now()
-		WHERE id = $1
-		RETURNING id
-	`, editionID, versionID).Scan(&id)
-}
-
-func clearStoryEditionPublishedPointers(ctx context.Context, tx *sql.Tx, storyID string) error {
-	_, err := tx.ExecContext(ctx, `
-		UPDATE story_editions
-		SET published_version_id = NULL,
-		    updated_at = now()
-		WHERE story_id = $1
-		  AND published_version_id IS NOT NULL
-	`, storyID)
-	return err
-}

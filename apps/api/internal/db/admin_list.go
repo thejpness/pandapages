@@ -14,14 +14,11 @@ import (
 )
 
 type adminStoryRow struct {
-	ID                 string
-	Slug               string
-	IsPublished        bool
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
-	DraftVersionID     *string
-	PublishedVersionID *string
-	CurrentReleaseID   *string
+	ID               string
+	Slug             string
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	CurrentReleaseID *string
 }
 
 type inspectedAdminVersion struct {
@@ -66,7 +63,7 @@ func (s *Store) AdminListStories(accountID string) (model.AdminStoriesListRespon
 	defer func() { _ = tx.Rollback() }()
 
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id, slug, is_published, created_at, updated_at, draft_version_id, published_version_id, current_release_id
+		SELECT id, slug, created_at, updated_at, current_release_id
 		FROM stories
 		WHERE account_id = $1
 		ORDER BY updated_at DESC, slug ASC
@@ -154,24 +151,17 @@ type adminStoryScanner interface {
 func scanAdminStory(scanner adminStoryScanner) (adminStoryRow, error) {
 	var (
 		story            adminStoryRow
-		draftID          sql.NullString
-		publishedID      sql.NullString
 		currentReleaseID sql.NullString
 	)
 	if err := scanner.Scan(
 		&story.ID,
 		&story.Slug,
-		&story.IsPublished,
 		&story.CreatedAt,
 		&story.UpdatedAt,
-		&draftID,
-		&publishedID,
 		&currentReleaseID,
 	); err != nil {
 		return adminStoryRow{}, err
 	}
-	story.DraftVersionID = nullStringValue(draftID)
-	story.PublishedVersionID = nullStringValue(publishedID)
 	story.CurrentReleaseID = nullStringValue(currentReleaseID)
 	return story, nil
 }
@@ -182,7 +172,7 @@ func loadAdminStory(ctx context.Context, tx *sql.Tx, accountID, slug string, loc
 		lockClause = " FOR UPDATE"
 	}
 	story, err := scanAdminStory(tx.QueryRowContext(ctx, `
-		SELECT id, slug, is_published, created_at, updated_at, draft_version_id, published_version_id, current_release_id
+		SELECT id, slug, created_at, updated_at, current_release_id
 		FROM stories
 		WHERE account_id = $1
 		  AND slug = $2
@@ -421,46 +411,6 @@ func adminStoryStatusResponse(story inspectedAdminStory) model.AdminStoryStatusR
 		CurrentRelease:   story.Summary.CurrentRelease,
 		ReleaseCount:     story.Summary.ReleaseCount,
 	}
-}
-
-func adminStoryStatus(story adminStoryRow, repairRequired bool) model.AdminStoryStatus {
-	if repairRequired {
-		return model.AdminStoryStatusRepairRequired
-	}
-	if story.IsPublished {
-		if story.DraftVersionID != nil && *story.DraftVersionID != *story.PublishedVersionID {
-			return model.AdminStoryStatusPublishedWithDraft
-		}
-		return model.AdminStoryStatusPublished
-	}
-	if story.DraftVersionID != nil {
-		return model.AdminStoryStatusDraftOnly
-	}
-	return model.AdminStoryStatusUnpublished
-}
-
-func selectAdminMetadata(
-	story adminStoryRow,
-	versions []inspectedAdminVersion,
-	byID map[string]inspectedAdminVersion,
-) *normalizedStoredFrontmatter {
-	for _, pointer := range []*string{story.DraftVersionID, story.PublishedVersionID} {
-		if pointer == nil {
-			continue
-		}
-		version, ok := byID[*pointer]
-		if ok && version.Summary.Health == model.AdminVersionHealthReady {
-			metadata := version.Inspection.Frontmatter
-			return &metadata
-		}
-	}
-	for _, version := range versions {
-		if version.Summary.Health == model.AdminVersionHealthReady {
-			metadata := version.Inspection.Frontmatter
-			return &metadata
-		}
-	}
-	return nil
 }
 
 func adminPointer(

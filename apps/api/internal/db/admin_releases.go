@@ -199,57 +199,14 @@ func loadAdminReleaseSummaryTx(
 	return release, nil
 }
 
-func validateCurrentReleaseProjectionTx(
+func loadCurrentAdminReleaseTx(
 	ctx context.Context,
 	tx *sql.Tx,
 	story adminStoryRow,
 ) (*storedAdminRelease, error) {
-	rows, err := tx.QueryContext(ctx, `
-		SELECT edition_key, published_version_id
-		FROM story_editions
-		WHERE story_id = $1
-		FOR UPDATE
-	`, story.ID)
-	if err != nil {
-		return nil, err
-	}
-	projected := make(map[model.AdminStoryEditionKey]*string)
-	for rows.Next() {
-		var (
-			key         string
-			publishedID sql.NullString
-		)
-		if err := rows.Scan(&key, &publishedID); err != nil {
-			_ = rows.Close()
-			return nil, err
-		}
-		editionKey := model.AdminStoryEditionKey(key)
-		if !model.ValidAdminStoryEditionKey(editionKey) {
-			_ = rows.Close()
-			return nil, fmt.Errorf("%w", model.ErrAdminReleaseInvalid)
-		}
-		projected[editionKey] = nullStringValue(publishedID)
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return nil, err
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-
 	if story.CurrentReleaseID == nil {
-		if story.IsPublished || story.PublishedVersionID != nil {
-			return nil, fmt.Errorf("%w", model.ErrAdminReleaseInvalid)
-		}
-		for _, publishedID := range projected {
-			if publishedID != nil {
-				return nil, fmt.Errorf("%w", model.ErrAdminReleaseInvalid)
-			}
-		}
 		return nil, nil
 	}
-
 	current, err := loadAdminReleaseSummaryTx(ctx, tx, story.ID, *story.CurrentReleaseID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -258,33 +215,6 @@ func validateCurrentReleaseProjectionTx(
 		return nil, err
 	}
 	if len(current.Summary.Editions) == 0 {
-		return nil, fmt.Errorf("%w", model.ErrAdminReleaseInvalid)
-	}
-
-	expected := make(map[model.AdminStoryEditionKey]string, len(current.Summary.Editions))
-	for _, edition := range current.Summary.Editions {
-		expected[edition.EditionKey] = edition.VersionID
-	}
-	for _, key := range model.AdminStoryEditionKeys() {
-		wantID, included := expected[key]
-		gotID := projected[key]
-		if included {
-			if gotID == nil || *gotID != wantID {
-				return nil, fmt.Errorf("%w", model.ErrAdminReleaseInvalid)
-			}
-		} else if gotID != nil {
-			return nil, fmt.Errorf("%w", model.ErrAdminReleaseInvalid)
-		}
-	}
-
-	classicVersionID, hasClassic := expected[model.AdminStoryEditionClassic]
-	if hasClassic {
-		if !story.IsPublished ||
-			story.PublishedVersionID == nil ||
-			*story.PublishedVersionID != classicVersionID {
-			return nil, fmt.Errorf("%w", model.ErrAdminReleaseInvalid)
-		}
-	} else if story.IsPublished || story.PublishedVersionID != nil {
 		return nil, fmt.Errorf("%w", model.ErrAdminReleaseInvalid)
 	}
 	return &current, nil
@@ -342,7 +272,7 @@ func (s *Store) AdminCreateRelease(
 		return model.AdminCreateReleaseResponse{}, err
 	}
 
-	current, err := validateCurrentReleaseProjectionTx(ctx, tx, story)
+	current, err := loadCurrentAdminReleaseTx(ctx, tx, story)
 	if err != nil {
 		return model.AdminCreateReleaseResponse{}, err
 	}
@@ -427,40 +357,16 @@ func (s *Store) AdminCreateRelease(
 		}
 	}
 
-	if err := clearStoryEditionPublishedPointers(ctx, tx, story.ID); err != nil {
-		return model.AdminCreateReleaseResponse{}, err
-	}
-	for _, summary := range summaries {
-		if err := setEditionPublishedPointer(
-			ctx,
-			tx,
-			editionIDs[summary.EditionKey],
-			summary.VersionID,
-		); err != nil {
-			return model.AdminCreateReleaseResponse{}, err
-		}
-	}
-
-	// Lifecycle 6 keeps the existing Reader contract Classic-only. A release
-	// without Classic is fully published in Story Studio, but remains absent
-	// from Reader/Library until edition selection is introduced in Lifecycle 7.
-	var compatibilityVersionID *string
-	for _, summary := range summaries {
-		if summary.EditionKey == model.AdminStoryEditionClassic {
-			value := summary.VersionID
-			compatibilityVersionID = &value
-			break
-		}
-	}
+	// The immutable release manifest is the only persisted publication state.
+	// Reader remains Classic-only in this cleanup slice and resolves Classic
+	// directly from current release membership.
 	if err := tx.QueryRowContext(ctx, `
 		UPDATE stories
 		SET current_release_id = $2,
-		    published_version_id = $3,
-		    is_published = ($3::uuid IS NOT NULL),
 		    updated_at = now()
 		WHERE id = $1
 		RETURNING updated_at
-	`, story.ID, releaseID, compatibilityVersionID).Scan(&story.UpdatedAt); err != nil {
+	`, story.ID, releaseID).Scan(&story.UpdatedAt); err != nil {
 		return model.AdminCreateReleaseResponse{}, err
 	}
 
@@ -568,61 +474,24 @@ func inspectAdminReleaseState(
 				inspection.HasUnreleasedDraft = true
 			}
 		}
-
-		var expectedPublished *string
-		if live, ok := liveByKey[key]; ok {
-			value := live.VersionID
-			expectedPublished = &value
-		}
-		var actualPublished *string
-		if edition.Row != nil {
-			actualPublished = edition.Row.PublishedVersionID
-		}
-		if !equalOptionalString(expectedPublished, actualPublished) {
-			inspection.RepairRequired = true
-		}
 	}
 
 	if inspection.Current == nil {
-		if story.IsPublished || story.PublishedVersionID != nil {
-			inspection.RepairRequired = true
-		}
 		return inspection, nil
 	}
-
 	if len(inspection.Current.Editions) == 0 {
 		inspection.RepairRequired = true
 		return inspection, nil
 	}
-	var classicCompatibility *model.AdminReleaseEditionSummary
 	for index := range inspection.Current.Editions {
 		edition := &inspection.Current.Editions[index]
 		if edition.EditionKey == model.AdminStoryEditionClassic {
-			classicCompatibility = edition
+			inspection.CompatibilityPublished = &model.AdminVersionPointerSummary{
+				VersionID: edition.VersionID,
+				Version:   edition.Version,
+			}
 			break
 		}
 	}
-	if classicCompatibility == nil {
-		if story.IsPublished || story.PublishedVersionID != nil {
-			inspection.RepairRequired = true
-		}
-		return inspection, nil
-	}
-	inspection.CompatibilityPublished = &model.AdminVersionPointerSummary{
-		VersionID: classicCompatibility.VersionID,
-		Version:   classicCompatibility.Version,
-	}
-	if !story.IsPublished ||
-		story.PublishedVersionID == nil ||
-		*story.PublishedVersionID != classicCompatibility.VersionID {
-		inspection.RepairRequired = true
-	}
 	return inspection, nil
-}
-
-func equalOptionalString(left, right *string) bool {
-	if left == nil || right == nil {
-		return left == nil && right == nil
-	}
-	return *left == *right
 }

@@ -76,7 +76,9 @@ func TestProgressStoreIntegration(t *testing.T) {
 		profileA2 = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa02"
 		profileB  = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 		storyA    = "aaaaaaaa-0000-4000-8000-000000000001"
+		editionA  = "aaaaaaaa-2000-4000-8000-000000000001"
 		versionA  = "aaaaaaaa-1000-4000-8000-000000000001"
+		releaseA  = "aaaaaaaa-3000-4000-8000-000000000001"
 		slug      = "shared-slug"
 	)
 
@@ -97,7 +99,7 @@ func TestProgressStoreIntegration(t *testing.T) {
 		t.Fatalf("insert progress profiles: %v", err)
 	}
 	if _, err := adminDB.Exec(
-		`INSERT INTO stories (id, account_id, slug, title, is_published) VALUES ($1, $2, $3, 'Account A Story', true)`,
+		`INSERT INTO stories (id, account_id, slug, title) VALUES ($1, $2, $3, 'Account A Story')`,
 		storyA,
 		accountA,
 		slug,
@@ -105,9 +107,17 @@ func TestProgressStoreIntegration(t *testing.T) {
 		t.Fatalf("insert account A story: %v", err)
 	}
 	if _, err := adminDB.Exec(
-		`INSERT INTO story_versions (id, story_id, version, rendered_html) VALUES ($1, $2, 1, '<p>A</p>')`,
+		`INSERT INTO story_editions (id, story_id, edition_key) VALUES ($1, $2, 'classic')`,
+		editionA,
+		storyA,
+	); err != nil {
+		t.Fatalf("insert account A Classic edition: %v", err)
+	}
+	if _, err := adminDB.Exec(
+		`INSERT INTO story_versions (id, story_id, edition_id, version, rendered_html) VALUES ($1, $2, $3, 1, '<p>A</p>')`,
 		versionA,
 		storyA,
+		editionA,
 	); err != nil {
 		t.Fatalf("insert account A version: %v", err)
 	}
@@ -124,11 +134,27 @@ func TestProgressStoreIntegration(t *testing.T) {
 		t.Fatalf("insert account A segments: %v", err)
 	}
 	if _, err := adminDB.Exec(
-		`UPDATE stories SET published_version_id = $2 WHERE id = $1`,
+		`INSERT INTO story_releases (id, story_id, release_number) VALUES ($1, $2, 1)`,
+		releaseA,
 		storyA,
+	); err != nil {
+		t.Fatalf("insert account A release: %v", err)
+	}
+	if _, err := adminDB.Exec(
+		`INSERT INTO story_release_editions (release_id, story_id, edition_id, story_version_id) VALUES ($1, $2, $3, $4)`,
+		releaseA,
+		storyA,
+		editionA,
 		versionA,
 	); err != nil {
-		t.Fatalf("publish account A story: %v", err)
+		t.Fatalf("insert account A release member: %v", err)
+	}
+	if _, err := adminDB.Exec(
+		`UPDATE stories SET current_release_id = $2 WHERE id = $1`,
+		storyA,
+		releaseA,
+	); err != nil {
+		t.Fatalf("make account A release current: %v", err)
 	}
 
 	t.Run("known empty progress is distinct from a missing story", func(t *testing.T) {
@@ -277,10 +303,12 @@ func TestProgressStoreIntegration(t *testing.T) {
 	t.Run("identical slugs remain independent between accounts", func(t *testing.T) {
 		const (
 			storyB   = "bbbbbbbb-0000-4000-8000-000000000001"
+			editionB = "bbbbbbbb-2000-4000-8000-000000000001"
 			versionB = "bbbbbbbb-1000-4000-8000-000000000001"
+			releaseB = "bbbbbbbb-3000-4000-8000-000000000001"
 		)
 		if _, err := adminDB.Exec(
-			`INSERT INTO stories (id, account_id, slug, title, is_published) VALUES ($1, $2, $3, 'Account B Story', true)`,
+			`INSERT INTO stories (id, account_id, slug, title) VALUES ($1, $2, $3, 'Account B Story')`,
 			storyB,
 			accountB,
 			slug,
@@ -288,9 +316,17 @@ func TestProgressStoreIntegration(t *testing.T) {
 			t.Fatalf("insert account B story: %v", err)
 		}
 		if _, err := adminDB.Exec(
-			`INSERT INTO story_versions (id, story_id, version, rendered_html) VALUES ($1, $2, 1, '<p>B</p>')`,
+			`INSERT INTO story_editions (id, story_id, edition_key) VALUES ($1, $2, 'classic')`,
+			editionB,
+			storyB,
+		); err != nil {
+			t.Fatalf("insert account B Classic edition: %v", err)
+		}
+		if _, err := adminDB.Exec(
+			`INSERT INTO story_versions (id, story_id, edition_id, version, rendered_html) VALUES ($1, $2, $3, 1, '<p>B</p>')`,
 			versionB,
 			storyB,
+			editionB,
 		); err != nil {
 			t.Fatalf("insert account B version: %v", err)
 		}
@@ -302,8 +338,24 @@ func TestProgressStoreIntegration(t *testing.T) {
 		`, versionB, progressKeyB); err != nil {
 			t.Fatalf("insert account B segment: %v", err)
 		}
-		if _, err := adminDB.Exec(`UPDATE stories SET published_version_id = $2 WHERE id = $1`, storyB, versionB); err != nil {
-			t.Fatalf("publish account B story: %v", err)
+		if _, err := adminDB.Exec(
+			`INSERT INTO story_releases (id, story_id, release_number) VALUES ($1, $2, 1)`,
+			releaseB,
+			storyB,
+		); err != nil {
+			t.Fatalf("insert account B release: %v", err)
+		}
+		if _, err := adminDB.Exec(
+			`INSERT INTO story_release_editions (release_id, story_id, edition_id, story_version_id) VALUES ($1, $2, $3, $4)`,
+			releaseB,
+			storyB,
+			editionB,
+			versionB,
+		); err != nil {
+			t.Fatalf("insert account B release member: %v", err)
+		}
+		if _, err := adminDB.Exec(`UPDATE stories SET current_release_id = $2 WHERE id = $1`, storyB, releaseB); err != nil {
+			t.Fatalf("make account B release current: %v", err)
 		}
 
 		locatorA := progressLocator(progressKeyA, 1, 1, 0.9, false)
@@ -389,7 +441,7 @@ func newProgressIntegrationStore(t *testing.T, databaseURL string) *Store {
 func setupProgressIntegrationSchema(t *testing.T, database *sql.DB) {
 	t.Helper()
 	statements := []string{
-		`DROP TABLE IF EXISTS reading_progress, story_segments, story_versions, stories, profiles, accounts CASCADE`,
+		`DROP TABLE IF EXISTS reading_progress, story_segments, story_release_editions, story_releases, story_versions, story_editions, stories, profiles, accounts CASCADE`,
 		`CREATE EXTENSION IF NOT EXISTS pgcrypto`,
 		`CREATE TABLE accounts (
 			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -400,6 +452,7 @@ func setupProgressIntegrationSchema(t *testing.T, database *sql.DB) {
 			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 			account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
 			name text NOT NULL,
+			reading_level text NOT NULL,
 			created_at timestamptz NOT NULL DEFAULT now(),
 			updated_at timestamptz NOT NULL DEFAULT now(),
 			UNIQUE (account_id, name),
@@ -410,22 +463,55 @@ func setupProgressIntegrationSchema(t *testing.T, database *sql.DB) {
 			account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
 			slug text NOT NULL,
 			title text NOT NULL,
-			is_published boolean NOT NULL DEFAULT false,
-			published_version_id uuid,
+			current_release_id uuid,
 			UNIQUE (account_id, slug),
 			UNIQUE (id, account_id)
+		)`,
+		`CREATE TABLE story_editions (
+			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+			story_id uuid NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+			edition_key text NOT NULL,
+			UNIQUE (story_id, edition_key),
+			UNIQUE (id, story_id)
 		)`,
 		`CREATE TABLE story_versions (
 			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 			story_id uuid NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+			edition_id uuid NOT NULL,
 			version integer NOT NULL,
 			rendered_html text NOT NULL,
 			UNIQUE (story_id, version),
+			UNIQUE (id, story_id),
+			UNIQUE (id, edition_id),
+			FOREIGN KEY (edition_id, story_id)
+				REFERENCES story_editions(id, story_id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE story_releases (
+			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+			story_id uuid NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+			release_number integer NOT NULL,
+			UNIQUE (story_id, release_number),
 			UNIQUE (id, story_id)
 		)`,
 		`ALTER TABLE stories
-			ADD CONSTRAINT stories_published_version_progress_test_fkey
-			FOREIGN KEY (published_version_id) REFERENCES story_versions(id) ON DELETE SET NULL`,
+			ADD CONSTRAINT stories_current_release_progress_test_fkey
+			FOREIGN KEY (current_release_id, id)
+			REFERENCES story_releases(id, story_id)
+			ON DELETE SET NULL (current_release_id)`,
+		`CREATE TABLE story_release_editions (
+			release_id uuid NOT NULL,
+			story_id uuid NOT NULL,
+			edition_id uuid NOT NULL,
+			story_version_id uuid NOT NULL,
+			PRIMARY KEY (release_id, edition_id),
+			UNIQUE (release_id, story_version_id),
+			FOREIGN KEY (release_id, story_id)
+				REFERENCES story_releases(id, story_id) ON DELETE CASCADE,
+			FOREIGN KEY (edition_id, story_id)
+				REFERENCES story_editions(id, story_id) ON DELETE CASCADE,
+			FOREIGN KEY (story_version_id, edition_id)
+				REFERENCES story_versions(id, edition_id) ON DELETE RESTRICT
+		)`,
 		`CREATE TABLE story_segments (
 			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 			story_version_id uuid NOT NULL REFERENCES story_versions(id) ON DELETE CASCADE,

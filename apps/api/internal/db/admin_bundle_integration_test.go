@@ -70,11 +70,18 @@ func TestAdminEditionBundleIntegration(t *testing.T) {
 		}
 	}
 
-	var storyID, storyDraftID string
+	var storyID, classicDraftID string
+	var currentReleaseID sql.NullString
 	var editionCount, versionCount int
-	var published bool
-	if err := adminDB.QueryRow(`SELECT id, draft_version_id, is_published FROM stories WHERE account_id = $1 AND slug = $2`, accountID, slug).Scan(&storyID, &storyDraftID, &published); err != nil {
+	if err := adminDB.QueryRow(`SELECT id, current_release_id FROM stories WHERE account_id = $1 AND slug = $2`, accountID, slug).Scan(&storyID, &currentReleaseID); err != nil {
 		t.Fatalf("read bundle story: %v", err)
+	}
+	if err := adminDB.QueryRow(`
+		SELECT draft_version_id
+		FROM story_editions
+		WHERE story_id = $1 AND edition_key = 'classic'
+	`, storyID).Scan(&classicDraftID); err != nil {
+		t.Fatalf("read Classic draft pointer: %v", err)
 	}
 	if err := adminDB.QueryRow(`SELECT count(*) FROM story_editions WHERE story_id = $1`, storyID).Scan(&editionCount); err != nil {
 		t.Fatalf("count bundle editions: %v", err)
@@ -82,8 +89,8 @@ func TestAdminEditionBundleIntegration(t *testing.T) {
 	if err := adminDB.QueryRow(`SELECT count(*) FROM story_versions WHERE story_id = $1`, storyID).Scan(&versionCount); err != nil {
 		t.Fatalf("count bundle versions: %v", err)
 	}
-	if editionCount != 5 || versionCount != 5 || storyDraftID != first.Results[0].VersionID || published {
-		t.Fatalf("bundle state editions/versions/draft/published = %d/%d/%q/%v", editionCount, versionCount, storyDraftID, published)
+	if editionCount != 5 || versionCount != 5 || classicDraftID != first.Results[0].VersionID || currentReleaseID.Valid {
+		t.Fatalf("bundle state editions/versions/classic-draft/current-release = %d/%d/%q/%v", editionCount, versionCount, classicDraftID, currentReleaseID)
 	}
 
 	reused, err := store.AdminEditionBundleUpsert(accountID, request)
@@ -122,8 +129,12 @@ func TestAdminEditionBundleIntegration(t *testing.T) {
 	if err := adminDB.QueryRow(`SELECT count(*) FROM story_versions WHERE story_id = $1`, storyID).Scan(&afterFailureCount); err != nil {
 		t.Fatalf("count versions after rollback: %v", err)
 	}
-	if err := adminDB.QueryRow(`SELECT draft_version_id FROM stories WHERE id = $1`, storyID).Scan(&afterFailureDraft); err != nil {
-		t.Fatalf("read Classic compatibility draft after rollback: %v", err)
+	if err := adminDB.QueryRow(`
+		SELECT draft_version_id
+		FROM story_editions
+		WHERE story_id = $1 AND edition_key = 'classic'
+	`, storyID).Scan(&afterFailureDraft); err != nil {
+		t.Fatalf("read Classic draft after rollback: %v", err)
 	}
 	if afterFailureCount != 5 || afterFailureDraft != first.Results[0].VersionID {
 		t.Fatalf("failed bundle was not atomic: versions=%d draft=%q", afterFailureCount, afterFailureDraft)

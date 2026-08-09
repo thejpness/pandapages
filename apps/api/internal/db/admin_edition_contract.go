@@ -13,12 +13,11 @@ import (
 )
 
 type adminEditionRow struct {
-	ID                 string
-	Key                model.AdminStoryEditionKey
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
-	DraftVersionID     *string
-	PublishedVersionID *string
+	ID             string
+	Key            model.AdminStoryEditionKey
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	DraftVersionID *string
 }
 
 type inspectedAdminEdition struct {
@@ -26,6 +25,50 @@ type inspectedAdminEdition struct {
 	Versions []inspectedAdminVersion
 	Summary  model.AdminEditionSummary
 	Detail   model.AdminEditionDetail
+}
+
+func currentReleaseVersionIDsByEdition(
+	ctx context.Context,
+	tx *sql.Tx,
+	story adminStoryRow,
+) (map[model.AdminStoryEditionKey]string, error) {
+	live := make(map[model.AdminStoryEditionKey]string)
+	if story.CurrentReleaseID == nil {
+		return live, nil
+	}
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT edition.edition_key, member.story_version_id
+		FROM story_release_editions AS member
+		JOIN story_editions AS edition
+		  ON edition.id = member.edition_id
+		 AND edition.story_id = member.story_id
+		WHERE member.release_id = $1
+		  AND member.story_id = $2
+	`, *story.CurrentReleaseID, story.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var keyValue, versionID string
+		if err := rows.Scan(&keyValue, &versionID); err != nil {
+			return nil, err
+		}
+		key := model.AdminStoryEditionKey(keyValue)
+		if !model.ValidAdminStoryEditionKey(key) {
+			return nil, fmt.Errorf("stored story release edition key is invalid")
+		}
+		if _, exists := live[key]; exists {
+			return nil, fmt.Errorf("duplicate current release edition")
+		}
+		live[key] = versionID
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return live, nil
 }
 
 // inspectAdminStoryByEdition is the edition-aware Story Studio read model.
@@ -37,7 +80,7 @@ func inspectAdminStoryByEdition(
 	story adminStoryRow,
 ) (inspectedAdminStory, error) {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id, edition_key, created_at, updated_at, draft_version_id, published_version_id
+		SELECT id, edition_key, created_at, updated_at, draft_version_id
 		FROM story_editions
 		WHERE story_id = $1
 	`, story.ID)
@@ -49,10 +92,9 @@ func inspectAdminStoryByEdition(
 	editionByKey := make(map[model.AdminStoryEditionKey]*adminEditionRow, len(model.AdminStoryEditionKeys()))
 	for rows.Next() {
 		var (
-			row         adminEditionRow
-			key         string
-			draftID     sql.NullString
-			publishedID sql.NullString
+			row     adminEditionRow
+			key     string
+			draftID sql.NullString
 		)
 		if err := rows.Scan(
 			&row.ID,
@@ -60,7 +102,6 @@ func inspectAdminStoryByEdition(
 			&row.CreatedAt,
 			&row.UpdatedAt,
 			&draftID,
-			&publishedID,
 		); err != nil {
 			_ = rows.Close()
 			return inspectedAdminStory{}, err
@@ -75,7 +116,6 @@ func inspectAdminStoryByEdition(
 			return inspectedAdminStory{}, fmt.Errorf("duplicate stored story edition")
 		}
 		row.DraftVersionID = nullStringValue(draftID)
-		row.PublishedVersionID = nullStringValue(publishedID)
 		editionByID[row.ID] = &row
 		editionByKey[row.Key] = &row
 	}
@@ -84,6 +124,11 @@ func inspectAdminStoryByEdition(
 		return inspectedAdminStory{}, err
 	}
 	if err := rows.Close(); err != nil {
+		return inspectedAdminStory{}, err
+	}
+
+	liveVersionByKey, err := currentReleaseVersionIDsByEdition(ctx, tx, story)
+	if err != nil {
 		return inspectedAdminStory{}, err
 	}
 
@@ -132,13 +177,14 @@ func inspectAdminStoryByEdition(
 			return inspectedAdminStory{}, fmt.Errorf("story version references an unavailable edition")
 		}
 		versionNumber := positiveVersion(version.Version)
+		liveVersionID, live := liveVersionByKey[edition.Key]
 		inspected := inspectedAdminVersion{Summary: model.AdminVersionSummary{
 			EditionKey:  edition.Key,
 			VersionID:   version.ID,
 			Version:     versionNumber,
 			CreatedAt:   version.CreatedAt.UTC().Format(time.RFC3339Nano),
 			IsDraft:     equalOptionalID(edition.DraftVersionID, version.ID),
-			IsPublished: equalOptionalID(edition.PublishedVersionID, version.ID),
+			IsPublished: live && liveVersionID == version.ID,
 			Health:      model.AdminVersionHealthRepairRequired,
 		}}
 
@@ -183,24 +229,29 @@ func inspectAdminStoryByEdition(
 		var (
 			draftPointer     *model.AdminVersionPointerSummary
 			publishedPointer *model.AdminVersionPointerSummary
+			publishedID      *string
 			updatedAt        *string
 		)
+		if value, ok := liveVersionByKey[key]; ok {
+			copy := value
+			publishedID = &copy
+		}
 		repairRequired := repairByKey[key]
 		if row != nil {
 			draftValid := true
 			publishedValid := true
 			draftPointer, draftValid = adminPointer(row.DraftVersionID, byID)
-			publishedPointer, publishedValid = adminPointer(row.PublishedVersionID, byID)
+			publishedPointer, publishedValid = adminPointer(publishedID, byID)
 			if !draftValid || !publishedValid {
 				repairRequired = true
 			}
 			value := row.UpdatedAt.UTC().Format(time.RFC3339Nano)
 			updatedAt = &value
-		} else if len(versions) != 0 {
+		} else if len(versions) != 0 || publishedID != nil {
 			repairRequired = true
 		}
 
-		status := adminEditionStatus(row, len(versions), repairRequired)
+		status := adminEditionStatus(row, len(versions), repairRequired, publishedID)
 		summary := model.AdminEditionSummary{
 			EditionKey:       key,
 			Status:           status,
@@ -226,8 +277,7 @@ func inspectAdminStoryByEdition(
 		}
 	}
 
-	// Release membership is authoritative for story-wide publication. Edition
-	// published pointers are projections of the current immutable release.
+	// Release membership is authoritative for story-wide publication.
 	releaseState, err := inspectAdminReleaseState(ctx, tx, story, inspectedByKey)
 	if err != nil {
 		return inspectedAdminStory{}, err
@@ -314,6 +364,7 @@ func adminEditionStatus(
 	row *adminEditionRow,
 	versionCount int,
 	repairRequired bool,
+	publishedVersionID *string,
 ) model.AdminEditionStatus {
 	if repairRequired {
 		return model.AdminEditionStatusRepairRequired
@@ -321,8 +372,8 @@ func adminEditionStatus(
 	if row == nil || versionCount == 0 {
 		return model.AdminEditionStatusEmpty
 	}
-	if row.PublishedVersionID != nil {
-		if row.DraftVersionID != nil && *row.DraftVersionID != *row.PublishedVersionID {
+	if publishedVersionID != nil {
+		if row.DraftVersionID != nil && *row.DraftVersionID != *publishedVersionID {
 			return model.AdminEditionStatusPublishedWithDraft
 		}
 		return model.AdminEditionStatusPublished
@@ -406,16 +457,15 @@ func (s *Store) AdminGetEditionVersionSource(
 	}
 
 	var (
-		editionID   string
-		draftID     sql.NullString
-		publishedID sql.NullString
+		editionID string
+		draftID   sql.NullString
 	)
 	if err := tx.QueryRowContext(ctx, `
-		SELECT id, draft_version_id, published_version_id
+		SELECT id, draft_version_id
 		FROM story_editions
 		WHERE story_id = $1
 		  AND edition_key = $2
-	`, story.ID, editionKey).Scan(&editionID, &draftID, &publishedID); errors.Is(err, sql.ErrNoRows) {
+	`, story.ID, editionKey).Scan(&editionID, &draftID); errors.Is(err, sql.ErrNoRows) {
 		return model.AdminVersionSourceResponse{}, fmt.Errorf("%w", model.ErrAdminStoryNotFound)
 	} else if err != nil {
 		return model.AdminVersionSourceResponse{}, err
@@ -444,12 +494,26 @@ func (s *Store) AdminGetEditionVersionSource(
 	if err != nil {
 		return model.AdminVersionSourceResponse{}, err
 	}
+	draft := nullStringValue(draftID)
+	published := false
+	if story.CurrentReleaseID != nil {
+		if err := tx.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM story_release_editions
+				WHERE release_id = $1
+				  AND story_id = $2
+				  AND edition_id = $3
+				  AND story_version_id = $4
+			)
+		`, *story.CurrentReleaseID, story.ID, editionID, versionID).Scan(&published); err != nil {
+			return model.AdminVersionSourceResponse{}, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return model.AdminVersionSourceResponse{}, err
 	}
 
-	draft := nullStringValue(draftID)
-	published := nullStringValue(publishedID)
 	return model.AdminVersionSourceResponse{
 		Slug:         story.Slug,
 		EditionKey:   editionKey,
@@ -467,7 +531,7 @@ func (s *Store) AdminGetEditionVersionSource(
 		ChapterCount: snapshot.ChapterCount,
 		CreatedAt:    snapshot.CreatedAt.UTC().Format(time.RFC3339Nano),
 		IsDraft:      equalOptionalID(draft, versionID),
-		IsPublished:  equalOptionalID(published, versionID),
+		IsPublished:  published,
 		Health:       model.AdminVersionHealthReady,
 	}, nil
 }

@@ -92,7 +92,7 @@ ON CONFLICT (id) DO UPDATE SET
   sort_name = EXCLUDED.sort_name;
 
 INSERT INTO stories (
-  id, account_id, slug, title, author, is_published, language, rights
+  id, account_id, slug, title, author, language, rights
 )
 VALUES (
   'f17e0000-0000-4000-8000-000000000010',
@@ -100,7 +100,6 @@ VALUES (
   'test-only-moonlit-cafe',
   'TEST ONLY — Moonlit Café',
   'Panda Pages Test Fixture',
-  false,
   'en-GB',
   '{"license":"test-only","test_fixture":true}'::jsonb
 )
@@ -261,16 +260,8 @@ VALUES
     7
   );
 
-UPDATE stories
-SET published_version_id = 'f17e0000-0000-4000-8000-000000000011',
-    draft_version_id = 'f17e0000-0000-4000-8000-000000000011',
-    is_published = true,
-    updated_at = now()
-WHERE id = 'f17e0000-0000-4000-8000-000000000010';
-
 UPDATE story_editions
-SET published_version_id = 'f17e0000-0000-4000-8000-000000000011',
-    draft_version_id = 'f17e0000-0000-4000-8000-000000000011',
+SET draft_version_id = 'f17e0000-0000-4000-8000-000000000011',
     updated_at = now()
 WHERE story_id = 'f17e0000-0000-4000-8000-000000000010'
   AND edition_key = 'classic';

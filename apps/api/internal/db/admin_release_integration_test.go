@@ -84,30 +84,18 @@ func TestAdminReleaseIntegration(t *testing.T) {
 	}
 
 	var (
-		storyID              string
-		currentReleaseID     string
-		compatibilityVersion sql.NullString
-		published            bool
+		storyID          string
+		currentReleaseID string
 	)
 	if err := adminDB.QueryRow(`
-		SELECT id, current_release_id, published_version_id, is_published
+		SELECT id, current_release_id
 		FROM stories
 		WHERE account_id = $1 AND slug = $2
-	`, accountID, slug).Scan(
-		&storyID,
-		&currentReleaseID,
-		&compatibilityVersion,
-		&published,
-	); err != nil {
+	`, accountID, slug).Scan(&storyID, &currentReleaseID); err != nil {
 		t.Fatalf("read first release state: %v", err)
 	}
-	if published || currentReleaseID == "" || compatibilityVersion.Valid {
-		t.Fatalf(
-			"Growing-only Reader compatibility state = release %q version %v published %v",
-			currentReleaseID,
-			compatibilityVersion,
-			published,
-		)
+	if currentReleaseID == "" {
+		t.Fatal("Growing-only release did not become current")
 	}
 	if _, err := store.ReaderStory(accountID, slug); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("Growing-only release became Reader-visible in Lifecycle 6: %v", err)
@@ -122,18 +110,17 @@ func TestAdminReleaseIntegration(t *testing.T) {
 		}
 	}
 
-	var projected string
+	var liveManifest string
 	if err := adminDB.QueryRow(`
-		SELECT string_agg(edition_key || ':' || COALESCE(published_version_id::text, 'null'), ',' ORDER BY edition_key)
-		FROM story_editions
-		WHERE story_id = $1
-	`, storyID).Scan(&projected); err != nil {
-		t.Fatalf("read first edition projections: %v", err)
+		SELECT string_agg(edition.edition_key || ':' || member.story_version_id::text, ',' ORDER BY edition.edition_key)
+		FROM story_release_editions AS member
+		JOIN story_editions AS edition ON edition.id = member.edition_id
+		WHERE member.release_id = $1 AND member.story_id = $2
+	`, currentReleaseID, storyID).Scan(&liveManifest); err != nil {
+		t.Fatalf("read first release manifest: %v", err)
 	}
-	if !strings.Contains(projected, "growing-readers:"+growingDraft.VersionID) ||
-		strings.Contains(projected, "classic:"+classicDraft.VersionID) ||
-		strings.Contains(projected, "little-listeners:"+listenerDraft.VersionID) {
-		t.Fatalf("Growing-only edition projections = %s", projected)
+	if liveManifest != "growing-readers:"+growingDraft.VersionID {
+		t.Fatalf("Growing-only release manifest = %s", liveManifest)
 	}
 
 	second, err := store.AdminCreateRelease(accountID, slug, model.AdminCreateReleaseRequest{
@@ -153,20 +140,25 @@ func TestAdminReleaseIntegration(t *testing.T) {
 	}
 
 	if err := adminDB.QueryRow(`
-		SELECT current_release_id, published_version_id, is_published
+		SELECT current_release_id
 		FROM stories
 		WHERE id = $1
-	`, storyID).Scan(&currentReleaseID, &compatibilityVersion, &published); err != nil {
+	`, storyID).Scan(&currentReleaseID); err != nil {
 		t.Fatalf("read second release state: %v", err)
 	}
-	if !published ||
-		!compatibilityVersion.Valid ||
-		compatibilityVersion.String != classicDraft.VersionID {
-		t.Fatalf(
-			"Classic Reader compatibility projection = version %v published %v",
-			compatibilityVersion,
-			published,
-		)
+	var classicLiveVersion string
+	if err := adminDB.QueryRow(`
+		SELECT member.story_version_id
+		FROM story_release_editions AS member
+		JOIN story_editions AS edition ON edition.id = member.edition_id
+		WHERE member.release_id = $1
+		  AND member.story_id = $2
+		  AND edition.edition_key = 'classic'
+	`, currentReleaseID, storyID).Scan(&classicLiveVersion); err != nil {
+		t.Fatalf("read Classic member from current release: %v", err)
+	}
+	if classicLiveVersion != classicDraft.VersionID {
+		t.Fatalf("Classic current-release version = %q, want %q", classicLiveVersion, classicDraft.VersionID)
 	}
 	readerStory, err := store.ReaderStory(accountID, slug)
 	if err != nil {
@@ -226,36 +218,22 @@ func TestAdminReleaseIntegration(t *testing.T) {
 		t.Fatalf("unpublished release status = %#v", status)
 	}
 	var (
-		currentAfter  sql.NullString
-		publishedID   sql.NullString
-		projectedLive int
-		historyCount  int
+		currentAfter sql.NullString
+		historyCount int
 	)
 	if err := adminDB.QueryRow(`
-		SELECT current_release_id, published_version_id
+		SELECT current_release_id
 		FROM stories
 		WHERE id = $1
-	`, storyID).Scan(&currentAfter, &publishedID); err != nil {
+	`, storyID).Scan(&currentAfter); err != nil {
 		t.Fatalf("read unpublish story state: %v", err)
-	}
-	if err := adminDB.QueryRow(`
-		SELECT count(*) FROM story_editions
-		WHERE story_id = $1 AND published_version_id IS NOT NULL
-	`, storyID).Scan(&projectedLive); err != nil {
-		t.Fatalf("count live edition projections: %v", err)
 	}
 	if err := adminDB.QueryRow(`
 		SELECT count(*) FROM story_releases WHERE story_id = $1
 	`, storyID).Scan(&historyCount); err != nil {
 		t.Fatalf("count retained release history: %v", err)
 	}
-	if currentAfter.Valid || publishedID.Valid || projectedLive != 0 || historyCount != 2 {
-		t.Fatalf(
-			"unpublish retained current publication: current=%v published=%v projections=%d history=%d",
-			currentAfter,
-			publishedID,
-			projectedLive,
-			historyCount,
-		)
+	if currentAfter.Valid || historyCount != 2 {
+		t.Fatalf("unpublish state: current=%v history=%d", currentAfter, historyCount)
 	}
 }
