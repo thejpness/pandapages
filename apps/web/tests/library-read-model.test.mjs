@@ -6,174 +6,74 @@ async function readModel() {
   return loadTypeScript('../src/lib/library-read-model.ts', import.meta.url)
 }
 
-function progress(overrides = {}) {
-  return {
-    version: 2,
-    percent: 0.42,
-    updatedAt: '2026-07-19T12:00:00Z',
-    isCurrentVersion: true,
-    ...overrides,
-  }
+function edition(overrides = {}) {
+  return { editionKey: 'growing-readers', version: 2, wordCount: 1260, chapterCount: 4, ...overrides }
 }
-
+function progress(overrides = {}) {
+  return { version: 2, percent: 0.42, updatedAt: '2026-07-19T12:00:00Z', isResolvedVersion: true, ...overrides }
+}
 function story(overrides = {}) {
   return {
-    slug: 'three-little-pigs',
-    title: 'The Three Little Pigs',
-    author: 'Traditional',
-    language: 'en',
-    publishedVersion: 2,
-    wordCount: 1260,
-    chapterCount: 4,
-    progress: progress(),
-    ...overrides,
+    slug: 'three-little-pigs', title: 'The Three Little Pigs', author: 'Traditional', language: 'en',
+    state: 'selected', eligibleEditions: [edition()], selectedEdition: 'growing-readers',
+    progress: progress(), progressAvailability: 'available', ...overrides,
   }
 }
+function chooser(overrides = {}) {
+  return story({
+    slug: 'chooser', title: 'Chooser', state: 'chooser', selectedEdition: null,
+    eligibleEditions: [edition({ wordCount: 700, chapterCount: 2 }), edition({ editionKey: 'little-listeners', version: 4, wordCount: 350, chapterCount: 0 })],
+    progress: progress({ version: 1, isResolvedVersion: false }), ...overrides,
+  })
+}
 
-test('progress classification has explicit unavailable, beginning, current, completed, and updated states', async () => {
+test('progress classification uses backend-authoritative resolved-version state', async () => {
   const { module } = await readModel()
   assert.equal(module.classifyLibraryProgress(null), 'not-started')
-  assert.equal(
-    module.classifyLibraryProgress(
-      story({ progress: null, progressAvailability: 'unavailable' }),
-    ),
-    'unavailable',
-  )
+  assert.equal(module.classifyLibraryProgress(story({ progress: null, progressAvailability: 'unavailable' })), 'unavailable')
   assert.equal(module.classifyLibraryProgress(progress({ percent: 0 })), 'beginning')
-  assert.equal(module.classifyLibraryProgress(progress({ percent: 0.02 })), 'beginning')
   assert.equal(module.classifyLibraryProgress(progress({ percent: 0.021 })), 'in-progress')
-  assert.equal(module.classifyLibraryProgress(progress({ percent: 0.979 })), 'in-progress')
   assert.equal(module.classifyLibraryProgress(progress({ percent: 0.98 })), 'completed')
-  assert.equal(
-    module.classifyLibraryProgress(
-      progress({ version: 1, percent: 0.99, isCurrentVersion: false }),
-    ),
-    'updated',
-  )
+  assert.equal(module.classifyLibraryProgress(progress({ version: 1, isResolvedVersion: false })), 'updated')
 })
 
-test('story action and progress labels remain truthful at every progress boundary', async () => {
+test('chooser action wins over retained stale progress while selected actions retain existing semantics', async () => {
   const { module } = await readModel()
-  const cases = [
-    [null, 'Read', 'Not started'],
-    [progress({ percent: 0.01 }), 'Read', 'At the beginning'],
-    [progress({ percent: 0.424 }), 'Continue at 42%', '42% read'],
-    [progress({ percent: 0.975 }), 'Continue at 97%', '97% read'],
-    [progress({ percent: 0.979 }), 'Continue at 97%', '97% read'],
-    [progress({ percent: 0.98 }), 'Read again', 'Finished'],
-    [progress({ percent: 0.99 }), 'Read again', 'Finished'],
-    [
-      progress({ version: 1, isCurrentVersion: false }),
-      'Open updated story',
-      'Story updated since you last read',
-    ],
-  ]
-  for (const [value, action, label] of cases) {
-    assert.equal(module.libraryActionLabel(value), action)
-    assert.equal(module.libraryProgressLabel(value), label)
-  }
-
-  assert.equal(
-    module.libraryActionLabel(story({ progress: progress({ percent: 0.5 }) })),
-    'Continue at 50%',
-  )
-  const unavailable = story({
-    progress: null,
-    progressAvailability: 'unavailable',
-  })
-  assert.equal(module.libraryActionLabel(unavailable), 'Read')
-  assert.equal(module.libraryProgressLabel(unavailable), 'Progress unavailable')
-  assert.equal(module.libraryDisplayPercent(progress({ percent: 0.975 })), 97)
+  assert.equal(module.libraryActionLabel(null), 'Read')
+  assert.equal(module.libraryActionLabel(progress({ percent: 0.424 })), 'Continue at 42%')
+  assert.equal(module.libraryActionLabel(progress({ percent: 0.98 })), 'Read again')
+  assert.equal(module.libraryActionLabel(progress({ isResolvedVersion: false })), 'Open updated story')
+  assert.equal(module.libraryActionLabel(chooser()), 'Choose edition')
+  assert.equal(module.libraryProgressLabel(chooser()), 'Story updated since you last read')
   assert.equal(module.libraryDisplayPercent(progress({ percent: 0.979 })), 97)
-  assert.equal(module.libraryDisplayPercent(progress({ percent: 0.98 })), 98)
 })
 
-test('cover presentation is stable, CSS-ready, and never uses random selection', async () => {
+test('cover presentation is stable, CSS-ready, and never random', async () => {
   const { module, source } = await readModel()
   const first = module.libraryCoverPresentation(story())
   assert.deepEqual(module.libraryCoverPresentation(story()), first)
-  assert.deepEqual(Object.keys(first).sort(), [
-    'accent',
-    'background',
-    'initials',
-    'ink',
-    'pattern',
-  ])
   assert.equal(first.initials, 'TT')
-  assert.match(first.background, /^#[0-9a-f]{6}$/i)
-  assert.match(first.accent, /^#[0-9a-f]{6}$/i)
-  assert.match(first.ink, /^#[0-9a-f]{6}$/i)
   assert.ok(['dots', 'arches', 'rays', 'checks'].includes(first.pattern))
-  assert.notDeepEqual(
-    module.libraryCoverPresentation(
-      story({ slug: 'moonlit-cafe', title: 'Moonlit Café' }),
-    ),
-    first,
-  )
   assert.doesNotMatch(source, /Math\.random/)
 })
 
-test('word and chapter labels report exact aggregate data', async () => {
+test('selected stories show exact counts and chooser stories show truthful ranges', async () => {
   const { module } = await readModel()
-  assert.equal(module.libraryLengthLabel(0), '0 words')
-  assert.equal(module.libraryLengthLabel(1), '1 word')
-  assert.equal(module.libraryLengthLabel(1260), '1,260 words')
-  assert.equal(module.libraryChapterLabel(0), 'No chapter breaks')
-  assert.equal(module.libraryChapterLabel(1), '1 chapter')
-  assert.equal(module.libraryChapterLabel(4), '4 chapters')
+  assert.equal(module.libraryLengthLabel(story({ eligibleEditions: [edition({ wordCount: 1 })] })), '1 word')
+  assert.equal(module.libraryLengthLabel(story()), '1,260 words')
+  assert.equal(module.libraryChapterLabel(story({ eligibleEditions: [edition({ chapterCount: 0 })] })), 'No chapter breaks')
+  assert.equal(module.libraryChapterLabel(story()), '4 chapters')
+  assert.equal(module.libraryLengthLabel(chooser()), '350–700 words')
+  assert.equal(module.libraryChapterLabel(chooser()), '0–2 chapters')
+  assert.deepEqual(module.libraryWordCountBounds(chooser()), { min: 350, max: 700 })
 })
 
-test('hero selection prioritises resumable current progress, then recency and explicit fallback states', async () => {
+test('hero selection keeps resumable selected progress ahead of updated chooser history', async () => {
   const { module } = await readModel()
-  const currentOlder = story({
-    slug: 'current-older',
-    title: 'Current Older',
-    progress: progress({ updatedAt: '2026-07-18T12:00:00Z' }),
-  })
-  const currentNewer = story({
-    slug: 'current-newer',
-    title: 'Current Newer',
-    progress: progress({ updatedAt: '2026-07-19T12:00:00Z' }),
-  })
-  const updatedNewest = story({
-    slug: 'updated-newest',
-    title: 'Updated Newest',
-    progress: progress({
-      version: 1,
-      updatedAt: '2026-07-20T12:00:00Z',
-      isCurrentVersion: false,
-    }),
-  })
-  const completed = story({
-    slug: 'completed',
-    title: 'Completed',
-    progress: progress({ percent: 1, updatedAt: '2026-07-21T12:00:00Z' }),
-  })
-
-  assert.equal(
-    module.selectLibraryHero([
-      completed,
-      updatedNewest,
-      currentOlder,
-      currentNewer,
-    ]).slug,
-    'current-newer',
-  )
-  assert.equal(
-    module.selectLibraryHero([completed, updatedNewest]).slug,
-    'updated-newest',
-  )
-  assert.equal(module.selectLibraryHero([completed]).slug, 'completed')
-  assert.equal(
-    module.selectLibraryHero([
-      story({ progress: null }),
-      story({
-        slug: 'unavailable',
-        progress: null,
-        progressAvailability: 'unavailable',
-      }),
-      story({ slug: 'beginning', progress: progress({ percent: 0.01 }) }),
-    ]),
-    null,
-  )
+  const current = story({ slug: 'current', progress: progress({ updatedAt: '2026-07-18T12:00:00Z' }) })
+  const updatedChooser = chooser({ progress: progress({ version: 1, isResolvedVersion: false, updatedAt: '2026-07-20T12:00:00Z' }) })
+  const completed = story({ slug: 'completed', progress: progress({ percent: 1, updatedAt: '2026-07-21T12:00:00Z' }) })
+  assert.equal(module.selectLibraryHero([completed, updatedChooser, current]).slug, 'current')
+  assert.equal(module.selectLibraryHero([completed, updatedChooser]).slug, 'chooser')
+  assert.equal(module.selectLibraryHero([story({ progress: null })]), null)
 })

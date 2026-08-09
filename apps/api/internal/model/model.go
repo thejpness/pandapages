@@ -43,32 +43,6 @@ var (
 	ErrProfilePINRateLimited = errors.New("reader profile PIN verification is rate limited")
 )
 
-type StoryItem struct {
-	Slug             string                  `json:"slug"`
-	Title            string                  `json:"title"`
-	Author           *string                 `json:"author,omitempty"`
-	Language         string                  `json:"language"`
-	PublishedVersion int                     `json:"publishedVersion"`
-	WordCount        int64                   `json:"wordCount"`
-	ChapterCount     int64                   `json:"chapterCount"`
-	Progress         *LibraryProgressSummary `json:"progress"`
-}
-
-// LibraryReadModel is the account-scoped bookshelf response. Items that cannot
-// be represented safely from their immutable published version are omitted and
-// counted without exposing their metadata or internal identifiers.
-type LibraryReadModel struct {
-	Items                []StoryItem `json:"items"`
-	UnavailableItemCount int64       `json:"unavailableItemCount"`
-}
-
-type LibraryProgressSummary struct {
-	Version          int       `json:"version"`
-	Percent          float64   `json:"percent"`
-	UpdatedAt        time.Time `json:"updatedAt"`
-	IsCurrentVersion bool      `json:"isCurrentVersion"`
-}
-
 // ReaderLibraryEditionSummary describes one immutable current-release edition
 // that the selected profile is allowed to open. The list is always in canonical
 // Reading Level order.

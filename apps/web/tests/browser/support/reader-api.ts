@@ -505,25 +505,43 @@ export class ReaderApiMock {
     }
   }
 
-  private libraryReadModelItems() {
-    return this.libraryItems.map((item) => {
-      const story = this.stories.get(item.slug)
-      return {
-        ...item,
-        language: story?.language ?? 'en-GB',
-        publishedVersion: story?.version ?? 1,
-        wordCount:
-          story?.segments.reduce(
-            (total, segment) => total + segment.wordCount,
-            0,
-          ) ?? 0,
-        chapterCount:
-          story?.segments.filter(
-            (segment) =>
-              segment.kind === 'heading' && segment.headingLevel === 2,
-          ).length ?? 0,
-        progress: null,
+  private libraryReadModelItems(profileID: string) {
+    return this.libraryItems.flatMap((item) => {
+      const eligible = this.eligibleReaderEditions.get(item.slug) ?? []
+      const editions = this.editionStories.get(item.slug)
+      if (!editions || eligible.length === 0) return []
+
+      const override = this.readerEditionOverrides.get(this.progressKey(profileID, item.slug))
+      const progress = this.progressForProfile(item.slug, profileID)
+      let selected: ReaderEditionKeyFixture | null = null
+      if (override && eligible.includes(override) && editions.has(override)) selected = override
+      if (!selected && progress) {
+        selected = eligible.find((key) => editions.get(key)?.version === progress.version) ?? null
       }
+      if (!selected && eligible.length === 1) selected = eligible[0] ?? null
+
+      const eligibleEditions = eligible.flatMap((editionKey) => {
+        const story = editions.get(editionKey)
+        if (!story) return []
+        return [{
+          editionKey,
+          version: story.version,
+          wordCount: story.segments.reduce((total, segment) => total + segment.wordCount, 0),
+          chapterCount: story.segments.filter(
+            (segment) => segment.kind === 'heading' && segment.headingLevel === 2,
+          ).length,
+        }]
+      })
+      if (eligibleEditions.length === 0) return []
+      const identity = selected ? editions.get(selected) : editions.get(eligible[0] ?? 'classic')
+      return [{
+        ...item,
+        language: identity?.language ?? 'en-GB',
+        state: selected ? 'selected' : 'chooser',
+        eligibleEditions,
+        selectedEdition: selected,
+        progress: null,
+      }]
     })
   }
 
@@ -596,7 +614,8 @@ export class ReaderApiMock {
 		url.pathname.startsWith('/api/v1/progress/') ||
 		url.pathname.startsWith('/api/v1/reader-resolution/') ||
 		url.pathname.startsWith('/api/v1/reader-edition/') ||
-		url.pathname === '/api/v1/continue'
+		url.pathname === '/api/v1/continue' ||
+		url.pathname === '/api/v1/library'
 	) {
 		const profileID = request.headers()['x-pp-profile-id']
 		expect(profileID).toBeTruthy()
@@ -724,8 +743,18 @@ export class ReaderApiMock {
     }
 
     if (request.method() === 'GET' && url.pathname === '/api/v1/library') {
+      const profileID = captured.profileID ?? ''
+      if (!profileID) {
+        await this.respond(
+          route,
+          captured,
+          { status: 400, body: jsonError('profile_required', 'Profile required') },
+          null,
+        )
+        return
+      }
       await this.respond(route, captured, undefined, {
-        items: this.libraryReadModelItems(),
+        items: this.libraryReadModelItems(profileID),
       })
       return
     }

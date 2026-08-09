@@ -40,6 +40,19 @@ function progressTime(story: LibraryStory): number {
   return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY
 }
 
+function wordCountBounds(story: LibraryStory): { min: number; max: number } {
+  if (story.state === 'selected' && story.selectedEdition !== null) {
+    const selected = story.eligibleEditions.find(
+      (edition) => edition.editionKey === story.selectedEdition,
+    )
+    if (selected !== undefined) {
+      return { min: selected.wordCount, max: selected.wordCount }
+    }
+  }
+  const values = story.eligibleEditions.map((edition) => edition.wordCount)
+  return { min: Math.min(...values), max: Math.max(...values) }
+}
+
 function defaultStorage(): LibrarySortStorage | null {
   try {
     if (typeof localStorage === 'undefined') return null
@@ -116,12 +129,20 @@ export function sortLibraryStories(
       return compareTitle(left, right)
     }
     if (selected === 'shortest') {
-      const length = left.wordCount - right.wordCount
-      return length !== 0 ? length : compareTitle(left, right)
+      const leftBounds = wordCountBounds(left)
+      const rightBounds = wordCountBounds(right)
+      const minimum = leftBounds.min - rightBounds.min
+      if (minimum !== 0) return minimum
+      const maximum = leftBounds.max - rightBounds.max
+      return maximum !== 0 ? maximum : compareTitle(left, right)
     }
     if (selected === 'longest') {
-      const length = right.wordCount - left.wordCount
-      return length !== 0 ? length : compareTitle(left, right)
+      const leftBounds = wordCountBounds(left)
+      const rightBounds = wordCountBounds(right)
+      const maximum = rightBounds.max - leftBounds.max
+      if (maximum !== 0) return maximum
+      const minimum = rightBounds.min - leftBounds.min
+      return minimum !== 0 ? minimum : compareTitle(left, right)
     }
     return compareTitle(left, right)
   })

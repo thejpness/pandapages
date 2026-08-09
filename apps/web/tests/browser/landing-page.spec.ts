@@ -368,6 +368,10 @@ test.describe('Public landing page', () => {
 
   test('installed PWA button opens the protected library', async ({ page }) => {
     await page.addInitScript(() => {
+      window.localStorage.setItem(
+        'pandapages.selected-reader-profile-id',
+        '123e4567-e89b-42d3-a456-426614174300',
+      )
       const original = window.matchMedia.bind(window)
       window.matchMedia = (query: string) => {
         if (query !== '(display-mode: standalone)') return original(query)

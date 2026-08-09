@@ -37,10 +37,10 @@ const progressLabel = computed(() =>
   props.story ? libraryProgressLabel(props.story) : '',
 )
 const lengthLabel = computed(() =>
-  props.story ? libraryLengthLabel(props.story.wordCount) : '',
+  props.story ? libraryLengthLabel(props.story) : '',
 )
 const chapterLabel = computed(() =>
-  props.story ? libraryChapterLabel(props.story.chapterCount) : '',
+  props.story ? libraryChapterLabel(props.story) : '',
 )
 const percent = computed(() =>
   props.story ? libraryDisplayPercent(props.story) : 0,

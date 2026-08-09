@@ -29,7 +29,7 @@ type Config struct {
 type Store interface {
 	CheckReadiness(context.Context) error
 
-	Library(accountID string) (model.LibraryReadModel, error)
+	ReaderLibrary(accountID, profileID string) (model.ReaderLibraryReadModel, error)
 	ReaderResolve(accountID, profileID, slug string) (model.ReaderResolution, error)
 	ReaderStoryEditionOverridePut(accountID, profileID, slug string, editionKey model.ReaderEditionKey) error
 	ReaderStoryEditionOverrideClear(accountID, profileID, slug string) (bool, error)
@@ -128,14 +128,22 @@ func New(cfg Config, store Store) http.Handler {
 		}
 	}
 
-	// Library
-	mux.HandleFunc("/api/v1/library", withBearerAccount(func(w http.ResponseWriter, r *http.Request, accountID string) {
+	// Library is profile scoped because story visibility, edition resolution,
+	// and progress presentation all depend on the explicitly selected reader.
+	mux.HandleFunc("/api/v1/library", withBearerProfile(func(w http.ResponseWriter, r *http.Request, profile httpprofile.Context) {
 		if r.Method != http.MethodGet {
 			methodNotAllowed(w, []string{http.MethodGet})
 			return
 		}
 
-		library, err := store.Library(accountID)
+		library, err := store.ReaderLibrary(profile.AccountID, profile.ProfileID)
+		if errors.Is(err, sql.ErrNoRows) {
+			// The profile passed middleware validation but may have been deleted
+			// before the Store transaction began. Preserve the profile ownership
+			// boundary rather than turning that race into a story-level 404.
+			writeErr(w, http.StatusForbidden, "profile_forbidden", "profile is not available in this account")
+			return
+		}
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, "db", "library query failed")
 			return

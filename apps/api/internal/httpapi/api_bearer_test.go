@@ -28,7 +28,8 @@ type authTestStore struct {
 	memberships               []appidentity.Membership
 	libraryCalls              int
 	libraryAccount            string
-	libraryResponse           model.LibraryReadModel
+	libraryProfile            string
+	libraryResponse           model.ReaderLibraryReadModel
 	libraryErr                error
 	readerCalls               int
 	readerAccount             string
@@ -129,11 +130,12 @@ func (s *authTestStore) CheckReadiness(ctx context.Context) error {
 	}
 	return s.readinessErr
 }
-func (s *authTestStore) Library(accountID string) (model.LibraryReadModel, error) {
+func (s *authTestStore) ReaderLibrary(accountID, profileID string) (model.ReaderLibraryReadModel, error) {
 	s.libraryCalls++
 	s.libraryAccount = accountID
+	s.libraryProfile = profileID
 	if s.libraryResponse.Items == nil {
-		s.libraryResponse.Items = []model.StoryItem{}
+		s.libraryResponse.Items = []model.ReaderLibraryItem{}
 	}
 	return s.libraryResponse, s.libraryErr
 }
@@ -328,12 +330,14 @@ func TestProtectedRoutesRequireBearerAccountContext(t *testing.T) {
 func TestProtectedRoutesPassSelectedMembershipAccountToStore(t *testing.T) {
 	store := &authTestStore{memberships: []appidentity.Membership{{AccountID: alternateAccountID, Role: appidentity.RoleAdult}}}
 	handler := testHandler(t, store)
-	req := bearerRequest(http.MethodGet, "/api/v1/library")
+	req := profileBearerRequest(http.MethodGet, "/api/v1/library")
 	req.Header.Set("X-PP-Account-ID", alternateAccountID)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK || store.libraryAccount != alternateAccountID {
-		t.Fatalf("status/account = %d/%q", rec.Code, store.libraryAccount)
+	if rec.Code != http.StatusOK ||
+		store.libraryAccount != alternateAccountID ||
+		store.libraryProfile != testProfileID {
+		t.Fatalf("status/account/profile = %d/%q/%q", rec.Code, store.libraryAccount, store.libraryProfile)
 	}
 	for _, path := range []string{"/api/v1/auth/unlock", "/api/v1/auth/status", "/api/v1/auth/logout"} {
 		rec = httptest.NewRecorder()
@@ -346,7 +350,7 @@ func TestProtectedRoutesPassSelectedMembershipAccountToStore(t *testing.T) {
 
 func TestProtectedRoutesRejectNonMemberAccount(t *testing.T) {
 	store := &authTestStore{}
-	req := bearerRequest(http.MethodGet, "/api/v1/library")
+	req := profileBearerRequest(http.MethodGet, "/api/v1/library")
 	req.Header.Set("X-PP-Account-ID", alternateAccountID)
 	rec := httptest.NewRecorder()
 	testHandler(t, store).ServeHTTP(rec, req)
@@ -366,6 +370,9 @@ func TestProfileScopedRoutesRequireValidatedProfileContext(t *testing.T) {
 		wantCode    string
 		wantLookups int
 	}{
+		{name: "library missing profile", method: http.MethodGet, path: "/api/v1/library", wantStatus: http.StatusBadRequest, wantCode: "profile_required"},
+		{name: "library invalid profile", method: http.MethodGet, path: "/api/v1/library", profile: "not-a-uuid", wantStatus: http.StatusBadRequest, wantCode: "invalid_profile"},
+		{name: "library cross account or missing profile", method: http.MethodGet, path: "/api/v1/library", profile: testProfileID, forbidden: true, wantStatus: http.StatusForbidden, wantCode: "profile_forbidden", wantLookups: 1},
 		{name: "missing profile", method: http.MethodGet, path: "/api/v1/progress/story", wantStatus: http.StatusBadRequest, wantCode: "profile_required"},
 		{name: "invalid profile", method: http.MethodGet, path: "/api/v1/progress/story", profile: "not-a-uuid", wantStatus: http.StatusBadRequest, wantCode: "invalid_profile"},
 		{name: "cross account or missing profile", method: http.MethodGet, path: "/api/v1/progress/story", profile: testProfileID, forbidden: true, wantStatus: http.StatusForbidden, wantCode: "profile_forbidden", wantLookups: 1},
@@ -385,13 +392,15 @@ func TestProfileScopedRoutesRequireValidatedProfileContext(t *testing.T) {
 				t.Fatalf("status/body = %d/%s", response.Code, response.Body.String())
 			}
 			if store.profileExistsCalls != test.wantLookups ||
+				store.libraryCalls != 0 ||
 				store.progressGetCalls != 0 ||
 				store.continueCalls != 0 ||
 				store.readerResolutionCalls != 0 ||
 				store.readerEditionPutCalls != 0 {
 				t.Fatalf(
-					"profile/store calls = %d/%d/%d/%d/%d",
+					"profile/store calls = %d/%d/%d/%d/%d/%d",
 					store.profileExistsCalls,
+					store.libraryCalls,
 					store.progressGetCalls,
 					store.continueCalls,
 					store.readerResolutionCalls,
@@ -407,10 +416,23 @@ func TestProfileScopedRoutesRequireValidatedProfileContext(t *testing.T) {
 
 func TestProfileScopedRoutesPassAccountAndProfileUnchangedToStore(t *testing.T) {
 	store := &authTestStore{memberships: []appidentity.Membership{{AccountID: alternateAccountID, Role: appidentity.RoleAdult}}}
-	request := bearerRequest(http.MethodGet, "/api/v1/progress/story")
+	request := bearerRequest(http.MethodGet, "/api/v1/library")
 	request.Header.Set("X-PP-Account-ID", alternateAccountID)
 	request.Header.Set("X-PP-Profile-ID", strings.ToUpper(testProfileID))
 	response := httptest.NewRecorder()
+	testHandler(t, store).ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("library status = %d: %s", response.Code, response.Body.String())
+	}
+	if store.profileExistsAccount != alternateAccountID || store.profileExistsID != testProfileID ||
+		store.libraryAccount != alternateAccountID || store.libraryProfile != testProfileID {
+		t.Fatalf("library profile/store context = %q/%q %q/%q", store.profileExistsAccount, store.profileExistsID, store.libraryAccount, store.libraryProfile)
+	}
+
+	request = bearerRequest(http.MethodGet, "/api/v1/progress/story")
+	request.Header.Set("X-PP-Account-ID", alternateAccountID)
+	request.Header.Set("X-PP-Profile-ID", strings.ToUpper(testProfileID))
+	response = httptest.NewRecorder()
 	testHandler(t, store).ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", response.Code, response.Body.String())
