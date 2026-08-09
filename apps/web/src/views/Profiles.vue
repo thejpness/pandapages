@@ -90,10 +90,6 @@ async function refresh(): Promise<void> {
   restoreSelection();
 }
 
-function openReadingProfile(): void {
-  void router.push("/journey");
-}
-
 function openStoryStudio(): void {
   void router.push("/admin/stories");
 }
@@ -423,19 +419,14 @@ onMounted(async () => {
         </div>
       </form>
 
-      <section class="hub-tools" aria-labelledby="parent-tools-heading">
+      <section v-if="canOpenStoryStudio" class="hub-tools" aria-labelledby="parent-tools-heading">
         <div class="section-heading">
           <p class="section-kicker">Parent tools</p>
           <h2 id="parent-tools-heading">Manage Panda Pages</h2>
           <p>These controls stay outside reader mode.</p>
         </div>
         <div class="hub-links">
-          <button type="button" class="hub-link" @click="openReadingProfile">
-            <strong>Reading profile</strong>
-            <span>Parent notes, interests, sensitivities and story preferences.</span>
-          </button>
           <button
-            v-if="canOpenStoryStudio"
             type="button"
             class="hub-link"
             @click="openStoryStudio"

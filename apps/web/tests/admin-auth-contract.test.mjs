@@ -135,10 +135,10 @@ test('PWA caches static assets only and protected routes are split', async () =>
     new URL('../src/router.ts', import.meta.url),
     'utf8'
   )
-  assert.doesNotMatch(routerSource, /^import (Reader|Journey|Admin)/m)
+  assert.doesNotMatch(routerSource, /^import (Reader|Admin)/m)
+  assert.doesNotMatch(routerSource, /Journey\.vue|path: ["']\/journey["']/)
   for (const modulePath of [
     './views/Reader.vue',
-    './views/Journey.vue',
     './views/admin/AdminLayout.vue',
     './views/admin/StoryStudioList.vue',
     './views/admin/StoryStudioDetail.vue',

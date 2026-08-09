@@ -304,30 +304,6 @@ class LibraryApiMock {
 
     if (
       request.method() === 'GET' &&
-      url.pathname === '/api/v1/settings'
-    ) {
-      await fulfillJson(route, {
-        body: {
-          child: {
-            id: 'child-test-id',
-            name: 'Ted',
-            ageMonths: 84,
-            interests: [],
-            sensitivities: [],
-          },
-          prompt: {
-            id: 'prompt-test-id',
-            name: 'Default',
-            schemaVersion: 1,
-            rules: {},
-          },
-        },
-      })
-      return
-    }
-
-    if (
-      request.method() === 'GET' &&
       url.pathname.startsWith('/api/v1/reader/')
     ) {
       await fulfillJson(route, {
@@ -604,7 +580,6 @@ test.describe('Library 2 bookshelf', () => {
 
     expect(api.count('GET', '/api/v1/library')).toBe(1)
     expect(api.count('GET', '/api/v1/continue')).toBe(0)
-    expect(api.count('GET', '/api/v1/settings')).toBe(0)
   })
 
   test('shows a truthful initial loading state before the single response completes', async ({

@@ -43,9 +43,6 @@ type Store interface {
 	SetProfilePIN(accountID, profileID, encodedHash string) error
 	RemoveProfilePIN(accountID, profileID string) error
 	VerifyProfilePIN(accountID, profileID, candidate string) error
-
-	SettingsGet(accountID string) (model.SettingsPayload, error)
-	SettingsPut(accountID string, payload model.SettingsUpsert) (model.SettingsPayload, error)
 }
 
 const (
@@ -371,44 +368,6 @@ func New(cfg Config, store Store) http.Handler {
 			w.WriteHeader(http.StatusNoContent)
 		default:
 			methodNotAllowed(w, []string{http.MethodPatch, http.MethodDelete})
-		}
-	}))
-
-	// Settings / Journey
-	mux.HandleFunc("/api/v1/settings", withBearerAccount(func(w http.ResponseWriter, r *http.Request, accountID string) {
-		switch r.Method {
-		case http.MethodGet:
-			out, err := store.SettingsGet(accountID)
-			if err != nil {
-				if errors.Is(err, sql.ErrNoRows) {
-					out = model.SettingsPayload{}
-				} else {
-					writeErr(w, http.StatusInternalServerError, "db", "settings query failed")
-					return
-				}
-			}
-			noStore(w)
-			writeJSON(w, http.StatusOK, out)
-			return
-
-		case http.MethodPut:
-			var body model.SettingsUpsert
-			if err := decodeJSON(w, r, &body); err != nil {
-				writeDecodeError(w, err)
-				return
-			}
-			out, err := store.SettingsPut(accountID, body)
-			if err != nil {
-				writeErr(w, http.StatusInternalServerError, "db", "settings update failed")
-				return
-			}
-			noStore(w)
-			writeJSON(w, http.StatusOK, out)
-			return
-
-		default:
-			methodNotAllowed(w, []string{http.MethodGet, http.MethodPut})
-			return
 		}
 	}))
 

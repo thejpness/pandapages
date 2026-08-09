@@ -224,7 +224,7 @@ test.describe('reader profile lifecycle', () => {
     await page.getByRole('button', { name: 'Start reading as Mina' }).click()
     await expect(page).toHaveURL('/library')
 
-    for (const path of ['/profiles', '/journey', '/admin/stories', '/account']) {
+    for (const path of ['/profiles', '/admin/stories', '/account']) {
       await page.evaluate(async (target) => {
         type AppRouter = { push: (location: string) => Promise<unknown> }
         type VueAppHost = HTMLElement & {
@@ -276,7 +276,6 @@ test.describe('reader profile lifecycle', () => {
     await expect(page.getByRole('heading', { level: 2, name: 'Start reading' })).toBeVisible()
     await expect(page.getByRole('heading', { level: 2, name: 'My Panda Pages' })).toBeVisible()
     await expect(page.getByText('Signed in as Panda Pages Adult · Owner')).toBeVisible()
-    await expect(page.getByRole('button', { name: /Reading profile/ })).toBeVisible()
     await expect(page.getByRole('button', { name: /Story Studio/ })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible()
 

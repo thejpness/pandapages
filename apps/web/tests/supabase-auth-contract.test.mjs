@@ -32,7 +32,8 @@ test('identity routes and protected routes use explicit account context', () => 
   }
   assert.doesNotMatch(router, /unlock|auth\/status|auth\/logout|requiresUnlock/)
   assert.match(router, /path: ["']\/library["'][\s\S]*requiresAccount/)
-  assert.match(router, /path: ["']\/journey["'][\s\S]*requiresAccount/)
+  assert.match(router, /path: ["']\/profiles["'][\s\S]*requiresAccount/)
+  assert.doesNotMatch(router, /path: ["']\/journey["']/)
   assert.match(router, /currentAccountContext\(\)/)
 })
 
