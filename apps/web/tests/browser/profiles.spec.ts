@@ -133,7 +133,7 @@ class ProfilesApiMock {
 test.describe('reader profile lifecycle', () => {
   test('chooser is focused and one-profile convenience does not persist authority', async ({ page }) => {
     const api = new ProfilesApiMock(page); api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false, reading_level: 'classic' }]; await api.install(); await page.goto('/profiles');
-    await expect(page.getByRole('heading', { level: 1, name: 'Who’s reading?' })).toBeVisible(); await expect(page.getByRole('button', { name: 'Start reading as Mina' })).toBeVisible(); await expect(page.getByLabel('New reader name')).toHaveCount(0); await expect(page.getByRole('button', { name: 'Edit reader' })).toHaveCount(0); await expect.poll(() => page.evaluate(() => window.localStorage.getItem('pandapages.selected-reader-profile-id'))).toBeNull();
+    await expect(page.getByRole('heading', { level: 1, name: 'Who’s reading?' })).toBeVisible(); await expect(page.getByRole('button', { name: 'Start reading as Mina' })).toBeVisible(); await expect(page.getByText('Classic', { exact: true })).toBeVisible(); await expect(page.getByRole('button', { name: 'Add profile' })).toBeVisible(); await expect(page.getByRole('button', { name: 'Manage profiles' })).toBeVisible(); await expect(page.getByLabel('New reader name')).toHaveCount(0); await expect(page.getByRole('button', { name: 'Edit reader' })).toHaveCount(0); await expect.poll(() => page.evaluate(() => window.localStorage.getItem('pandapages.selected-reader-profile-id'))).toBeNull(); await page.setViewportSize({ width: 320, height: 700 }); await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   });
   test('create is dedicated and does not start or select a reader', async ({ page }) => {
     const api = new ProfilesApiMock(page); await api.install(); await page.goto('/profiles/new?from=chooser'); await page.getByLabel('Reader name').fill('Ted'); await page.getByLabel('Reading level').selectOption('little-listeners'); await page.getByRole('button', { name: 'Create profile' }).click(); await expect(page).toHaveURL('/profiles'); await expect.poll(() => page.evaluate(() => window.localStorage.getItem('pandapages.selected-reader-profile-id'))).toBeNull(); await expect(page.getByRole('button', { name: 'Start reading as Ted' })).toBeVisible();
@@ -166,6 +166,7 @@ test.describe('reader profile lifecycle', () => {
     await expect(page).toHaveURL(/\/profiles\?next=\/library$/)
     await expect(page.getByRole('button', { name: 'Add profile' })).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Manage profiles' })).toHaveCount(0)
+    await expect(page.getByText('Current reader', { exact: true })).toBeVisible()
     await page.getByRole('button', { name: 'Start reading as Ted' }).click()
     await expect(page).toHaveURL('/library')
     await expect.poll(() => page.evaluate(() => window.localStorage.getItem('pandapages.selected-reader-profile-id'))).toBe(tedID)
