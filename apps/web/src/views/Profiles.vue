@@ -44,10 +44,10 @@ const busy = ref(false);
 const signingOut = ref(false);
 const errorMessage = ref("");
 const newName = ref("");
-const newPreferredEdition = ref<ReaderEditionKey>("classic");
+const newReadingLevel = ref<ReaderEditionKey>("classic");
 const editingID = ref<string | null>(null);
 const editingName = ref("");
-const editingPreferredEdition = ref<ReaderEditionKey>("classic");
+const editingReadingLevel = ref<ReaderEditionKey>("classic");
 const managingID = ref<string | null>(null);
 const deleteTarget = ref<ReaderProfile | null>(null);
 const deleteConfirm = ref<HTMLButtonElement | null>(null);
@@ -199,10 +199,10 @@ async function createProfile(): Promise<void> {
   try {
     const created = await createReaderProfile(
       newName.value,
-      newPreferredEdition.value,
+      newReadingLevel.value,
     );
     newName.value = "";
-    newPreferredEdition.value = "classic";
+    newReadingLevel.value = "classic";
     await refresh();
     selectReaderProfile(created.id);
     selectedID.value = created.id;
@@ -222,7 +222,7 @@ function startRename(profile: ReaderProfile): void {
   managingID.value = profile.id;
   editingID.value = profile.id;
   editingName.value = profile.name;
-  editingPreferredEdition.value = profile.preferredEdition;
+  editingReadingLevel.value = profile.readingLevel;
   errorMessage.value = "";
 }
 
@@ -234,7 +234,7 @@ async function renameProfile(profile: ReaderProfile): Promise<void> {
     await renameReaderProfile(
       profile.id,
       editingName.value,
-      editingPreferredEdition.value,
+      editingReadingLevel.value,
     );
     editingID.value = null;
     await refresh();
@@ -351,7 +351,7 @@ onMounted(async () => {
               <label :for="`profile-level-${profile.id}`">Reading level</label>
               <select
                 :id="`profile-level-${profile.id}`"
-                v-model="editingPreferredEdition"
+                v-model="editingReadingLevel"
                 :disabled="busy"
               >
                 <option
@@ -363,7 +363,7 @@ onMounted(async () => {
                 </option>
               </select>
               <p class="reader-level-hint">
-                {{ readerEditionDescription(editingPreferredEdition) }}
+                {{ readerEditionDescription(editingReadingLevel) }}
               </p>
               <div class="actions">
                 <button type="submit" :disabled="busy">Save reader</button>
@@ -378,7 +378,7 @@ onMounted(async () => {
               <div>
                 <h3>{{ profile.name }}</h3>
                 <p class="reader-card__level">
-                  Reading level: {{ readerEditionLabel(profile.preferredEdition) }}
+                  Reading level: {{ readerEditionLabel(profile.readingLevel) }}
                 </p>
                 <div
                   v-if="profile.pinEnabled || selectedID === profile.id"
@@ -454,7 +454,7 @@ onMounted(async () => {
         <label for="new-profile-level">New reader reading level</label>
         <select
           id="new-profile-level"
-          v-model="newPreferredEdition"
+          v-model="newReadingLevel"
           :disabled="busy"
         >
           <option
@@ -466,7 +466,7 @@ onMounted(async () => {
           </option>
         </select>
         <p class="reader-level-hint">
-          {{ readerEditionDescription(newPreferredEdition) }}
+          {{ readerEditionDescription(newReadingLevel) }}
         </p>
         <button type="submit" :disabled="busy">Add reader</button>
       </form>

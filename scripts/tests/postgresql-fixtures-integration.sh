@@ -1025,40 +1025,40 @@ psql_query "
 
 run_goose up >"$test_root/profile-preference-upgrade.out" \
   2>"$test_root/profile-preference-upgrade.err"
-grep -q 'OK.*00026_profile_preferred_edition.sql' \
+grep -q 'OK.*00026_profile_reading_level.sql' \
   "$test_root/profile-preference-upgrade.out" \
   "$test_root/profile-preference-upgrade.err"
 
 assert_query '26|classic|NO|true|1|1' "
   SELECT
     (SELECT max(version_id) FROM goose_db_version WHERE is_applied) || '|' ||
-    (SELECT preferred_edition
+    (SELECT reading_level
        FROM profiles
        WHERE id = '26000000-0000-4000-8000-000000000011') || '|' ||
     (SELECT is_nullable
        FROM information_schema.columns
        WHERE table_schema='public'
          AND table_name='profiles'
-         AND column_name='preferred_edition') || '|' ||
+         AND column_name='reading_level') || '|' ||
     (SELECT (column_default IS NULL)::text
        FROM information_schema.columns
        WHERE table_schema='public'
          AND table_name='profiles'
-         AND column_name='preferred_edition') || '|' ||
+         AND column_name='reading_level') || '|' ||
     (SELECT count(*)
        FROM pg_constraint
        WHERE conrelid='profiles'::regclass
-         AND conname='profiles_preferred_edition_check'
+         AND conname='profiles_reading_level_check'
          AND contype='c'
          AND convalidated) || '|' ||
     (SELECT count(*)
        FROM profiles
        WHERE id = '26000000-0000-4000-8000-000000000011'
-         AND preferred_edition='classic');
+         AND reading_level='classic');
 " 'migration-26 v25 profile upgrade shape'
 
 psql_query "
-  INSERT INTO profiles (id, account_id, name, preferred_edition)
+  INSERT INTO profiles (id, account_id, name, reading_level)
   VALUES
     (
       '26000000-0000-4000-8000-000000000012',
@@ -1088,13 +1088,13 @@ psql_query "
 
 assert_query '5|5' "
   SELECT
-    count(*) || '|' || count(DISTINCT preferred_edition)
+    count(*) || '|' || count(DISTINCT reading_level)
   FROM profiles
   WHERE account_id = '26000000-0000-4000-8000-000000000001';
 " 'all five canonical profile reading levels'
 
 if psql_query "
-  INSERT INTO profiles (id, account_id, name, preferred_edition)
+  INSERT INTO profiles (id, account_id, name, reading_level)
   VALUES (
     '26000000-0000-4000-8000-000000000016',
     '26000000-0000-4000-8000-000000000001',
@@ -1105,7 +1105,7 @@ if psql_query "
   printf 'Migration 26 accepted an invalid profile reading level\n' >&2
   exit 1
 fi
-grep -Fq 'profiles_preferred_edition_check' \
+grep -Fq 'profiles_reading_level_check' \
   "$test_root/profile-preference-invalid.out"
 
 if psql_query "
@@ -1126,12 +1126,12 @@ if run_goose down-to 25 \
   printf 'Profile reading-level migration unexpectedly rolled back\n' >&2
   exit 1
 fi
-grep -Fq 'profile preferred edition migration is irreversible' \
+grep -Fq 'profile reading level migration is irreversible' \
   "$test_root/profile-preference-down.err"
 assert_query '26|classic|5' "
   SELECT
     (SELECT max(version_id) FROM goose_db_version WHERE is_applied) || '|' ||
-    (SELECT preferred_edition
+    (SELECT reading_level
        FROM profiles
        WHERE id = '26000000-0000-4000-8000-000000000011') || '|' ||
     (SELECT count(*)
@@ -1145,7 +1145,7 @@ printf 'ok 1 - migration 26 upgrades v25 readers to Classic, enforces five expli
 reset_database
 run_goose up >"$test_root/fresh-current-goose.out" \
   2>"$test_root/fresh-current-goose.err"
-grep -q 'OK.*00026_profile_preferred_edition.sql' \
+grep -q 'OK.*00026_profile_reading_level.sql' \
   "$test_root/fresh-current-goose.out" \
   "$test_root/fresh-current-goose.err"
 assert_query '26|true|0|0|NO|true|1' "
@@ -1164,16 +1164,16 @@ assert_query '26|true|0|0|NO|true|1' "
        FROM information_schema.columns
        WHERE table_schema='public'
          AND table_name='profiles'
-         AND column_name='preferred_edition') || '|' ||
+         AND column_name='reading_level') || '|' ||
     (SELECT (column_default IS NULL)::text
        FROM information_schema.columns
        WHERE table_schema='public'
          AND table_name='profiles'
-         AND column_name='preferred_edition') || '|' ||
+         AND column_name='reading_level') || '|' ||
     (SELECT count(*)
        FROM pg_constraint
        WHERE conrelid='profiles'::regclass
-         AND conname='profiles_preferred_edition_check'
+         AND conname='profiles_reading_level_check'
          AND contype='c'
          AND convalidated);
 " 'fresh migration-26 schema contract'
@@ -1798,7 +1798,7 @@ psql_query "
 " >/dev/null
 
 run_goose up >"$test_root/current-seed-default-bootstrap-upgrade.out" 2>"$test_root/current-seed-default-bootstrap-upgrade.err"
-grep -q 'OK.*00026_profile_preferred_edition.sql' \
+grep -q 'OK.*00026_profile_reading_level.sql' \
   "$test_root/current-seed-default-bootstrap-upgrade.out" \
   "$test_root/current-seed-default-bootstrap-upgrade.err"
 assert_query '26|1|1|1|1|1|2' "
@@ -1824,7 +1824,7 @@ assert_query '26|1|1|1|1|1|2' "
            LIMIT 1
          )
        )
-         AND preferred_edition = 'classic');
+         AND reading_level = 'classic');
 " 'repurposed Default bootstrap explicit preservation through migration 26'
 
 env \
@@ -1836,7 +1836,7 @@ grep -q '^test_seed=installed progress=absent target=local_or_disposable$' "$tes
 assert_query '1|1|1|1|1|2|6|0|0|0' "
   SELECT
     (SELECT count(*) FROM accounts WHERE id = 'f17e0000-0000-4000-8000-000000000001' AND name = 'TEST ONLY — Reader Fixture Account'),
-    (SELECT count(*) FROM profiles WHERE id = 'f17e0000-0000-4000-8000-000000000002' AND account_id = 'f17e0000-0000-4000-8000-000000000001' AND name = 'TEST ONLY — Reader' AND preferred_edition = 'classic'),
+    (SELECT count(*) FROM profiles WHERE id = 'f17e0000-0000-4000-8000-000000000002' AND account_id = 'f17e0000-0000-4000-8000-000000000001' AND name = 'TEST ONLY — Reader' AND reading_level = 'classic'),
     (SELECT count(*) FROM contributors WHERE id = 'f17e0000-0000-4000-8000-000000000004'),
     (SELECT count(*) FROM stories WHERE id = 'f17e0000-0000-4000-8000-000000000010' AND is_published),
     (SELECT count(*) FROM story_versions WHERE id = 'f17e0000-0000-4000-8000-000000000011'),

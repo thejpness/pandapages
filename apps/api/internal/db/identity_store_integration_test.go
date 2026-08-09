@@ -125,7 +125,7 @@ func TestIdentityStoreIntegration(t *testing.T) {
 	const profileOne = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 	const profileTwo = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 	if _, err := admin.Exec(`
-		INSERT INTO profiles (id, account_id, name, preferred_edition)
+		INSERT INTO profiles (id, account_id, name, reading_level)
 		VALUES
 			($1, $2, 'Zoe', 'classic'),
 			($3, $2, 'Ada', 'growing-readers')
@@ -158,14 +158,14 @@ func TestIdentityStoreIntegration(t *testing.T) {
 	if err != nil ||
 		createdProfile.ID == "" ||
 		createdProfile.Name != "Milo" ||
-		createdProfile.PreferredEdition != model.ReaderEditionLittleListeners {
+		createdProfile.ReadingLevel != model.ReaderEditionLittleListeners {
 		t.Fatalf("create account-scoped profile = %#v, %v", createdProfile, err)
 	}
 	renamedProfile, err := stores[0].UpdateProfile(wantAccount, profileOne, "Mira", model.ReaderEditionGrowingReaders)
 	if err != nil ||
 		renamedProfile.ID != profileOne ||
 		renamedProfile.Name != "Mira" ||
-		renamedProfile.PreferredEdition != model.ReaderEditionGrowingReaders {
+		renamedProfile.ReadingLevel != model.ReaderEditionGrowingReaders {
 		t.Fatalf("rename account-scoped profile = %#v, %v", renamedProfile, err)
 	}
 	if _, err := stores[0].UpdateProfile(wantAccount, profileOne, "Ada", model.ReaderEditionClassic); !errors.Is(err, model.ErrProfileNameConflict) {

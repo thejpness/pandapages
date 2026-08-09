@@ -1,7 +1,7 @@
 -- +goose Up
 BEGIN;
 
--- A reader's preferred edition is persistent reader-profile configuration.
+-- A reader's reading level is persistent reader-profile configuration.
 -- Before Lifecycle 7 every Reader resolved through the Classic compatibility
 -- projection, so Classic is the truthful upgrade value for existing profiles.
 -- New profile creation must supply an explicit value; there is deliberately no
@@ -9,16 +9,16 @@ BEGIN;
 LOCK TABLE profiles IN SHARE ROW EXCLUSIVE MODE;
 
 ALTER TABLE profiles
-  ADD COLUMN preferred_edition text;
+  ADD COLUMN reading_level text;
 
 UPDATE profiles
-SET preferred_edition = 'classic'
-WHERE preferred_edition IS NULL;
+SET reading_level = 'classic'
+WHERE reading_level IS NULL;
 
 ALTER TABLE profiles
-  ADD CONSTRAINT profiles_preferred_edition_check
+  ADD CONSTRAINT profiles_reading_level_check
   CHECK (
-    preferred_edition IN (
+    reading_level IN (
       'classic',
       'confident-readers',
       'growing-readers',
@@ -28,7 +28,7 @@ ALTER TABLE profiles
   );
 
 ALTER TABLE profiles
-  ALTER COLUMN preferred_edition SET NOT NULL;
+  ALTER COLUMN reading_level SET NOT NULL;
 
 COMMIT;
 
@@ -39,7 +39,7 @@ COMMIT;
 DO $$
 BEGIN
   RAISE EXCEPTION
-    'profile preferred edition migration is irreversible'
+    'profile reading level migration is irreversible'
     USING ERRCODE = '0A000';
 END
 $$;

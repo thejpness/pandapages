@@ -22,7 +22,7 @@ BEGIN
       AND (
         account_id IS DISTINCT FROM 'f17e0000-0000-4000-8000-000000000001'
         OR name IS DISTINCT FROM 'TEST ONLY — Reader'
-        OR preferred_edition IS DISTINCT FROM 'classic'
+        OR reading_level IS DISTINCT FROM 'classic'
         OR pin_hash IS NOT NULL
         OR pin_failed_attempts <> 0
         OR pin_lock_until IS NOT NULL
@@ -72,7 +72,7 @@ VALUES (
 )
 ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO profiles (id, account_id, name, preferred_edition)
+INSERT INTO profiles (id, account_id, name, reading_level)
 VALUES (
   'f17e0000-0000-4000-8000-000000000002',
   'f17e0000-0000-4000-8000-000000000001',

@@ -275,7 +275,7 @@ class StudioAPI {
             id: '123e4567-e89b-42d3-a456-426614174300',
             name: 'Mina',
             pin_enabled: false,
-            preferred_edition: 'classic',
+            reading_level: 'classic',
           },
         ],
       })

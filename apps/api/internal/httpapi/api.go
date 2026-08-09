@@ -37,8 +37,8 @@ type Store interface {
 
 	ContinueRecent(accountID, profileID string, limit int) ([]model.ContinueItem, error)
 	Profiles(accountID string) ([]model.ReaderProfile, error)
-	CreateProfile(accountID, name string, preferredEdition model.ReaderEditionKey) (model.ReaderProfile, error)
-	UpdateProfile(accountID, profileID, name string, preferredEdition model.ReaderEditionKey) (model.ReaderProfile, error)
+	CreateProfile(accountID, name string, readingLevel model.ReaderEditionKey) (model.ReaderProfile, error)
+	UpdateProfile(accountID, profileID, name string, readingLevel model.ReaderEditionKey) (model.ReaderProfile, error)
 	DeleteProfile(accountID, profileID string) error
 	SetProfilePIN(accountID, profileID, encodedHash string) error
 	RemoveProfilePIN(accountID, profileID string) error
@@ -302,11 +302,11 @@ func New(cfg Config, store Store) http.Handler {
 			noStore(w)
 			writeJSON(w, http.StatusOK, map[string]any{"profiles": profiles})
 		case http.MethodPost:
-			name, preferredEdition, ok := decodeProfileInput(w, r)
+			name, readingLevel, ok := decodeProfileInput(w, r)
 			if !ok {
 				return
 			}
-			profile, err := store.CreateProfile(accountID, name, preferredEdition)
+			profile, err := store.CreateProfile(accountID, name, readingLevel)
 			if errors.Is(err, model.ErrProfileNameConflict) {
 				writeErr(w, http.StatusBadRequest, "invalid_profile_name", "a profile with that name already exists")
 				return
@@ -335,7 +335,7 @@ func New(cfg Config, store Store) http.Handler {
 
 		switch r.Method {
 		case http.MethodPatch:
-			name, preferredEdition, ok := decodeProfileInput(w, r)
+			name, readingLevel, ok := decodeProfileInput(w, r)
 			if !ok {
 				return
 			}
@@ -343,7 +343,7 @@ func New(cfg Config, store Store) http.Handler {
 				accountID,
 				profileID,
 				name,
-				preferredEdition,
+				readingLevel,
 			)
 			if errors.Is(err, sql.ErrNoRows) {
 				writeErr(w, http.StatusForbidden, "profile_forbidden", "profile is not available in this account")
@@ -426,7 +426,7 @@ func decodeProfileInput(
 ) (string, model.ReaderEditionKey, bool) {
 	var body struct {
 		Name             string                 `json:"name"`
-		PreferredEdition model.ReaderEditionKey `json:"preferredEdition"`
+		ReadingLevel model.ReaderEditionKey `json:"readingLevel"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
 		writeDecodeError(w, err)
@@ -441,7 +441,7 @@ func decodeProfileInput(
 		writeErr(w, http.StatusBadRequest, "invalid_profile_name", "profile name contains unsupported characters")
 		return "", "", false
 	}
-	if !model.ValidReaderEditionKey(body.PreferredEdition) {
+	if !model.ValidReaderEditionKey(body.ReadingLevel) {
 		writeErr(
 			w,
 			http.StatusBadRequest,
@@ -450,7 +450,7 @@ func decodeProfileInput(
 		)
 		return "", "", false
 	}
-	return name, body.PreferredEdition, true
+	return name, body.ReadingLevel, true
 }
 
 func profilePath(path string) (profileID, action string, ok bool) {

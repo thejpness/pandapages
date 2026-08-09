@@ -647,7 +647,7 @@ if docker run --rm \
   printf 'Goose unexpectedly accepted a profile preferred-edition rollback\n' >&2
   exit 1
 fi
-grep -Fq 'profile preferred edition migration is irreversible' "$test_root/goose-profile-preferred-edition-down.err"
+grep -Fq 'profile reading level migration is irreversible' "$test_root/goose-profile-preferred-edition-down.err"
 printf 'ok 13 - profile PIN, legacy runtime, Default bootstrap, and profile reading-level migrations reject untruthful rollbacks\n'
 after_resources="$test_root/after-resources"
 docker ps -aq --filter label=com.pandapages.disposable=role-integration | sort >"$after_resources"

@@ -23,12 +23,12 @@ func TestProfilesEndpointReturnsOnlySelectedAccountProfiles(t *testing.T) {
 			{
 				ID:               profileOneID,
 				Name:             "Ada",
-				PreferredEdition: model.ReaderEditionClassic,
+				ReadingLevel: model.ReaderEditionClassic,
 			},
 			{
 				ID:               profileTwoID,
 				Name:             "Zoe",
-				PreferredEdition: model.ReaderEditionLittleListeners,
+				ReadingLevel: model.ReaderEditionLittleListeners,
 			},
 		},
 	}
@@ -86,29 +86,29 @@ func TestProfilesEndpointRequiresExplicitReadingLevelOnCreateAndUpdate(t *testin
 		profileCreate: model.ReaderProfile{
 			ID:               profileOneID,
 			Name:             "Ted",
-			PreferredEdition: little,
+			ReadingLevel: little,
 		},
 		profileUpdate: model.ReaderProfile{
 			ID:               profileOneID,
 			Name:             "Theo",
-			PreferredEdition: model.ReaderEditionClassic,
+			ReadingLevel: model.ReaderEditionClassic,
 		},
 	}
 
 	create := httptest.NewRecorder()
 	req := bearerRequest(http.MethodPost, "/api/v1/profiles")
 	req.Body = io.NopCloser(strings.NewReader(
-		`{"name":" Ted ","preferredEdition":"little-listeners"}`,
+		`{"name":" Ted ","readingLevel":"little-listeners"}`,
 	))
 	testHandler(t, store).ServeHTTP(create, req)
 	if create.Code != http.StatusCreated ||
 		store.profileCreateName != "Ted" ||
-		store.profileCreateEdition != little {
+		store.profileCreateReadingLevel != little {
 		t.Fatalf(
 			"create status/name/edition = %d/%q/%q: %s",
 			create.Code,
 			store.profileCreateName,
-			store.profileCreateEdition,
+			store.profileCreateReadingLevel,
 			create.Body.String(),
 		)
 	}
@@ -116,17 +116,17 @@ func TestProfilesEndpointRequiresExplicitReadingLevelOnCreateAndUpdate(t *testin
 	update := httptest.NewRecorder()
 	req = bearerRequest(http.MethodPatch, "/api/v1/profiles/"+profileOneID)
 	req.Body = io.NopCloser(strings.NewReader(
-		`{"name":"Theo","preferredEdition":"classic"}`,
+		`{"name":"Theo","readingLevel":"classic"}`,
 	))
 	testHandler(t, store).ServeHTTP(update, req)
 	if update.Code != http.StatusOK ||
 		store.profileUpdateName != "Theo" ||
-		store.profileUpdateEdition != model.ReaderEditionClassic {
+		store.profileUpdateReadingLevel != model.ReaderEditionClassic {
 		t.Fatalf(
 			"update status/name/edition = %d/%q/%q: %s",
 			update.Code,
 			store.profileUpdateName,
-			store.profileUpdateEdition,
+			store.profileUpdateReadingLevel,
 			update.Body.String(),
 		)
 	}
@@ -135,7 +135,7 @@ func TestProfilesEndpointRequiresExplicitReadingLevelOnCreateAndUpdate(t *testin
 	before := store.profileCreateCalls
 	req = bearerRequest(http.MethodPost, "/api/v1/profiles")
 	req.Body = io.NopCloser(strings.NewReader(
-		`{"name":"Ted","preferredEdition":"bedtime-ultra"}`,
+		`{"name":"Ted","readingLevel":"bedtime-ultra"}`,
 	))
 	testHandler(t, store).ServeHTTP(invalid, req)
 	if invalid.Code != http.StatusBadRequest ||

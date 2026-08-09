@@ -88,7 +88,7 @@ func TestProgressStoreIntegration(t *testing.T) {
 		t.Fatalf("insert progress accounts: %v", err)
 	}
 	if _, err := adminDB.Exec(
-		`INSERT INTO profiles (id, account_id, name, preferred_edition) VALUES
+		`INSERT INTO profiles (id, account_id, name, reading_level) VALUES
 			($1, $2, 'Ted', 'little-listeners'),
 			($3, $2, 'Alex', 'classic'),
 			($4, $5, 'Sam', 'growing-readers')`,
