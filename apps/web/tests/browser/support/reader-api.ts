@@ -311,7 +311,12 @@ export class ReaderApiMock {
   readonly unhandledRequests: CapturedRequest[] = []
   readonly stories = new Map<string, ReaderStoryFixture>()
   readonly progress = new Map<string, ProgressFixture | null>()
-  profiles: BrowserProfile[] = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false }]
+  profiles: BrowserProfile[] = [{
+    id: fixtureProfileID,
+    name: 'Mina',
+    pin_enabled: false,
+    preferred_edition: 'classic',
+  }]
 
   authSignedIn = true
   libraryItems: ReaderLibraryItemFixture[] = []
@@ -588,7 +593,10 @@ export class ReaderApiMock {
     }
     if (request.method() === 'GET' && url.pathname === '/api/v1/profiles') {
       await this.respond(route, captured, undefined, {
-        profiles: this.profiles,
+        profiles: this.profiles.map((profile) => ({
+          ...profile,
+          preferred_edition: profile.preferred_edition ?? 'classic',
+        })),
       })
       return
     }

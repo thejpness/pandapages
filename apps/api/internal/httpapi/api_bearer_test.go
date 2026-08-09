@@ -64,12 +64,14 @@ type authTestStore struct {
 	profileCreateCalls      int
 	profileCreateAccount    string
 	profileCreateName       string
+	profileCreateEdition    model.ReaderEditionKey
 	profileCreate           model.ReaderProfile
 	profileCreateErr        error
 	profileUpdateCalls      int
 	profileUpdateAccount    string
 	profileUpdateID         string
 	profileUpdateName       string
+	profileUpdateEdition    model.ReaderEditionKey
 	profileUpdate           model.ReaderProfile
 	profileUpdateErr        error
 	profileDeleteCalls      int
@@ -160,17 +162,28 @@ func (s *authTestStore) Profiles(accountID string) ([]model.ReaderProfile, error
 	}
 	return s.profiles, s.profilesErr
 }
-func (s *authTestStore) CreateProfile(accountID, name string) (model.ReaderProfile, error) {
+func (s *authTestStore) CreateProfile(
+	accountID string,
+	name string,
+	preferredEdition model.ReaderEditionKey,
+) (model.ReaderProfile, error) {
 	s.profileCreateCalls++
 	s.profileCreateAccount = accountID
 	s.profileCreateName = name
+	s.profileCreateEdition = preferredEdition
 	return s.profileCreate, s.profileCreateErr
 }
-func (s *authTestStore) UpdateProfile(accountID, profileID, name string) (model.ReaderProfile, error) {
+func (s *authTestStore) UpdateProfile(
+	accountID string,
+	profileID string,
+	name string,
+	preferredEdition model.ReaderEditionKey,
+) (model.ReaderProfile, error) {
 	s.profileUpdateCalls++
 	s.profileUpdateAccount = accountID
 	s.profileUpdateID = profileID
 	s.profileUpdateName = name
+	s.profileUpdateEdition = preferredEdition
 	return s.profileUpdate, s.profileUpdateErr
 }
 func (s *authTestStore) DeleteProfile(accountID, profileID string) error {
@@ -234,7 +247,7 @@ func profileBearerRequest(method, path string) *http.Request {
 
 func TestProtectedRoutesRequireBearerAccountContext(t *testing.T) {
 	tests := []struct{ name, method, path, body string }{
-		{"library", http.MethodGet, "/api/v1/library", ""}, {"reader", http.MethodGet, "/api/v1/reader/story", ""}, {"progress get", http.MethodGet, "/api/v1/progress/story", ""}, {"progress put", http.MethodPut, "/api/v1/progress/story", `{"version":1,"locator":{"schema":2,"segment":{"key":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","occurrence":1,"ordinal":1,"offset":0},"chapter":null},"percent":0}`}, {"continue", http.MethodGet, "/api/v1/continue", ""}, {"profiles list", http.MethodGet, "/api/v1/profiles", ""}, {"profiles create", http.MethodPost, "/api/v1/profiles", `{"name":"Ted"}`}, {"profiles update", http.MethodPatch, "/api/v1/profiles/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", `{"name":"Ted"}`}, {"profiles delete", http.MethodDelete, "/api/v1/profiles/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", ""}, {"profiles PIN set", http.MethodPut, "/api/v1/profiles/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/pin", `{"pin":"1234"}`}, {"profiles PIN verify", http.MethodPost, "/api/v1/profiles/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/pin", `{"pin":"1234"}`}, {"profiles PIN remove", http.MethodDelete, "/api/v1/profiles/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/pin", ""},
+		{"library", http.MethodGet, "/api/v1/library", ""}, {"reader", http.MethodGet, "/api/v1/reader/story", ""}, {"progress get", http.MethodGet, "/api/v1/progress/story", ""}, {"progress put", http.MethodPut, "/api/v1/progress/story", `{"version":1,"locator":{"schema":2,"segment":{"key":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","occurrence":1,"ordinal":1,"offset":0},"chapter":null},"percent":0}`}, {"continue", http.MethodGet, "/api/v1/continue", ""}, {"profiles list", http.MethodGet, "/api/v1/profiles", ""}, {"profiles create", http.MethodPost, "/api/v1/profiles", `{"name":"Ted","preferredEdition":"classic"}`}, {"profiles update", http.MethodPatch, "/api/v1/profiles/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", `{"name":"Ted","preferredEdition":"classic"}`}, {"profiles delete", http.MethodDelete, "/api/v1/profiles/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", ""}, {"profiles PIN set", http.MethodPut, "/api/v1/profiles/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/pin", `{"pin":"1234"}`}, {"profiles PIN verify", http.MethodPost, "/api/v1/profiles/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/pin", `{"pin":"1234"}`}, {"profiles PIN remove", http.MethodDelete, "/api/v1/profiles/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/pin", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -33,16 +33,19 @@ func TestProfilesCreateUsesSelectedAccountForOwnerAndAdult(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			store := &authTestStore{
 				memberships:   tt.memberships,
-				profileCreate: model.ReaderProfile{ID: profileOneID, Name: "Ted"},
+				profileCreate: model.ReaderProfile{ID: profileOneID, Name: "Ted", PreferredEdition: model.ReaderEditionLittleListeners},
 			}
-			req := profileJSONRequest(http.MethodPost, "/api/v1/profiles", `{"name":" Ted "}`)
+			req := profileJSONRequest(http.MethodPost, "/api/v1/profiles", `{"name":" Ted ","preferredEdition":"little-listeners"}`)
 			req.Header.Set("X-PP-Account-ID", tt.accountID)
 			rec := httptest.NewRecorder()
 			testHandler(t, store).ServeHTTP(rec, req)
 			if rec.Code != http.StatusCreated {
 				t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
 			}
-			if store.profileCreateCalls != 1 || store.profileCreateAccount != tt.accountID || store.profileCreateName != "Ted" {
+			if store.profileCreateCalls != 1 ||
+				store.profileCreateAccount != tt.accountID ||
+				store.profileCreateName != "Ted" ||
+				store.profileCreateEdition != model.ReaderEditionLittleListeners {
 				t.Fatalf("create calls/account/name = %d/%q/%q", store.profileCreateCalls, store.profileCreateAccount, store.profileCreateName)
 			}
 			if strings.Contains(strings.ToLower(rec.Body.String()), "default") || !strings.Contains(rec.Body.String(), `"name":"Ted"`) {
@@ -62,11 +65,11 @@ func TestProfilesCreateRejectsInvalidNamesAndAccountInjection(t *testing.T) {
 		code string
 	}{
 		{name: "missing name", body: `{}`, code: "invalid_profile_name"},
-		{name: "empty", body: `{"name":""}`, code: "invalid_profile_name"},
-		{name: "padded only", body: `{"name":" \t "}`, code: "invalid_profile_name"},
-		{name: "control", body: `{"name":"Te\nd"}`, code: "invalid_profile_name"},
-		{name: "too long", body: `{"name":"` + strings.Repeat("a", 81) + `"}`, code: "invalid_profile_name"},
-		{name: "account injection", body: `{"name":"Ted","accountId":"` + alternateAccountID + `"}`, code: "bad_json"},
+		{name: "empty", body: `{"name":"","preferredEdition":"classic"}`, code: "invalid_profile_name"},
+		{name: "padded only", body: `{"name":" \t ","preferredEdition":"classic"}`, code: "invalid_profile_name"},
+		{name: "control", body: `{"name":"Te\nd","preferredEdition":"classic"}`, code: "invalid_profile_name"},
+		{name: "too long", body: `{"name":"` + strings.Repeat("a", 81) + `","preferredEdition":"classic"}`, code: "invalid_profile_name"},
+		{name: "account injection", body: `{"name":"Ted","preferredEdition":"classic","accountId":"` + alternateAccountID + `"}`, code: "bad_json"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -81,10 +84,14 @@ func TestProfilesCreateRejectsInvalidNamesAndAccountInjection(t *testing.T) {
 }
 
 func TestProfilesUpdateScopesByAccountAndConcealsForbiddenProfiles(t *testing.T) {
-	store := &authTestStore{profileUpdate: model.ReaderProfile{ID: profileOneID, Name: "Ada Panda"}}
+	store := &authTestStore{profileUpdate: model.ReaderProfile{ID: profileOneID, Name: "Ada Panda", PreferredEdition: model.ReaderEditionGrowingReaders}}
 	rec := httptest.NewRecorder()
-	testHandler(t, store).ServeHTTP(rec, profileJSONRequest(http.MethodPatch, "/api/v1/profiles/"+strings.ToUpper(profileOneID), `{"name":" Ada Panda "}`))
-	if rec.Code != http.StatusOK || store.profileUpdateAccount != testAccountID || store.profileUpdateID != profileOneID || store.profileUpdateName != "Ada Panda" {
+	testHandler(t, store).ServeHTTP(rec, profileJSONRequest(http.MethodPatch, "/api/v1/profiles/"+strings.ToUpper(profileOneID), `{"name":" Ada Panda ","preferredEdition":"growing-readers"}`))
+	if rec.Code != http.StatusOK ||
+		store.profileUpdateAccount != testAccountID ||
+		store.profileUpdateID != profileOneID ||
+		store.profileUpdateName != "Ada Panda" ||
+		store.profileUpdateEdition != model.ReaderEditionGrowingReaders {
 		t.Fatalf("status/account/id/name = %d/%q/%q/%q: %s", rec.Code, store.profileUpdateAccount, store.profileUpdateID, store.profileUpdateName, rec.Body.String())
 	}
 
@@ -93,7 +100,7 @@ func TestProfilesUpdateScopesByAccountAndConcealsForbiddenProfiles(t *testing.T)
 		t.Run(name, func(t *testing.T) {
 			store := &authTestStore{profileUpdateErr: sql.ErrNoRows}
 			rec := httptest.NewRecorder()
-			testHandler(t, store).ServeHTTP(rec, profileJSONRequest(http.MethodPatch, "/api/v1/profiles/"+profileOneID, `{"name":"Ada"}`))
+			testHandler(t, store).ServeHTTP(rec, profileJSONRequest(http.MethodPatch, "/api/v1/profiles/"+profileOneID, `{"name":"Ada","preferredEdition":"classic"}`))
 			if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"profile_forbidden"`) || store.profileUpdateAccount != testAccountID {
 				t.Fatalf("status/account/body = %d/%q/%s", rec.Code, store.profileUpdateAccount, rec.Body.String())
 			}
@@ -133,8 +140,8 @@ func TestProfilesCRUDMapsStorageAndNameConflictsWithoutLeakingDatabaseErrors(t *
 		status int
 		code   string
 	}{
-		{name: "create conflict", req: profileJSONRequest(http.MethodPost, "/api/v1/profiles", `{"name":"Ted"}`), store: &authTestStore{profileCreateErr: model.ErrProfileNameConflict}, status: http.StatusBadRequest, code: "invalid_profile_name"},
-		{name: "update unavailable", req: profileJSONRequest(http.MethodPatch, "/api/v1/profiles/"+profileOneID, `{"name":"Ted"}`), store: &authTestStore{profileUpdateErr: errors.New("database unavailable")}, status: http.StatusServiceUnavailable, code: "profile_unavailable"},
+		{name: "create conflict", req: profileJSONRequest(http.MethodPost, "/api/v1/profiles", `{"name":"Ted","preferredEdition":"classic"}`), store: &authTestStore{profileCreateErr: model.ErrProfileNameConflict}, status: http.StatusBadRequest, code: "invalid_profile_name"},
+		{name: "update unavailable", req: profileJSONRequest(http.MethodPatch, "/api/v1/profiles/"+profileOneID, `{"name":"Ted","preferredEdition":"classic"}`), store: &authTestStore{profileUpdateErr: errors.New("database unavailable")}, status: http.StatusServiceUnavailable, code: "profile_unavailable"},
 		{name: "delete unavailable", req: bearerRequest(http.MethodDelete, "/api/v1/profiles/"+profileOneID), store: &authTestStore{profileDeleteErr: errors.New("database unavailable")}, status: http.StatusServiceUnavailable, code: "profile_unavailable"},
 	}
 	for _, tt := range tests {

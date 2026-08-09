@@ -12,6 +12,7 @@ import {
   removeReaderProfilePIN,
   renameReaderProfile,
   setReaderProfilePIN,
+  type ReaderEditionKey,
   type ReaderProfile,
   verifyReaderProfilePIN,
 } from "../lib/api";
@@ -23,6 +24,11 @@ import {
   selectedReaderProfileID,
 } from "../lib/reader-profile-selection";
 import { enterChildMode, leaveChildMode } from "../lib/reader-mode";
+import {
+  readerEditionDescription,
+  readerEditionLabel,
+  readerEditionOrder,
+} from "../lib/reader-editions";
 
 const route = useRoute();
 const router = useRouter();
@@ -38,8 +44,10 @@ const busy = ref(false);
 const signingOut = ref(false);
 const errorMessage = ref("");
 const newName = ref("");
+const newPreferredEdition = ref<ReaderEditionKey>("classic");
 const editingID = ref<string | null>(null);
 const editingName = ref("");
+const editingPreferredEdition = ref<ReaderEditionKey>("classic");
 const managingID = ref<string | null>(null);
 const deleteTarget = ref<ReaderProfile | null>(null);
 const deleteConfirm = ref<HTMLButtonElement | null>(null);
@@ -189,8 +197,12 @@ async function createProfile(): Promise<void> {
   busy.value = true;
   errorMessage.value = "";
   try {
-    const created = await createReaderProfile(newName.value);
+    const created = await createReaderProfile(
+      newName.value,
+      newPreferredEdition.value,
+    );
     newName.value = "";
+    newPreferredEdition.value = "classic";
     await refresh();
     selectReaderProfile(created.id);
     selectedID.value = created.id;
@@ -210,6 +222,7 @@ function startRename(profile: ReaderProfile): void {
   managingID.value = profile.id;
   editingID.value = profile.id;
   editingName.value = profile.name;
+  editingPreferredEdition.value = profile.preferredEdition;
   errorMessage.value = "";
 }
 
@@ -218,7 +231,11 @@ async function renameProfile(profile: ReaderProfile): Promise<void> {
   busy.value = true;
   errorMessage.value = "";
   try {
-    await renameReaderProfile(profile.id, editingName.value);
+    await renameReaderProfile(
+      profile.id,
+      editingName.value,
+      editingPreferredEdition.value,
+    );
     editingID.value = null;
     await refresh();
   } catch (error) {
@@ -331,8 +348,25 @@ onMounted(async () => {
                 maxlength="80"
                 required
               />
+              <label :for="`profile-level-${profile.id}`">Reading level</label>
+              <select
+                :id="`profile-level-${profile.id}`"
+                v-model="editingPreferredEdition"
+                :disabled="busy"
+              >
+                <option
+                  v-for="key in readerEditionOrder"
+                  :key="key"
+                  :value="key"
+                >
+                  {{ readerEditionLabel(key) }}
+                </option>
+              </select>
+              <p class="reader-level-hint">
+                {{ readerEditionDescription(editingPreferredEdition) }}
+              </p>
               <div class="actions">
-                <button type="submit" :disabled="busy">Save name</button>
+                <button type="submit" :disabled="busy">Save reader</button>
                 <button type="button" :disabled="busy" @click="editingID = null">
                   Cancel
                 </button>
@@ -343,6 +377,9 @@ onMounted(async () => {
             <div class="reader-card__header">
               <div>
                 <h3>{{ profile.name }}</h3>
+                <p class="reader-card__level">
+                  Reading level: {{ readerEditionLabel(profile.preferredEdition) }}
+                </p>
                 <div
                   v-if="profile.pinEnabled || selectedID === profile.id"
                   class="reader-card__status"
@@ -385,7 +422,7 @@ onMounted(async () => {
               :aria-label="`Manage ${profile.name}`"
             >
               <div class="actions">
-                <button type="button" @click="startRename(profile)">Rename</button>
+                <button type="button" @click="startRename(profile)">Edit reader</button>
                 <button type="button" @click="beginSetPIN(profile)">
                   {{ profile.pinEnabled ? "Change PIN" : "Set PIN" }}
                 </button>
@@ -407,16 +444,31 @@ onMounted(async () => {
 
       <form class="create" @submit.prevent="createProfile">
         <label for="new-profile-name">New reader name</label>
-        <div>
-          <input
-            id="new-profile-name"
-            v-model="newName"
-            :disabled="busy"
-            maxlength="80"
-            required
-          />
-          <button type="submit" :disabled="busy">Add reader</button>
-        </div>
+        <input
+          id="new-profile-name"
+          v-model="newName"
+          :disabled="busy"
+          maxlength="80"
+          required
+        />
+        <label for="new-profile-level">New reader reading level</label>
+        <select
+          id="new-profile-level"
+          v-model="newPreferredEdition"
+          :disabled="busy"
+        >
+          <option
+            v-for="key in readerEditionOrder"
+            :key="key"
+            :value="key"
+          >
+            {{ readerEditionLabel(key) }}
+          </option>
+        </select>
+        <p class="reader-level-hint">
+          {{ readerEditionDescription(newPreferredEdition) }}
+        </p>
+        <button type="submit" :disabled="busy">Add reader</button>
       </form>
 
       <section v-if="canOpenStoryStudio" class="hub-tools" aria-labelledby="parent-tools-heading">

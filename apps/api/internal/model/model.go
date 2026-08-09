@@ -107,11 +107,30 @@ type ContinueItem struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
+type ReaderEditionKey = AdminStoryEditionKey
+
+const (
+	ReaderEditionClassic          = AdminStoryEditionClassic
+	ReaderEditionConfidentReaders = AdminStoryEditionConfidentReaders
+	ReaderEditionGrowingReaders   = AdminStoryEditionGrowingReaders
+	ReaderEditionStoryExplorers   = AdminStoryEditionStoryExplorers
+	ReaderEditionLittleListeners  = AdminStoryEditionLittleListeners
+)
+
+func ReaderEditionKeys() []ReaderEditionKey {
+	return AdminStoryEditionKeys()
+}
+
+func ValidReaderEditionKey(key ReaderEditionKey) bool {
+	return ValidAdminStoryEditionKey(key)
+}
+
 // ReaderProfile is the intentionally small, account-scoped profile selection
 // representation. Profile ownership is always checked against the selected
 // account by the caller's authorization boundary.
 type ReaderProfile struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	PINEnabled bool   `json:"pin_enabled"`
+	ID               string           `json:"id"`
+	Name             string           `json:"name"`
+	PINEnabled       bool             `json:"pin_enabled"`
+	PreferredEdition ReaderEditionKey `json:"preferred_edition"`
 }

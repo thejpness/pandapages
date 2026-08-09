@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,8 +20,16 @@ const (
 func TestProfilesEndpointReturnsOnlySelectedAccountProfiles(t *testing.T) {
 	store := &authTestStore{
 		profiles: []model.ReaderProfile{
-			{ID: profileOneID, Name: "Ada"},
-			{ID: profileTwoID, Name: "Zoe"},
+			{
+				ID:               profileOneID,
+				Name:             "Ada",
+				PreferredEdition: model.ReaderEditionClassic,
+			},
+			{
+				ID:               profileTwoID,
+				Name:             "Zoe",
+				PreferredEdition: model.ReaderEditionLittleListeners,
+			},
 		},
 	}
 	rec := httptest.NewRecorder()
@@ -68,6 +77,77 @@ func TestProfilesEndpointAllowsAdultMembershipAndEmptyProfiles(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "Default") {
 		t.Fatalf("empty account response invented a Default profile: %s", rec.Body.String())
+	}
+}
+
+func TestProfilesEndpointRequiresExplicitReadingLevelOnCreateAndUpdate(t *testing.T) {
+	little := model.ReaderEditionLittleListeners
+	store := &authTestStore{
+		profileCreate: model.ReaderProfile{
+			ID:               profileOneID,
+			Name:             "Ted",
+			PreferredEdition: little,
+		},
+		profileUpdate: model.ReaderProfile{
+			ID:               profileOneID,
+			Name:             "Theo",
+			PreferredEdition: model.ReaderEditionClassic,
+		},
+	}
+
+	create := httptest.NewRecorder()
+	req := bearerRequest(http.MethodPost, "/api/v1/profiles")
+	req.Body = io.NopCloser(strings.NewReader(
+		`{"name":" Ted ","preferredEdition":"little-listeners"}`,
+	))
+	testHandler(t, store).ServeHTTP(create, req)
+	if create.Code != http.StatusCreated ||
+		store.profileCreateName != "Ted" ||
+		store.profileCreateEdition != little {
+		t.Fatalf(
+			"create status/name/edition = %d/%q/%q: %s",
+			create.Code,
+			store.profileCreateName,
+			store.profileCreateEdition,
+			create.Body.String(),
+		)
+	}
+
+	update := httptest.NewRecorder()
+	req = bearerRequest(http.MethodPatch, "/api/v1/profiles/"+profileOneID)
+	req.Body = io.NopCloser(strings.NewReader(
+		`{"name":"Theo","preferredEdition":"classic"}`,
+	))
+	testHandler(t, store).ServeHTTP(update, req)
+	if update.Code != http.StatusOK ||
+		store.profileUpdateName != "Theo" ||
+		store.profileUpdateEdition != model.ReaderEditionClassic {
+		t.Fatalf(
+			"update status/name/edition = %d/%q/%q: %s",
+			update.Code,
+			store.profileUpdateName,
+			store.profileUpdateEdition,
+			update.Body.String(),
+		)
+	}
+
+	invalid := httptest.NewRecorder()
+	before := store.profileCreateCalls
+	req = bearerRequest(http.MethodPost, "/api/v1/profiles")
+	req.Body = io.NopCloser(strings.NewReader(
+		`{"name":"Ted","preferredEdition":"bedtime-ultra"}`,
+	))
+	testHandler(t, store).ServeHTTP(invalid, req)
+	if invalid.Code != http.StatusBadRequest ||
+		store.profileCreateCalls != before ||
+		!strings.Contains(invalid.Body.String(), `"invalid_reading_level"`) {
+		t.Fatalf(
+			"invalid level status/calls = %d/%d->%d: %s",
+			invalid.Code,
+			before,
+			store.profileCreateCalls,
+			invalid.Body.String(),
+		)
 	}
 }
 
