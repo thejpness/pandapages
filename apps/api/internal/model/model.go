@@ -69,6 +69,47 @@ type LibraryProgressSummary struct {
 	IsCurrentVersion bool      `json:"isCurrentVersion"`
 }
 
+// ReaderLibraryEditionSummary describes one immutable current-release edition
+// that the selected profile is allowed to open. The list is always in canonical
+// Reading Level order.
+type ReaderLibraryEditionSummary struct {
+	EditionKey   ReaderEditionKey `json:"editionKey"`
+	Version      int              `json:"version"`
+	WordCount    int64            `json:"wordCount"`
+	ChapterCount int64            `json:"chapterCount"`
+}
+
+// ReaderLibraryProgressSummary deliberately omits the persisted locator. The
+// Library needs only truthful display state; Reader remains the owner of exact
+// resume and cross-version mapping.
+type ReaderLibraryProgressSummary struct {
+	Version           int       `json:"version"`
+	Percent           float64   `json:"percent"`
+	UpdatedAt         time.Time `json:"updatedAt"`
+	IsResolvedVersion bool      `json:"isResolvedVersion"`
+}
+
+// ReaderLibraryItem is profile-scoped. A chooser has no selected edition;
+// selected items identify the exact edition chosen by the canonical resolver.
+type ReaderLibraryItem struct {
+	Slug             string                        `json:"slug"`
+	Title            string                        `json:"title"`
+	Author           *string                       `json:"author,omitempty"`
+	Language         string                        `json:"language"`
+	State            ReaderResolutionState         `json:"state"`
+	EligibleEditions []ReaderLibraryEditionSummary `json:"eligibleEditions"`
+	SelectedEdition  *ReaderEditionKey             `json:"selectedEdition"`
+	Progress         *ReaderLibraryProgressSummary `json:"progress"`
+}
+
+// ReaderLibraryReadModel is the profile-scoped Reader bookshelf. Stories with
+// no eligible current-release edition are invisible. Stories whose eligible
+// immutable release state cannot be represented safely are omitted and counted.
+type ReaderLibraryReadModel struct {
+	Items                []ReaderLibraryItem `json:"items"`
+	UnavailableItemCount int64               `json:"unavailableItemCount"`
+}
+
 type ReaderStory struct {
 	Slug     string          `json:"slug"`
 	Title    string          `json:"title"`
