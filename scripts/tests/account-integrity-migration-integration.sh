@@ -523,7 +523,9 @@ grep -q 'OK.*00017_account_scoped_progress_and_settings.sql' \
   "$test_root/full-up.out" "$test_root/full-up.err"
 grep -q 'OK.*00023_remove_legacy_runtime_scaffolding.sql' \
   "$test_root/full-up.out" "$test_root/full-up.err"
-assert_query '23|1|1|0' "$full_database" "
+grep -q 'OK.*00024_remove_legacy_story_source.sql' \
+  "$test_root/full-up.out" "$test_root/full-up.err"
+assert_query '24|1|1|0' "$full_database" "
   SELECT
     (WITH latest AS (
       SELECT DISTINCT ON (version_id) version_id, is_applied
@@ -533,7 +535,7 @@ assert_query '23|1|1|0' "$full_database" "
     (SELECT count(*) FROM profiles),
     (SELECT count(*) FROM pg_constraint WHERE contype = 'f' AND NOT convalidated);
 " 'fresh full migration chain'
-printf 'ok 1 - a fresh database migrates through the current chain including legacy runtime retirement version 23\n'
+printf 'ok 1 - a fresh database migrates through the current chain including legacy story source retirement version 24\n'
 
 create_database "$v14_database"
 run_goose "$v14_database" up-to 14 >"$test_root/v14-up.out" 2>"$test_root/v14-up.err"

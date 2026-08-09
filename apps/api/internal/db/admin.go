@@ -734,7 +734,6 @@ func adminDraftUpsertTx(ctx context.Context, tx *sql.Tx, accountID string, req m
 	}
 
 	// story upsert (account-scoped)
-	sourceJSON, _ := json.Marshal(ing.Source)
 	rightsJSON, _ := json.Marshal(ing.Rights)
 
 	var (
@@ -742,17 +741,16 @@ func adminDraftUpsertTx(ctx context.Context, tx *sql.Tx, accountID string, req m
 		storyCreated bool
 	)
 	err = tx.QueryRowContext(ctx, `
-		INSERT INTO stories (account_id, slug, title, author, language, source, rights, updated_at)
-		VALUES ($1,$2,$3,NULLIF(BTRIM($4),''),$5,$6::jsonb,$7::jsonb, now())
+		INSERT INTO stories (account_id, slug, title, author, language, rights, updated_at)
+		VALUES ($1,$2,$3,NULLIF(BTRIM($4),''),$5,$6::jsonb, now())
 		ON CONFLICT (account_id, slug) DO UPDATE SET
 			title=EXCLUDED.title,
 			author=EXCLUDED.author,
 			language=EXCLUDED.language,
-			source=EXCLUDED.source,
 			rights=EXCLUDED.rights,
 			updated_at=now()
 		RETURNING id, (xmax = 0)
-	`, accountID, ing.Slug, ing.Title, ing.Author, ing.Language, string(sourceJSON), string(rightsJSON)).Scan(&storyID, &storyCreated)
+	`, accountID, ing.Slug, ing.Title, ing.Author, ing.Language, string(rightsJSON)).Scan(&storyID, &storyCreated)
 	if err != nil {
 		return model.AdminDraftUpsertResponse{}, err
 	}

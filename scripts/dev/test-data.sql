@@ -24,9 +24,11 @@ BEGIN
     SELECT 1 FROM stories
     WHERE id = 'f17e0000-0000-4000-8000-000000000010'
       AND (
-        slug <> 'test-only-moonlit-cafe'
-        OR source->>'origin' IS DISTINCT FROM 'explicit-test-seed'
-        OR source->>'test_fixture' IS DISTINCT FROM 'true'
+        slug IS DISTINCT FROM 'test-only-moonlit-cafe'
+        OR title IS DISTINCT FROM 'TEST ONLY — Moonlit Café'
+        OR author IS DISTINCT FROM 'Panda Pages Test Fixture'
+        OR language IS DISTINCT FROM 'en-GB'
+        OR rights IS DISTINCT FROM '{"license":"test-only","test_fixture":true}'::jsonb
       )
   ) THEN
     RAISE EXCEPTION 'fixed story fixture ID is already in unrelated use';
@@ -60,7 +62,7 @@ WITH target_account AS (
   LIMIT 1
 )
 INSERT INTO stories (
-  id, account_id, slug, title, author, is_published, language, rights, source
+  id, account_id, slug, title, author, is_published, language, rights
 )
 SELECT
   'f17e0000-0000-4000-8000-000000000010',
@@ -70,8 +72,7 @@ SELECT
   'Panda Pages Test Fixture',
   false,
   'en-GB',
-  '{"license":"test-only","test_fixture":true}'::jsonb,
-  '{"origin":"explicit-test-seed","test_fixture":true}'::jsonb
+  '{"license":"test-only","test_fixture":true}'::jsonb
 FROM target_account
 ON CONFLICT (id) DO UPDATE SET
   account_id = EXCLUDED.account_id,
@@ -80,7 +81,6 @@ ON CONFLICT (id) DO UPDATE SET
   author = EXCLUDED.author,
   language = EXCLUDED.language,
   rights = EXCLUDED.rights,
-  source = EXCLUDED.source,
   updated_at = now();
 
 INSERT INTO story_editions (story_id, edition_key)

@@ -12,8 +12,11 @@ BEGIN
     SELECT 1
     FROM stories
     WHERE id = 'f17e0000-0000-4000-8000-000000000010'
-      AND source->>'origin' = 'explicit-test-seed'
-      AND source->>'test_fixture' = 'true'
+      AND slug = 'test-only-moonlit-cafe'
+      AND title = 'TEST ONLY — Moonlit Café'
+      AND author = 'Panda Pages Test Fixture'
+      AND language = 'en-GB'
+      AND rights = '{"license":"test-only","test_fixture":true}'::jsonb
   ) THEN
     RAISE EXCEPTION 'reader fixture must be seeded before test progress';
   END IF;
