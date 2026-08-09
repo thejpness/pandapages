@@ -411,26 +411,6 @@ edition_acl=$(docker exec "$source_container" \
 [[ "$edition_acl" == 'true|true|false' ]]
 
 
-release_acl=$(docker exec "$source_container"   psql -X --username="$admin_user" --dbname="$database" --tuples-only --no-align   --command="
-    SELECT
-      has_table_privilege('$application_role','public.story_releases','SELECT,INSERT')
-      || '|' ||
-      has_table_privilege('$application_role','public.story_releases','UPDATE,DELETE')
-      || '|' ||
-      has_table_privilege('$application_role','public.story_release_editions','SELECT,INSERT')
-      || '|' ||
-      has_table_privilege('$application_role','public.story_release_editions','UPDATE,DELETE')
-      || '|' ||
-      has_table_privilege('$backup_role','public.story_releases','SELECT')
-      || '|' ||
-      has_table_privilege('$backup_role','public.story_release_editions','SELECT')
-      || '|' ||
-      has_table_privilege('$backup_role','public.story_releases','INSERT,UPDATE,DELETE,TRUNCATE')
-      || '|' ||
-      has_table_privilege('$backup_role','public.story_release_editions','INSERT,UPDATE,DELETE,TRUNCATE');
-  ")
-[[ "$release_acl" == 'true|false|true|false|true|true|false|false' ]]
-
 source_acl=$(docker exec "$source_container" \
   psql -X --username="$admin_user" --dbname="$database" --tuples-only --no-align \
   --command="
@@ -551,6 +531,26 @@ edition_cascade=$(psql_as "$application_role" --tuples-only --no-align \
 
 apply_policy
 verify_policy
+
+release_acl=$(docker exec "$source_container"   psql -X --username="$admin_user" --dbname="$database" --tuples-only --no-align   --command="
+    SELECT
+      has_table_privilege('$application_role','public.story_releases','SELECT,INSERT')
+      || '|' ||
+      has_table_privilege('$application_role','public.story_releases','UPDATE,DELETE')
+      || '|' ||
+      has_table_privilege('$application_role','public.story_release_editions','SELECT,INSERT')
+      || '|' ||
+      has_table_privilege('$application_role','public.story_release_editions','UPDATE,DELETE')
+      || '|' ||
+      has_table_privilege('$backup_role','public.story_releases','SELECT')
+      || '|' ||
+      has_table_privilege('$backup_role','public.story_release_editions','SELECT')
+      || '|' ||
+      has_table_privilege('$backup_role','public.story_releases','INSERT,UPDATE,DELETE,TRUNCATE')
+      || '|' ||
+      has_table_privilege('$backup_role','public.story_release_editions','INSERT,UPDATE,DELETE,TRUNCATE');
+  ")
+[[ "$release_acl" == 'true|false|true|false|true|true|false|false' ]]
 
 psql_as "$admin_user" --command="
   GRANT TRUNCATE ON TABLE story_editions TO $application_role;
