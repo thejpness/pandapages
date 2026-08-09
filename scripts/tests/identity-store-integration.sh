@@ -128,7 +128,7 @@ run_goose up-to 16
 [[ $(query "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('principals','external_identities','account_memberships');") == 3 ]]
 
 run_goose up
-[[ $(query "SELECT version_id FROM goose_db_version WHERE is_applied ORDER BY id DESC LIMIT 1;") == 24 ]]
+[[ $(query "SELECT version_id FROM goose_db_version WHERE is_applied ORDER BY id DESC LIMIT 1;") == 25 ]]
 [[ $(query "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('principals','external_identities','account_memberships');") == 3 ]]
 [[ $(query "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('account_settings','child_profiles','prompt_profiles','generation_jobs');") == 0 ]]
 [[ $(query "SELECT (to_regtype('public.generation_status') IS NULL)::int;") == 1 ]]
@@ -136,6 +136,9 @@ run_goose up
 [[ $(query "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='profiles' AND column_name IN ('pin_hash','pin_failed_attempts','pin_lock_until');") == 3 ]]
 [[ $(query "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='reading_progress' AND column_name='profile_id' AND is_nullable='NO';") == 1 ]]
 [[ $(query "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='reading_progress' AND column_name='account_id';") == 1 ]]
+[[ $(query "SELECT count(*) FROM accounts;") == 0 ]]
+[[ $(query "SELECT count(*) FROM profiles;") == 0 ]]
+[[ $(query "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='accounts' AND column_name='name' AND column_default IS NULL;") == 1 ]]
 
 published_address=$(docker port "$postgres_container" 5432/tcp)
 published_port=${published_address##*:}

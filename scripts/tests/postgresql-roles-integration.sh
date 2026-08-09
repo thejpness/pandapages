@@ -411,10 +411,27 @@ if docker run --rm \
 fi
 grep -Fq 'profile PIN security migration is irreversible' "$test_root/goose-profile-pin-down.err"
 
+run_goose goose-legacy-retirement-up up-to 23
+if docker run --rm \
+  --network "$source_network" \
+  --read-only \
+  --security-opt no-new-privileges \
+  --tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m \
+  --env GOOSE_DRIVER=postgres \
+  --env "GOOSE_DBSTRING=postgres://$migration_role:$migration_password@$source_container:5432/$database?sslmode=disable" \
+  --env GOOSE_MIGRATION_DIR=/migrations \
+  --mount "type=bind,src=$repo_root/apps/api/migrations,dst=/migrations,readonly" \
+  "$migration_image" down-to 22 \
+  >"$test_root/goose-legacy-retirement-down.out" 2>"$test_root/goose-legacy-retirement-down.err"; then
+  printf 'Goose unexpectedly accepted a legacy runtime retirement rollback\n' >&2
+  exit 1
+fi
+grep -Fq 'legacy runtime scaffolding retirement is irreversible' "$test_root/goose-legacy-retirement-down.err"
+
 run_goose goose-account-scope-up up
 account_scope_shape=$(psql_as "$migration_role" --tuples-only --no-align \
-  --command="SELECT (SELECT max(version_id) FROM goose_db_version WHERE is_applied) || '|' || (to_regclass('public.account_settings') IS NOT NULL)::int || '|' || (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='reading_progress' AND column_name='profile_id') || '|' || (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='stories' AND column_name='source');")
-[[ "$account_scope_shape" == '24|0|1|0' ]]
+  --command="SELECT (SELECT max(version_id) FROM goose_db_version WHERE is_applied) || '|' || (to_regclass('public.account_settings') IS NOT NULL)::int || '|' || (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='reading_progress' AND column_name='profile_id') || '|' || (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='stories' AND column_name='source') || '|' || (SELECT count(*) FROM accounts WHERE name='Default') || '|' || (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='accounts' AND column_name='name' AND column_default IS NULL);")
+[[ "$account_scope_shape" == '25|0|1|0|0|1' ]]
 
 edition_backfill=$(psql_as "$application_role" --tuples-only --no-align \
   --command="
@@ -605,13 +622,13 @@ if docker run --rm \
   --env "GOOSE_DBSTRING=postgres://$migration_role:$migration_password@$source_container:5432/$database?sslmode=disable" \
   --env GOOSE_MIGRATION_DIR=/migrations \
   --mount "type=bind,src=$repo_root/apps/api/migrations,dst=/migrations,readonly" \
-  "$migration_image" down-to 22 \
-  >"$test_root/goose-legacy-retirement-down.out" 2>"$test_root/goose-legacy-retirement-down.err"; then
-  printf 'Goose unexpectedly accepted a legacy runtime retirement rollback\n' >&2
+  "$migration_image" down-to 24 \
+  >"$test_root/goose-default-bootstrap-down.out" 2>"$test_root/goose-default-bootstrap-down.err"; then
+  printf 'Goose unexpectedly accepted a Default bootstrap retirement rollback\n' >&2
   exit 1
 fi
-grep -Fq 'legacy runtime scaffolding retirement is irreversible' "$test_root/goose-legacy-retirement-down.err"
-printf 'ok 13 - profile PIN security and legacy runtime retirement reject untruthful rollbacks\n'
+grep -Fq 'legacy Default bootstrap retirement is irreversible' "$test_root/goose-default-bootstrap-down.err"
+printf 'ok 13 - profile PIN, legacy runtime, and Default bootstrap retirement reject untruthful rollbacks\n'
 after_resources="$test_root/after-resources"
 docker ps -aq --filter label=com.pandapages.disposable=role-integration | sort >"$after_resources"
 [[ $(wc -l <"$after_resources") -eq 1 ]]

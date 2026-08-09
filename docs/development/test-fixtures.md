@@ -1,10 +1,11 @@
 # Test fixture lifecycle
 
-Normal Panda Pages migrations leave an empty application catalogue. They create
-the current schema plus the shared Default account/profile bootstrap records,
-but no test stories, story versions, segments, or reading progress. Migration
-`00023` retires the legacy child/prompt/settings/generation scaffolding from the
-current schema.
+Normal Panda Pages migrations leave an empty application database: no accounts,
+reader profiles, adult principals, memberships, stories, story versions,
+segments, or reading progress. Migration `00023` retires the legacy
+child/prompt/settings/generation scaffolding, migration `00024` retires the old
+mutable story-source mirror, and migration `00025` retires the untouched
+historical Default account/profile bootstrap.
 
 ## Historical migration decision
 
@@ -29,10 +30,18 @@ deleted, renumbered, or rewritten safely. Its complete logical inventory is:
 | Other relations | No account, profile-settings, asset, or schema-meta row. |
 
 It also attempted to ensure a `Default` profile, but migration `00007` had
-already created that runtime bootstrap profile. Migration `00011` subsequently
-created the shared default account and assigned all existing profiles and
-stories to it. That account may contain manually uploaded stories and is not a
-fixture account.
+already created that historical bootstrap profile. Migration `00011`
+subsequently created the shared default account and assigned all existing
+profiles and stories to it. That account may have been repurposed by an older
+deployment and is therefore never treated as disposable merely because it is
+named `Default`.
+
+Migration `00025_remove_legacy_default_bootstrap.sql` removes only the provably
+untouched bootstrap pair: the oldest `Default` account, its sole untouched
+`Default` profile created before that account existed, default PIN state, and
+zero memberships, stories, or progress. Any dependency or changed shape makes
+the migration fail closed so an operator must explicitly preserve, rename, or
+migrate the data instead.
 
 Forward migration `00013_remove_historical_test_fixtures.sql` removes the
 historical fixtures after `00008` has run. Because `00008` generated UUIDs,
@@ -47,8 +56,9 @@ every part of that fingerprint. The migration separately deletes the exact
 seeded child, prompt, and generation-job payloads, and deletes historical work
 and contributor rows only when no remaining story references them.
 
-The shared account and Default profile are always preserved. A work or
-contributor reused by unrelated content is preserved. The cleanup Down path
+Migration `00013` always preserves the shared account and Default profile;
+`00025` later handles that bootstrap under the stricter provenance rule above.
+A work or contributor reused by unrelated content is preserved. The cleanup Down path
 does not restore test data; use the explicit command below instead.
 
 The historical migration did not provide immutable IDs. A content or hash
@@ -66,8 +76,8 @@ unreferenced work/contributor rows.
 ## Local workflow
 
 Start the normal development stack and let the one-shot migration service
-finish. The resulting database has no story content. Test data is never seeded
-automatically by Compose.
+finish. The resulting database has no application-owned account, reader, or story
+content. Test data is never seeded automatically by Compose.
 
 Install the deterministic reader fixture explicitly:
 
@@ -77,16 +87,17 @@ PP_TEST_SEED_DATABASE=pandapages \
 scripts/dev/seed-test-data.sh
 ```
 
-The fixture contains one published UTF-8 story, one test contributor, two
-chapters, six ordered segments, and fixed test-only UUIDs. The segments mirror
+The fixture contains one fixed test-only account, one fixed test-only reader,
+one published UTF-8 story, one test contributor, two chapters, six ordered
+segments, and fixed test-only UUIDs. The segments mirror
 ingestion's top-level block
 model: H1, opening paragraph, Chapter One H2, its paragraph, Chapter Two H2,
 and its paragraph are six independent rows with deterministic Reader 2
 content keys, occurrences, kinds, heading levels, and H2 chapter propagation.
 It does not include progress by default.
 
-Add the progress row for the account-owned profile named exactly `Default` only
-for a test that needs it:
+Add the progress row for the deterministic fixture reader only for a test
+that needs it:
 
 ```bash
 PP_ALLOW_TEST_SEED=1 \
@@ -115,7 +126,7 @@ The seed command accepts no database URL or password. It:
 - targets either the single running development PostgreSQL container labelled
   `com.pandapages.test-seed-target=local-development`, or an explicitly named
   disposable integration container with the dedicated test label;
-- requires the target to be running with migration `00023` applied;
+- requires the target to be running with current migration `00025` applied;
 - uses container-local `psql`, prints no database credential, performs no
   network request, and creates no temporary credential file.
 
@@ -136,7 +147,10 @@ PostgreSQL resources and proves:
   links, and progress;
 - migration `00023` refuses the deliberately preserved non-empty legacy
   child/prompt/settings/job vector without altering it; the disposable harness
-  then explicitly clears only those test vectors and completes the upgrade;
+  then explicitly clears only those test vectors and completes that upgrade;
+- migration `00025` refuses a repurposed historical Default account/profile
+  vector; the harness explicitly renames that preserved data before completing
+  the upgrade, while a fresh chain removes only the untouched bootstrap pair;
 - cleanup rollback/reapplication is non-restoring and idempotent;
 - seed refusal cases fail closed;
 - explicit six-block seed shape, optional progress, rerun, removal, and
