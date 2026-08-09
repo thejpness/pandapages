@@ -53,12 +53,6 @@ export const router = createRouter({
       meta: { requiresAccount: true, requiresProfile: true, requiresChildMode: true },
     },
     {
-      path: "/journey",
-      component: () => import("./views/Journey.vue"),
-      meta: { requiresAccount: true, parentOnly: true },
-    },
-
-    {
       path: "/admin",
       component: () => import("./views/admin/AdminLayout.vue"),
       meta: { requiresAccount: true, parentOnly: true },

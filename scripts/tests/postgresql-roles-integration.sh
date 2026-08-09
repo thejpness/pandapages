@@ -381,10 +381,40 @@ psql_as "$migration_role" --command="
   DROP FUNCTION role_required_upper(text);
 " >/dev/null
 
+# The role test has finished exercising migration-15's historical
+# child/prompt/profile-settings ownership model. These are disposable test
+# vectors, so clear them explicitly before reaching migration 23; production
+# migration 23 itself never decides that non-empty legacy data is disposable.
+psql_as "$application_role" --command="
+  DELETE FROM profile_settings;
+  DELETE FROM child_profiles;
+  DELETE FROM prompt_profiles;
+" >/dev/null
+
+# Keep the existing security rollback assertion at its own historical boundary
+# before the later irreversible retirement migration becomes the first Down
+# barrier.
+run_goose goose-profile-pin-up up-to 19
+if docker run --rm \
+  --network "$source_network" \
+  --read-only \
+  --security-opt no-new-privileges \
+  --tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m \
+  --env GOOSE_DRIVER=postgres \
+  --env "GOOSE_DBSTRING=postgres://$migration_role:$migration_password@$source_container:5432/$database?sslmode=disable" \
+  --env GOOSE_MIGRATION_DIR=/migrations \
+  --mount "type=bind,src=$repo_root/apps/api/migrations,dst=/migrations,readonly" \
+  "$migration_image" down-to 18 \
+  >"$test_root/goose-profile-pin-down.out" 2>"$test_root/goose-profile-pin-down.err"; then
+  printf 'Goose unexpectedly accepted a profile PIN security rollback\n' >&2
+  exit 1
+fi
+grep -Fq 'profile PIN security migration is irreversible' "$test_root/goose-profile-pin-down.err"
+
 run_goose goose-account-scope-up up
 account_scope_shape=$(psql_as "$migration_role" --tuples-only --no-align \
   --command="SELECT (SELECT max(version_id) FROM goose_db_version WHERE is_applied) || '|' || (to_regclass('public.account_settings') IS NOT NULL)::int || '|' || (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='reading_progress' AND column_name='profile_id');")
-[[ "$account_scope_shape" == '22|1|1' ]]
+[[ "$account_scope_shape" == '23|0|1' ]]
 
 edition_backfill=$(psql_as "$application_role" --tuples-only --no-align \
   --command="
@@ -564,7 +594,7 @@ grep -Fq 'verification failed: application table privileges are incomplete or ex
 apply_policy
 verify_policy
 
-printf 'ok 12 - edition and canonical-source migrations grant runtime/backup access, cascade cleanly, and verify fail-closed\n'
+printf 'ok 12 - current story migrations and legacy retirement grant only approved runtime/backup access and verify fail-closed\n'
 
 if docker run --rm \
   --network "$source_network" \
@@ -575,13 +605,13 @@ if docker run --rm \
   --env "GOOSE_DBSTRING=postgres://$migration_role:$migration_password@$source_container:5432/$database?sslmode=disable" \
   --env GOOSE_MIGRATION_DIR=/migrations \
   --mount "type=bind,src=$repo_root/apps/api/migrations,dst=/migrations,readonly" \
-  "$migration_image" down-to 18 \
-  >"$test_root/goose-account-scope-down.out" 2>"$test_root/goose-account-scope-down.err"; then
-  printf 'Goose unexpectedly accepted a profile PIN security rollback\n' >&2
+  "$migration_image" down-to 22 \
+  >"$test_root/goose-legacy-retirement-down.out" 2>"$test_root/goose-legacy-retirement-down.err"; then
+  printf 'Goose unexpectedly accepted a legacy runtime retirement rollback\n' >&2
   exit 1
 fi
-grep -Fq 'profile PIN security migration is irreversible' "$test_root/goose-account-scope-down.err"
-printf 'ok 13 - profile PIN security migration applies under the owner role and rejects an untruthful rollback\n'
+grep -Fq 'legacy runtime scaffolding retirement is irreversible' "$test_root/goose-legacy-retirement-down.err"
+printf 'ok 13 - profile PIN security and legacy runtime retirement reject untruthful rollbacks\n'
 after_resources="$test_root/after-resources"
 docker ps -aq --filter label=com.pandapages.disposable=role-integration | sort >"$after_resources"
 [[ $(wc -l <"$after_resources") -eq 1 ]]

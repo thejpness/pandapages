@@ -25,7 +25,7 @@ func TestAccountScopedMigrationSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
-	var progressKey, settingsKey string
+	var progressKey string
 	if err := database.QueryRow(`SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'reading_progress'::regclass AND contype = 'p'`).Scan(&progressKey); err != nil {
 		t.Fatal(err)
 	}
@@ -34,10 +34,30 @@ func TestAccountScopedMigrationSchema(t *testing.T) {
 		!strings.Contains(progressKey, "story_id") {
 		t.Fatalf("progress key = %s", progressKey)
 	}
-	if err := database.QueryRow(`SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'account_settings'::regclass AND contype = 'p'`).Scan(&settingsKey); err != nil {
+	var retiredRelations int
+	if err := database.QueryRow(`
+		SELECT count(*)
+		FROM information_schema.tables
+		WHERE table_schema = 'public'
+		  AND table_name IN (
+		    'account_settings',
+		    'child_profiles',
+		    'prompt_profiles',
+		    'generation_jobs'
+		  )
+	`).Scan(&retiredRelations); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(settingsKey, "account_id") {
-		t.Fatalf("settings key = %s", settingsKey)
+	if retiredRelations != 0 {
+		t.Fatalf("retired relations = %d", retiredRelations)
+	}
+	var generationStatusPresent bool
+	if err := database.QueryRow(
+		`SELECT to_regtype('public.generation_status') IS NOT NULL`,
+	).Scan(&generationStatusPresent); err != nil {
+		t.Fatal(err)
+	}
+	if generationStatusPresent {
+		t.Fatal("generation_status still exists")
 	}
 }

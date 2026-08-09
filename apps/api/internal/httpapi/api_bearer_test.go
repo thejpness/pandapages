@@ -90,15 +90,6 @@ type authTestStore struct {
 	profilePINVerifyID      string
 	profilePINCandidate     string
 	profilePINVerifyErr     error
-	settingsGetCalls        int
-	settingsGetAccount      string
-	settingsGet             model.SettingsPayload
-	settingsGetErr          error
-	settingsPutCalls        int
-	settingsPutAccount      string
-	settingsPutPayload      model.SettingsUpsert
-	settingsPutResponse     model.SettingsPayload
-	settingsPutErr          error
 }
 
 func (s *authTestStore) Identity(context.Context, appidentity.ExternalIdentity) (appidentity.Snapshot, error) {
@@ -208,17 +199,6 @@ func (s *authTestStore) VerifyProfilePIN(accountID, profileID, candidate string)
 	s.profilePINCandidate = candidate
 	return s.profilePINVerifyErr
 }
-func (s *authTestStore) SettingsGet(accountID string) (model.SettingsPayload, error) {
-	s.settingsGetCalls++
-	s.settingsGetAccount = accountID
-	return s.settingsGet, s.settingsGetErr
-}
-func (s *authTestStore) SettingsPut(accountID string, payload model.SettingsUpsert) (model.SettingsPayload, error) {
-	s.settingsPutCalls++
-	s.settingsPutAccount = accountID
-	s.settingsPutPayload = payload
-	return s.settingsPutResponse, s.settingsPutErr
-}
 
 type bearerVerifier struct{ err error }
 
@@ -254,7 +234,7 @@ func profileBearerRequest(method, path string) *http.Request {
 
 func TestProtectedRoutesRequireBearerAccountContext(t *testing.T) {
 	tests := []struct{ name, method, path, body string }{
-		{"library", http.MethodGet, "/api/v1/library", ""}, {"reader", http.MethodGet, "/api/v1/reader/story", ""}, {"progress get", http.MethodGet, "/api/v1/progress/story", ""}, {"progress put", http.MethodPut, "/api/v1/progress/story", `{"version":1,"locator":{"schema":2,"segment":{"key":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","occurrence":1,"ordinal":1,"offset":0},"chapter":null},"percent":0}`}, {"continue", http.MethodGet, "/api/v1/continue", ""}, {"profiles list", http.MethodGet, "/api/v1/profiles", ""}, {"profiles create", http.MethodPost, "/api/v1/profiles", `{"name":"Ted"}`}, {"profiles update", http.MethodPatch, "/api/v1/profiles/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", `{"name":"Ted"}`}, {"profiles delete", http.MethodDelete, "/api/v1/profiles/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", ""}, {"profiles PIN set", http.MethodPut, "/api/v1/profiles/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/pin", `{"pin":"1234"}`}, {"profiles PIN verify", http.MethodPost, "/api/v1/profiles/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/pin", `{"pin":"1234"}`}, {"profiles PIN remove", http.MethodDelete, "/api/v1/profiles/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/pin", ""}, {"settings get", http.MethodGet, "/api/v1/settings", ""}, {"settings put", http.MethodPut, "/api/v1/settings", `{}`},
+		{"library", http.MethodGet, "/api/v1/library", ""}, {"reader", http.MethodGet, "/api/v1/reader/story", ""}, {"progress get", http.MethodGet, "/api/v1/progress/story", ""}, {"progress put", http.MethodPut, "/api/v1/progress/story", `{"version":1,"locator":{"schema":2,"segment":{"key":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","occurrence":1,"ordinal":1,"offset":0},"chapter":null},"percent":0}`}, {"continue", http.MethodGet, "/api/v1/continue", ""}, {"profiles list", http.MethodGet, "/api/v1/profiles", ""}, {"profiles create", http.MethodPost, "/api/v1/profiles", `{"name":"Ted"}`}, {"profiles update", http.MethodPatch, "/api/v1/profiles/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", `{"name":"Ted"}`}, {"profiles delete", http.MethodDelete, "/api/v1/profiles/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", ""}, {"profiles PIN set", http.MethodPut, "/api/v1/profiles/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/pin", `{"pin":"1234"}`}, {"profiles PIN verify", http.MethodPost, "/api/v1/profiles/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/pin", `{"pin":"1234"}`}, {"profiles PIN remove", http.MethodDelete, "/api/v1/profiles/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/pin", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

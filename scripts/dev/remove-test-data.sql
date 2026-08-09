@@ -10,10 +10,6 @@ BEGIN
 END
 $$;
 
-DELETE FROM generation_jobs
-WHERE id = 'f17e0000-0000-4000-8000-000000000040'
-  AND model = 'test-only-seed-model';
-
 DELETE FROM reading_progress
 WHERE story_id = 'f17e0000-0000-4000-8000-000000000010';
 
@@ -21,14 +17,6 @@ DELETE FROM stories
 WHERE id = 'f17e0000-0000-4000-8000-000000000010'
   AND source->>'origin' = 'explicit-test-seed'
   AND source->>'test_fixture' = 'true';
-
-DELETE FROM child_profiles
-WHERE id = 'f17e0000-0000-4000-8000-000000000001'
-  AND name = 'TEST ONLY — Reader child';
-
-DELETE FROM prompt_profiles
-WHERE id = 'f17e0000-0000-4000-8000-000000000002'
-  AND name = 'TEST ONLY — Reader prompt';
 
 DELETE FROM contributors AS contributor
 WHERE contributor.id = 'f17e0000-0000-4000-8000-000000000004'

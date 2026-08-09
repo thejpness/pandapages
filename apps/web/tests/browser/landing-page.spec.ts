@@ -67,27 +67,6 @@ async function installSessionRoutes(
       return
     }
 
-    if (
-      request.method() === 'GET' &&
-      url.pathname === '/api/v1/settings'
-    ) {
-      await fulfillJson(route, {
-        child: {
-          name: '',
-          ageMonths: 0,
-          interests: null,
-          sensitivities: null,
-        },
-        prompt: {
-          id: 'prompt-test-id',
-          name: 'Default',
-          schemaVersion: 1,
-          rules: {},
-        },
-      })
-      return
-    }
-
     await fulfillJson(
       route,
       { error: { code: 'not_found', message: 'Test route not found' } },

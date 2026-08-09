@@ -1,9 +1,10 @@
 # Test fixture lifecycle
 
 Normal Panda Pages migrations leave an empty application catalogue. They create
-the schema plus the shared Default account/profile bootstrap records, but no
-test stories, story versions, segments, child or prompt profiles, reading
-progress, profile settings, or generation jobs.
+the current schema plus the shared Default account/profile bootstrap records,
+but no test stories, story versions, segments, or reading progress. Migration
+`00023` retires the legacy child/prompt/settings/generation scaffolding from the
+current schema.
 
 ## Historical migration decision
 
@@ -76,9 +77,9 @@ PP_TEST_SEED_DATABASE=pandapages \
 scripts/dev/seed-test-data.sh
 ```
 
-The fixture contains one published UTF-8 story, two chapters, six ordered
-segments, fixed test-only UUIDs, a test work/contributor, a child/prompt pair,
-and one test generation job. The segments mirror ingestion's top-level block
+The fixture contains one published UTF-8 story, one test contributor, two
+chapters, six ordered segments, and fixed test-only UUIDs. The segments mirror
+ingestion's top-level block
 model: H1, opening paragraph, Chapter One H2, its paragraph, Chapter Two H2,
 and its paragraph are six independent rows with deterministic Reader 2
 content keys, occurrences, kinds, heading levels, and H2 chapter propagation.
@@ -114,7 +115,7 @@ The seed command accepts no database URL or password. It:
 - targets either the single running development PostgreSQL container labelled
   `com.pandapages.test-seed-target=local-development`, or an explicitly named
   disposable integration container with the dedicated test label;
-- requires the target to be running with migration `00015` applied;
+- requires the target to be running with migration `00023` applied;
 - uses container-local `psql`, prints no database credential, performs no
   network request, and creates no temporary credential file.
 
@@ -133,9 +134,9 @@ PostgreSQL resources and proves:
 - content-only edits, additional drafts, and republished versions preserve the
   complete ambiguous story lifecycle, including segments, pointers, contributor
   links, and progress;
-- the account, Default profile, unrelated same-account
-  story/version/segment/progress/job, unrelated profile/settings, and shared
-  catalogue records remain;
+- migration `00023` refuses the deliberately preserved non-empty legacy
+  child/prompt/settings/job vector without altering it; the disposable harness
+  then explicitly clears only those test vectors and completes the upgrade;
 - cleanup rollback/reapplication is non-restoring and idempotent;
 - seed refusal cases fail closed;
 - explicit six-block seed shape, optional progress, rerun, removal, and

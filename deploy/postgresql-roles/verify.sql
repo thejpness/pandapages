@@ -193,14 +193,37 @@ WITH runtime_table(name, immutable) AS (
     AND class.relkind IN ('r', 'p')
 )
 SELECT
-  count(*) = 15
+  count(*) = 12
+    + CASE WHEN to_regclass('public.child_profiles') IS NULL THEN 0 ELSE 1 END
+    + CASE WHEN to_regclass('public.prompt_profiles') IS NULL THEN 0 ELSE 1 END
+    + CASE WHEN to_regclass('public.profile_settings') IS NULL THEN 0 ELSE 1 END
+    + CASE WHEN to_regclass('public.account_settings') IS NULL THEN 0 ELSE 1 END
     + CASE WHEN to_regclass('public.story_editions') IS NULL THEN 0 ELSE 1 END
     + CASE WHEN to_regclass('public.story_sources') IS NULL THEN 0 ELSE 1 END
     + CASE WHEN to_regclass('public.story_source_versions') IS NULL THEN 0 ELSE 1 END
     + CASE WHEN to_regclass('public.story_releases') IS NULL THEN 0 ELSE 1 END
     + CASE WHEN to_regclass('public.story_release_editions') IS NULL THEN 0 ELSE 1 END
-  AND (to_regclass('public.profile_settings') IS NULL)
-      <> (to_regclass('public.account_settings') IS NULL)
+  AND CASE
+    WHEN COALESCE(
+      (SELECT max(version_id) FROM goose_db_version WHERE is_applied),
+      0
+    ) >= 23 THEN
+      to_regclass('public.child_profiles') IS NULL
+      AND to_regclass('public.prompt_profiles') IS NULL
+      AND to_regclass('public.profile_settings') IS NULL
+      AND to_regclass('public.account_settings') IS NULL
+      AND to_regclass('public.generation_jobs') IS NULL
+      AND to_regtype('public.generation_status') IS NULL
+    ELSE
+      to_regclass('public.child_profiles') IS NOT NULL
+      AND to_regclass('public.prompt_profiles') IS NOT NULL
+      AND to_regclass('public.generation_jobs') IS NOT NULL
+      AND to_regtype('public.generation_status') IS NOT NULL
+      AND (
+        (to_regclass('public.profile_settings') IS NULL)
+        <> (to_regclass('public.account_settings') IS NULL)
+      )
+  END
   AND bool_and(
     oid IS NOT NULL
     AND can_select

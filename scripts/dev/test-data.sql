@@ -13,22 +13,6 @@ BEGIN
   END IF;
 
   IF EXISTS (
-    SELECT 1 FROM child_profiles
-    WHERE id = 'f17e0000-0000-4000-8000-000000000001'
-      AND name IS DISTINCT FROM 'TEST ONLY — Reader child'
-  ) THEN
-    RAISE EXCEPTION 'fixed child-profile fixture ID is already in unrelated use';
-  END IF;
-
-  IF EXISTS (
-    SELECT 1 FROM prompt_profiles
-    WHERE id = 'f17e0000-0000-4000-8000-000000000002'
-      AND name <> 'TEST ONLY — Reader prompt'
-  ) THEN
-    RAISE EXCEPTION 'fixed prompt-profile fixture ID is already in unrelated use';
-  END IF;
-
-  IF EXISTS (
     SELECT 1 FROM contributors
     WHERE id = 'f17e0000-0000-4000-8000-000000000004'
       AND name <> 'Panda Pages Test Fixture'
@@ -56,63 +40,8 @@ BEGIN
     RAISE EXCEPTION 'fixed story-version fixture ID is already in unrelated use';
   END IF;
 
-  IF EXISTS (
-    SELECT 1 FROM generation_jobs
-    WHERE id = 'f17e0000-0000-4000-8000-000000000040'
-      AND model <> 'test-only-seed-model'
-  ) THEN
-    RAISE EXCEPTION 'fixed generation-job fixture ID is already in unrelated use';
-  END IF;
 END
 $$;
-
-WITH target_account AS (
-  SELECT id
-  FROM accounts
-  ORDER BY created_at ASC, id ASC
-  LIMIT 1
-)
-INSERT INTO child_profiles (
-  id, account_id, name, age_months, interests, sensitivities
-)
-SELECT
-  'f17e0000-0000-4000-8000-000000000001',
-  target_account.id,
-  'TEST ONLY — Reader child',
-  84,
-  '["pandas","cafés","世界"]'::jsonb,
-  '["test-only"]'::jsonb
-FROM target_account
-ON CONFLICT (id) DO UPDATE SET
-  account_id = EXCLUDED.account_id,
-  name = EXCLUDED.name,
-  age_months = EXCLUDED.age_months,
-  interests = EXCLUDED.interests,
-  sensitivities = EXCLUDED.sensitivities,
-  updated_at = now();
-
-WITH target_account AS (
-  SELECT id
-  FROM accounts
-  ORDER BY created_at ASC, id ASC
-  LIMIT 1
-)
-INSERT INTO prompt_profiles (
-  id, account_id, name, rules, schema_version
-)
-SELECT
-  'f17e0000-0000-4000-8000-000000000002',
-  target_account.id,
-  'TEST ONLY — Reader prompt',
-  '{"test_fixture":true,"tone":"warm UTF-8 coverage"}'::jsonb,
-  1
-FROM target_account
-ON CONFLICT (id) DO UPDATE SET
-  account_id = EXCLUDED.account_id,
-  name = EXCLUDED.name,
-  rules = EXCLUDED.rules,
-  schema_version = EXCLUDED.schema_version,
-  updated_at = now();
 
 INSERT INTO contributors (id, name, sort_name)
 VALUES (
@@ -340,39 +269,5 @@ SET current_release_id = (
     AND release_number = 1
 )
 WHERE id = 'f17e0000-0000-4000-8000-000000000010';
-
-INSERT INTO generation_jobs (
-  id, status, story_id, story_version_id, child_profile_id, prompt_profile_id,
-  theme, request_payload, response_payload, model, prompt_version, tokens_in, tokens_out
-)
-VALUES (
-  'f17e0000-0000-4000-8000-000000000040',
-  'succeeded'::generation_status,
-  'f17e0000-0000-4000-8000-000000000010',
-  'f17e0000-0000-4000-8000-000000000011',
-  'f17e0000-0000-4000-8000-000000000001',
-  'f17e0000-0000-4000-8000-000000000002',
-  'TEST ONLY — UTF-8 Reader fixture',
-  '{"test_fixture":true}'::jsonb,
-  '{"test_fixture":true,"result":"deterministic"}'::jsonb,
-  'test-only-seed-model',
-  'fixture-v1',
-  10,
-  20
-)
-ON CONFLICT (id) DO UPDATE SET
-  status = EXCLUDED.status,
-  story_id = EXCLUDED.story_id,
-  story_version_id = EXCLUDED.story_version_id,
-  child_profile_id = EXCLUDED.child_profile_id,
-  prompt_profile_id = EXCLUDED.prompt_profile_id,
-  theme = EXCLUDED.theme,
-  request_payload = EXCLUDED.request_payload,
-  response_payload = EXCLUDED.response_payload,
-  model = EXCLUDED.model,
-  prompt_version = EXCLUDED.prompt_version,
-  tokens_in = EXCLUDED.tokens_in,
-  tokens_out = EXCLUDED.tokens_out,
-  updated_at = now();
 
 COMMIT;
