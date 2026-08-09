@@ -447,6 +447,7 @@ function leaveReaderMode() {
       @clear="clearSearch"
       @surprise="goSurprise"
       @profiles="switchReader"
+      @switch="switchReader"
       @journey="navigateFromLibrary('/journey')"
       @admin="navigateFromLibrary('/admin/stories')"
       @lock="lockLibrary"

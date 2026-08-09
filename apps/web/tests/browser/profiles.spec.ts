@@ -342,4 +342,23 @@ test.describe('reader profile lifecycle', () => {
     await expect(page).toHaveURL('/library')
     await expect(page.getByRole('dialog')).toHaveCount(0)
   })
+  test('the active no-PIN reader continues to the preserved switch destination', async ({ page }) => {
+    const api = new ProfilesApiMock(page)
+    api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false, reading_level: 'classic' }]
+    await api.install()
+    await page.addInitScript((profileID) => {
+      window.localStorage.setItem('pandapages.selected-reader-profile-id', profileID)
+    }, fixtureProfileID)
+    await page.goto('/library')
+    await expect(page).toHaveURL('/library')
+    await page.evaluate(async () => {
+      const app = (document.querySelector('#app') as HTMLElement & { __vue_app__?: { config: { globalProperties: { $router: { push: (value: string) => Promise<unknown> } } } } }).__vue_app__
+      if (!app) throw new Error('Vue application was not mounted')
+      await app.config.globalProperties.$router.push('/profiles?next=/library?q=moon')
+    })
+    await page.getByRole('button', { name: 'Start reading as Mina' }).click()
+    await expect(page).toHaveURL('/library?q=moon')
+    await expect.poll(() => page.evaluate(() => window.localStorage.getItem('pandapages.selected-reader-profile-id'))).toBe(fixtureProfileID)
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+  })
 })

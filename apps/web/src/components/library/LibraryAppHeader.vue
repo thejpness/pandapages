@@ -201,7 +201,7 @@ defineExpose({ focusSearch })
 
           <button
             v-if="childMode"
-            class="header-button header-button--quiet"
+            class="header-button header-button--ink"
             type="button"
             @click="emit('switch')"
           >
@@ -210,12 +210,12 @@ defineExpose({ focusSearch })
           <button
             v-if="childMode"
             ref="lockButton"
-            class="header-button header-button--ink"
+            class="header-button header-button--quiet"
             type="button"
             @click="emit('leave-child')"
           >
             <span aria-hidden="true">‹</span>
-            Leave reader mode
+            Parent controls
           </button>
           <button
             v-else

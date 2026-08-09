@@ -329,7 +329,9 @@ class LibraryApiMock {
       request.method() === 'GET' &&
       url.pathname === '/api/v1/library'
     ) {
-      expect(request.headers()['x-pp-profile-id']).toBe(LIBRARY_PROFILE_ID)
+      expect(this.profiles.map((profile) => profile.id)).toContain(
+        request.headers()['x-pp-profile-id'],
+      )
       const response = await this.resolveResponse(
         this.libraryResponses.shift(),
         {
@@ -1057,10 +1059,49 @@ test.describe('Library 2 bookshelf', () => {
     await page
       .getByRole('searchbox', { name: 'Search the library' })
       .fill('Moon')
-    await page.getByRole('button', { name: 'Leave reader mode' }).click()
+    await page.getByRole('button', { name: 'Parent controls' }).click()
     await expectPath(page, '/profiles')
     await page.clock.fastForward(220)
     await expectPath(page, '/profiles')
+  })
+
+  test('Library header Switch reader preserves reader state and its safe destination', async ({
+    page,
+    api,
+  }) => {
+    const tedID = LIBRARY_PROFILE_ID.slice(0, -1) + '1'
+    api.profiles = [
+      { id: LIBRARY_PROFILE_ID, name: 'Mina', pin_enabled: false, reading_level: 'classic' },
+      { id: tedID, name: 'Ted', pin_enabled: false, reading_level: 'classic' },
+    ]
+
+    await page.goto('/library?q=moon')
+    await expect(page.getByRole('heading', { name: 'Choose tonight’s story' })).toBeVisible()
+    await page.getByRole('button', { name: 'Switch reader' }).click()
+
+    await expectPath(page, '/profiles', '/library?q=moon')
+    await expect(page.getByText('Current reader', { exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Add profile' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Manage profiles' })).toHaveCount(0)
+    await expect.poll(() => page.evaluate((key) => window.localStorage.getItem(key), SELECTED_PROFILE_STORAGE_KEY)).toBe(LIBRARY_PROFILE_ID)
+
+    await page.getByRole('button', { name: 'Start reading as Ted' }).click()
+    await expectPath(page, '/library')
+    await expectQuery(page, 'moon')
+    await expect.poll(() => page.evaluate((key) => window.localStorage.getItem(key), SELECTED_PROFILE_STORAGE_KEY)).toBe(tedID)
+  })
+
+  test('Library header Parent controls enters the parent profile surface', async ({
+    page,
+  }) => {
+    await gotoReadyLibrary(page)
+    await page.getByRole('button', { name: 'Parent controls' }).click()
+
+    await expectPath(page, '/profiles')
+    await expect(page.getByText('Selected reader', { exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Add profile' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Manage profiles' })).toBeVisible()
+    await expect.poll(() => page.evaluate((key) => window.localStorage.getItem(key), SELECTED_PROFILE_STORAGE_KEY)).toBe(LIBRARY_PROFILE_ID)
   })
 
   test('pending search ownership is released for a public route link', async ({
@@ -1546,7 +1587,7 @@ test.describe('Library 2 bookshelf', () => {
           page.getByRole('searchbox', { name: 'Search the library' }),
         ).toBeVisible()
         await expect(
-          page.getByRole('button', { name: 'Leave reader mode' }),
+          page.getByRole('button', { name: 'Parent controls' }),
         ).toBeVisible()
         await expect(
           page.getByRole('button', { name: 'Parent options' }),
@@ -1582,7 +1623,7 @@ test.describe('Library 2 bookshelf', () => {
         name: `Details for ${CURRENT_STORY.title}`,
       }),
       page.getByRole('button', { name: 'Clear search' }),
-      page.getByRole('button', { name: 'Leave reader mode' }),
+      page.getByRole('button', { name: 'Parent controls' }),
       page.getByRole('button', { name: 'Surprise me' }),
     ]
 
@@ -1668,7 +1709,7 @@ test.describe('Library 2 bookshelf', () => {
 
     const header = page.locator('.library-header')
     const brand = page.getByRole('link', { name: 'Panda Pages home' })
-    const leaveReaderMode = page.getByRole('button', { name: 'Leave reader mode' })
+    const leaveReaderMode = page.getByRole('button', { name: 'Parent controls' })
     await expect(header).toHaveClass(/library-header--static/)
     expect(await header.evaluate((element) => getComputedStyle(element).position)).not.toBe(
       'sticky',
