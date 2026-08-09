@@ -708,7 +708,7 @@ test('owner can round-trip Manage profiles and Story Studio without entering rea
     page.getByRole('button', { name: /Story Studio/ }),
   ).toBeVisible()
   await expect(
-    page.getByRole('button', { name: 'Leave reader mode' }),
+    page.getByRole('button', { name: 'Parent controls' }),
   ).toHaveCount(0)
 
   await page.getByRole('button', { name: /Story Studio/ }).click()
@@ -731,7 +731,7 @@ test('owner can round-trip Manage profiles and Story Studio without entering rea
     page.getByRole('button', { name: 'Edit Mina' }),
   ).toBeVisible()
   await expect(
-    page.getByRole('button', { name: 'Leave reader mode' }),
+    page.getByRole('button', { name: 'Parent controls' }),
   ).toHaveCount(0)
   expect(api.unhandled).toEqual([])
 })

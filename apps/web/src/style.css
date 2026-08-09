@@ -216,6 +216,10 @@ html[data-reader-route-theme="true"] #app > div {
   background: var(--reader-control-pressed);
 }
 
+.reader-header-action--parent {
+  color: var(--reader-text-secondary);
+}
+
 .reader-header-action:disabled,
 .reader-status-retry:disabled {
   background: var(--reader-muted-control-surface);
