@@ -5,7 +5,8 @@ services:
     environment:
       POSTGRES_DB: pandapages
       POSTGRES_USER: pandapages
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must contain the administrative database credential}
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_password
+    secrets: [pg_password]
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -121,3 +122,7 @@ networks:
 volumes:
   pgdata: {}
   assets: {}
+
+secrets:
+  pg_password:
+    file: ./secrets/pg_password.txt
