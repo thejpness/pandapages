@@ -113,19 +113,6 @@ func TestReaderResolutionIntegration(t *testing.T) {
 		t.Fatalf("read Reader resolution story id: %v", err)
 	}
 
-	assertChooser := func(want []model.ReaderEditionKey) {
-		t.Helper()
-		resolution, err := store.ReaderResolve(accountID, profileID, slug)
-		if err != nil {
-			t.Fatalf("resolve chooser: %v", err)
-		}
-		if resolution.State != model.ReaderResolutionChooser ||
-			resolution.Story != nil ||
-			!reflect.DeepEqual(resolution.EligibleEditions, want) {
-			t.Fatalf("chooser resolution = %#v, want eligible %#v", resolution, want)
-		}
-	}
-
 	assertSelected := func(
 		wantEdition model.ReaderEditionKey,
 		wantEligible []model.ReaderEditionKey,
@@ -161,7 +148,7 @@ func TestReaderResolutionIntegration(t *testing.T) {
 		model.ReaderEditionStoryExplorers,
 		model.ReaderEditionLittleListeners,
 	}
-	assertChooser(growingEligible)
+	assertSelected(model.ReaderEditionGrowingReaders, growingEligible)
 
 	const locatorJSON = `{
 		"schema": 2,
@@ -238,7 +225,7 @@ func TestReaderResolutionIntegration(t *testing.T) {
 	`, accountID, profileID, storyID, versionIDByKey[model.ReaderEditionLittleListeners]); err != nil {
 		t.Fatalf("make Reader resolution progress stale: %v", err)
 	}
-	assertChooser([]model.ReaderEditionKey{
+	assertSelected(model.ReaderEditionGrowingReaders, []model.ReaderEditionKey{
 		model.ReaderEditionGrowingReaders,
 		model.ReaderEditionStoryExplorers,
 	})

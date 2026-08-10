@@ -1,5 +1,5 @@
 import { AxeBuilder } from '@axe-core/playwright'
-import { expect, test as base } from './support/auth'
+import { expect, fixtureAccessToken, test as base } from './support/auth'
 import type { Page, Route } from '@playwright/test'
 
 type ReaderEditionKeyFixture =
@@ -28,9 +28,9 @@ type LibraryStoryFixture = {
   title: string
   author: string | null
   language: string
-  state: 'selected' | 'chooser'
+  state: 'selected'
   eligibleEditions: LibraryEditionFixture[]
-  selectedEdition: ReaderEditionKeyFixture | null
+  selectedEdition: ReaderEditionKeyFixture
   progress: LibraryProgressFixture | null
 }
 
@@ -144,25 +144,6 @@ const UNAVAILABLE_PROGRESS_STORY: Omit<LibraryStoryFixture, 'progress'> = {
   state: 'selected',
   eligibleEditions: [edition('growing-readers', 1, 650, 2)],
   selectedEdition: 'growing-readers',
-}
-
-const CHOOSER_STORY: LibraryStoryFixture = {
-  slug: 'choose-the-moon',
-  title: 'Choose the Moon',
-  author: 'Panda Pages',
-  language: 'en-GB',
-  state: 'chooser',
-  eligibleEditions: [
-    edition('growing-readers', 3, 900, 3),
-    edition('little-listeners', 5, 350, 0),
-  ],
-  selectedEdition: null,
-  progress: {
-    version: 1,
-    percent: 0.55,
-    updatedAt: '2026-07-20T10:00:00Z',
-    isResolvedVersion: false,
-  },
 }
 
 const READY_STORIES: LibraryStoryFixture[] = [
@@ -656,29 +637,38 @@ test.describe('Library 2 bookshelf', () => {
     expect(api.count('GET', '/api/v1/continue')).toBe(0)
   })
 
-  test('chooser stories show edition ranges and never imply an automatic selection', async ({
-    page,
-    api,
-  }) => {
-    api.items = [CHOOSER_STORY]
-    await page.goto('/library')
 
-    const card = storyCard(page, CHOOSER_STORY.title)
-    await expect(card).toContainText('350–900 words')
-    await expect(card).toContainText('0–3 chapters')
-    await expect(card).toContainText('Story updated since you last read')
-    await expect(
-      card.getByRole('link', {
-        name: `Choose edition: ${CHOOSER_STORY.title}`,
-        exact: true,
-      }),
-    ).toBeVisible()
+  test("story covers share the Read action target and remain keyboard reachable", async ({ page }) => {
+    await page.goto("/library")
 
-    const hero = page.locator('.continue-card')
-    await expect(hero).toHaveAttribute(
-      'aria-label',
-      `Choose edition: ${CHOOSER_STORY.title}`,
-    )
+    const card = storyCard(page, CURRENT_STORY.title)
+    const cover = card.getByRole("link", {
+      name: "Open story: Moonlit Café",
+      exact: true,
+    })
+    const read = card.getByRole("link", {
+      name: "Continue at 42%: Moonlit Café",
+      exact: true,
+    })
+
+    await expect(cover).toHaveAttribute("href", "/read/moonlit-cafe")
+    await expect(read).toHaveAttribute("href", "/read/moonlit-cafe")
+    await cover.focus()
+    await expect(cover).toBeFocused()
+    await page.keyboard.press("Enter")
+    await expect(page).toHaveURL("/read/moonlit-cafe")
+  })
+
+  test("selecting a Library story enters Reader without an edition chooser", async ({ page }) => {
+    await page.goto("/library")
+
+    await storyCard(page, CURRENT_STORY.title).getByRole("link", {
+      name: "Continue at 42%: Moonlit Café",
+      exact: true,
+    }).click()
+
+    await expect(page).toHaveURL("/read/moonlit-cafe")
+    await expect(page.getByRole("dialog", { name: "Choose a story edition" })).toHaveCount(0)
   })
 
   test('missing or stale selected profiles return to explicit profile selection without a Library fallback', async ({
@@ -1060,9 +1050,10 @@ test.describe('Library 2 bookshelf', () => {
       .getByRole('searchbox', { name: 'Search the library' })
       .fill('Moon')
     await page.getByRole('button', { name: 'Parent controls' }).click()
-    await expectPath(page, '/profiles')
+    await page.getByRole('menuitem', { name: 'Manage profiles' }).click()
+    await expectPath(page, '/profiles/manage')
     await page.clock.fastForward(220)
-    await expectPath(page, '/profiles')
+    await expectPath(page, '/profiles/manage')
   })
 
   test('Library header Switch reader preserves reader state and its safe destination', async ({
@@ -1096,17 +1087,43 @@ test.describe('Library 2 bookshelf', () => {
     await expect.poll(() => page.evaluate((key) => window.localStorage.getItem(key), SELECTED_PROFILE_STORAGE_KEY)).toBe(tedID)
   })
 
-  test('Library header Parent controls enters the parent profile surface', async ({
+  test('Library header Parent controls exposes adult navigation without clearing the reader selection', async ({
     page,
   }) => {
     await gotoReadyLibrary(page)
     await page.getByRole('button', { name: 'Parent controls' }).click()
+    await expect(page.getByRole('menu', { name: 'Parent controls' })).toBeVisible()
+    await page.getByRole('menuitem', { name: 'Manage profiles' }).click()
 
-    await expectPath(page, '/profiles')
-    await expect(page.getByText('Selected reader', { exact: true })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Add profile' })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Manage profiles' })).toBeVisible()
+    await expectPath(page, '/profiles/manage')
+    await expect(page.getByRole('heading', { name: 'Manage profiles' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Who’s reading?' })).toBeVisible()
     await expect.poll(() => page.evaluate((key) => window.localStorage.getItem(key), SELECTED_PROFILE_STORAGE_KEY)).toBe(LIBRARY_PROFILE_ID)
+  })
+
+  test('Library parent controls sign out through the existing session action', async ({
+    page,
+  }) => {
+    await gotoReadyLibrary(page)
+    let logoutCalled = false
+    await page.route('https://auth.invalid/auth/v1/logout**', async (route) => {
+      expect(route.request().method()).toBe('POST')
+      expect(route.request().headers().authorization).toBe('Bearer ' + fixtureAccessToken)
+      logoutCalled = true
+      await route.fulfill({ status: 204 })
+    })
+
+    const parentControls = page.getByRole('button', { name: 'Parent controls' })
+    await parentControls.focus()
+    await page.keyboard.press('Enter')
+    await expect(parentControls).toHaveAttribute('aria-expanded', 'true')
+    const signOut = page.getByRole('menuitem', { name: 'Sign out of Panda Pages' })
+    await signOut.focus()
+    await page.keyboard.press('Enter')
+
+    await expect(page).toHaveURL('http://127.0.0.1:4173/account/login')
+    expect(logoutCalled).toBe(true)
+    await expect.poll(() => page.evaluate((key) => window.localStorage.getItem(key), SELECTED_PROFILE_STORAGE_KEY)).toBeNull()
   })
 
   test('pending search ownership is released for a public route link', async ({

@@ -178,6 +178,26 @@ test.describe('reader profile lifecycle', () => {
   test('manage lists profiles and preserves parent utilities', async ({ page }) => {
     const api = new ProfilesApiMock(page); api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false, reading_level: 'classic' }]; await api.install(); await page.goto('/profiles/manage'); await expect(page.getByRole('heading', { level: 1, name: 'Manage profiles' })).toBeVisible(); await expect(page.getByRole('button', { name: 'Edit Mina' })).toBeVisible(); await expect(page.getByRole('button', { name: 'Add profile' })).toBeVisible(); await expect(page.getByRole('button', { name: 'Story Studio' })).toBeVisible(); await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
   });
+  test('Manage profiles has an explicit return to the reader chooser', async ({ page }) => {
+    const api = new ProfilesApiMock(page)
+    api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false, reading_level: 'classic' }]
+    await api.install()
+    await page.addInitScript((accountID) => window.localStorage.setItem('pandapages.selected-account-id', accountID), fixtureAccountID)
+
+    await page.goto('/profiles/manage')
+    const returnToChooser = page.getByRole('button', { name: 'Who’s reading?' })
+    await expect(returnToChooser).toBeVisible()
+    await expect(returnToChooser).toHaveAttribute('type', 'button')
+    await expect(returnToChooser).toHaveClass(/profile-manage__back/)
+
+    await returnToChooser.click()
+
+    await expect(page).toHaveURL('http://127.0.0.1:4173/profiles')
+    await expect(page.getByRole('heading', { name: 'Who’s reading?' })).toBeVisible()
+
+    await expect.poll(() => page.evaluate(() => window.localStorage.getItem('pandapages.selected-account-id'))).toBe(fixtureAccountID)
+  })
+
   test('edit supports rename, level, PIN controls, and exact deletion cleanup', async ({ page }) => {
     const api = new ProfilesApiMock(page); api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false, reading_level: 'classic' }]; await api.install(); await page.addInitScript((id) => window.localStorage.setItem('pandapages.selected-reader-profile-id', id), fixtureProfileID); await page.goto(`/profiles/${fixtureProfileID}/edit`); await page.getByLabel('Reader name').fill('Theo'); await page.getByLabel('Reading level').selectOption('little-listeners'); await page.getByRole('button', { name: 'Save profile' }).click(); await expect(page).toHaveURL('/profiles/manage'); await page.getByRole('button', { name: 'Edit Theo' }).click(); await page.getByRole('button', { name: 'Set PIN' }).click(); await page.getByLabel('Four-digit PIN').fill('1234'); await page.getByRole('button', { name: 'Save PIN' }).click(); await expect(page.getByRole('button', { name: 'Remove PIN' })).toBeVisible(); await page.getByRole('button', { name: 'Delete profile' }).click(); await page.getByRole('alertdialog').getByRole('button', { name: 'Delete profile' }).click(); await expect(page).toHaveURL('/profiles/manage'); await expect.poll(() => page.evaluate(() => window.localStorage.getItem('pandapages.selected-reader-profile-id'))).toBeNull();
   });

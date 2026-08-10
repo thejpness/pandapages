@@ -2,11 +2,14 @@
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import PandaAuthShell from '../components/app/PandaAuthShell.vue'
-import { clearSelectedAccount, selectAccount } from '../lib/account-context'
 import {
-	loadIdentity,
-	restoreSupabaseSession,
-  signOutSupabaseSession,
+  reconcileAccountMembership,
+  selectAccount,
+} from '../lib/account-context'
+import { logout as logoutSession } from '../lib/api'
+import {
+  loadIdentity,
+  restoreSupabaseSession,
   type AuthenticatedIdentity,
 } from '../lib/supabase-auth'
 
@@ -16,8 +19,21 @@ const errorMessage = ref('')
 const busy = ref(true)
 
 function chooseAccount(accountID: string) {
-	selectAccount(accountID)
-	void router.replace('/profiles')
+  selectAccount(accountID)
+  void router.replace('/profiles')
+}
+
+async function signOut() {
+  if (busy.value) return
+  busy.value = true
+  errorMessage.value = ''
+  try {
+    await logoutSession()
+    await router.replace('/account/login')
+  } catch {
+    errorMessage.value = 'Sign-out could not be completed. Try again.'
+    busy.value = false
+  }
 }
 
 onMounted(async () => {
@@ -27,7 +43,14 @@ onMounted(async () => {
       await router.replace('/account/login')
       return
     }
-    identity.value = await loadIdentity(session.access_token)
+    const loadedIdentity = await loadIdentity(session.access_token)
+    const membership = reconcileAccountMembership(loadedIdentity.memberships)
+    if (membership !== null) {
+      selectAccount(membership.accountId)
+      await router.replace('/profiles')
+      return
+    }
+    identity.value = loadedIdentity
   } catch {
     errorMessage.value = 'Your Panda Pages identity could not be loaded.'
   } finally {
@@ -35,19 +58,6 @@ onMounted(async () => {
   }
 })
 
-async function signOut() {
-  if (busy.value) return
-  busy.value = true
-  errorMessage.value = ''
-  try {
-		clearSelectedAccount()
-    await signOutSupabaseSession()
-    await router.replace('/account/login')
-  } catch {
-    errorMessage.value = 'Sign-out could not be completed. Try again.'
-    busy.value = false
-  }
-}
 </script>
 
 <template>

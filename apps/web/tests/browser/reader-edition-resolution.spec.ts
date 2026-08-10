@@ -8,7 +8,7 @@ import { gotoReader, scrollToSegment } from './support/reader-page'
 import { fixtureProfileID } from './support/auth'
 
 test.describe('Reader edition resolution', () => {
-  test('multiple eligible editions require an explicit chooser before story content initializes', async ({
+  test('multiple eligible editions open directly with the backend profile default', async ({
     page,
     api,
   }) => {
@@ -24,16 +24,26 @@ test.describe('Reader edition resolution', () => {
 
     await page.goto(`/read/${READER_SLUG}`)
 
-    const chooser = page.getByRole('dialog', { name: 'Choose a story edition' })
-    await expect(chooser).toBeVisible()
-    await expect(page.locator('[data-reader-scroll-view], [data-reader-paged-view]')).toHaveCount(0)
-
-    await chooser.getByRole('button', { name: /Little Listeners/ }).click()
-
+    await expect(page.getByRole('heading', { level: 1, name: classic.title })).toBeVisible()
+    await expect(page.getByRole('dialog', { name: 'Choose a story edition' })).toHaveCount(0)
+    expect(api.count('GET', `/api/v1/reader-resolution/${READER_SLUG}`)).toBe(1)
+    expect(api.count('PUT', `/api/v1/reader-edition/${READER_SLUG}`)).toBe(0)
+    await page.getByRole('button', { name: 'Reading settings' }).click()
+    const settings = page.getByRole('dialog', { name: 'Reading settings' })
+    const storyEdition = settings.getByRole('button', { name: /Story edition/ })
+    await expect(storyEdition).toHaveAttribute('aria-expanded', 'false')
+    await expect(storyEdition).toHaveAttribute('aria-controls', 'reader-story-edition-options')
+    await expect(settings.getByRole('button', { name: /Little Listeners/ })).toHaveCount(0)
+    await storyEdition.click()
+    await expect(storyEdition).toHaveAttribute('aria-expanded', 'true')
+    await expect(settings.getByRole('button', { name: /Story Explorers/ })).toHaveCount(0)
+    await storyEdition.click()
+    await expect(storyEdition).toHaveAttribute('aria-expanded', 'false')
+    await storyEdition.click()
+    await expect(storyEdition).toHaveAttribute('aria-expanded', 'true')
+    await expect(settings.getByRole('region', { name: 'Story edition' })).toBeVisible()
+    await settings.getByRole('button', { name: /Little Listeners/ }).click()
     await expect(page.getByRole('heading', { level: 1, name: listeners.title })).toBeVisible()
-    await expect(chooser).toBeHidden()
-    expect(api.count('GET', `/api/v1/reader-resolution/${READER_SLUG}`)).toBe(2)
-    expect(api.count('PUT', `/api/v1/reader-edition/${READER_SLUG}`)).toBe(1)
     const editionWrite = api.requests.find(
       (request) =>
         request.method === 'PUT' &&
@@ -41,6 +51,13 @@ test.describe('Reader edition resolution', () => {
     )
     expect(editionWrite?.profileID).toBe(fixtureProfileID)
     expect(editionWrite?.body).toEqual({ editionKey: 'little-listeners' })
+
+    expect(api.count('PUT', `/api/v1/reader-edition/${READER_SLUG}`)).toBe(1)
+
+    await page.goto(`/read/${READER_SLUG}`)
+    await expect(page.getByRole('heading', { level: 1, name: listeners.title })).toBeVisible()
+    expect(api.count('PUT', `/api/v1/reader-edition/${READER_SLUG}`)).toBe(1)
+
     expect(api.legacyRequests).toEqual([])
   })
 
@@ -64,8 +81,11 @@ test.describe('Reader edition resolution', () => {
 
     const settings = page.getByRole('dialog', { name: 'Reading settings' })
     await expect(settings).toContainText('This story is currently using Classic')
+    const storyEdition = settings.getByRole('button', { name: /Story edition/ })
+    await expect(storyEdition).toHaveAttribute('aria-expanded', 'false')
+    await storyEdition.click()
+    await expect(storyEdition).toHaveAttribute('aria-expanded', 'true')
     await settings.getByRole('button', { name: /Little Listeners/ }).click()
-
     await expect(page.getByRole('dialog', { name: 'Story updated' })).toBeVisible()
     expect(api.count('PUT', `/api/v1/progress/${READER_SLUG}`)).toBeGreaterThanOrEqual(1)
     expect(api.count('PUT', `/api/v1/reader-edition/${READER_SLUG}`)).toBe(1)

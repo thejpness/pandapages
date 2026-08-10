@@ -12,9 +12,6 @@ function story(overrides = {}) {
 function selectedWithWordCount(slug, title, wordCount, extraEligible = []) {
   return story({ slug, title, eligibleEditions: [edition({ wordCount }), ...extraEligible], selectedEdition: 'growing-readers' })
 }
-function chooser(slug, title, counts) {
-  return story({ slug, title, state: 'chooser', selectedEdition: null, eligibleEditions: counts.map((wordCount, index) => edition({ editionKey: index === 0 ? 'growing-readers' : 'little-listeners', version: index + 1, wordCount })) })
-}
 function progress(updatedAt) { return { version: 2, percent: 0.42, updatedAt, isResolvedVersion: true } }
 function slugs(stories) { return stories.map((item) => item.slug) }
 
@@ -26,16 +23,15 @@ test('search matches title, author, and hidden slug fallback without mutating in
   assert.deepEqual(module.filterLibraryStories(stories, 'missing'), [])
 })
 
-test('sort uses selected exact length and chooser bounds without inventing an edition', async () => {
+test('sort uses the exact resolved edition length', async () => {
   const module = await sorting()
   const stories = [
     selectedWithWordCount('selected-long', 'Selected Long', 1000, [edition({ editionKey: 'little-listeners', version: 3, wordCount: 100 })]),
-    chooser('chooser-wide', 'Chooser Wide', [300, 900]),
-    chooser('chooser-narrow', 'Chooser Narrow', [300, 600]),
+    selectedWithWordCount('resolved-medium', 'Resolved Medium', 300, [edition({ editionKey: 'little-listeners', version: 3, wordCount: 900 })]),
     selectedWithWordCount('selected-short', 'Selected Short', 200),
   ]
-  assert.deepEqual(slugs(module.sortLibraryStories(stories, 'shortest')), ['selected-short', 'chooser-narrow', 'chooser-wide', 'selected-long'])
-  assert.deepEqual(slugs(module.sortLibraryStories(stories, 'longest')), ['selected-long', 'chooser-wide', 'chooser-narrow', 'selected-short'])
+  assert.deepEqual(slugs(module.sortLibraryStories(stories, 'shortest')), ['selected-short', 'resolved-medium', 'selected-long'])
+  assert.deepEqual(slugs(module.sortLibraryStories(stories, 'longest')), ['selected-long', 'resolved-medium', 'selected-short'])
 })
 
 test('recent/title ordering and sort preference persistence remain deterministic', async () => {

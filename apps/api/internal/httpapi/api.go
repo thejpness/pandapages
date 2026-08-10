@@ -154,8 +154,8 @@ func New(cfg Config, store Store) http.Handler {
 	}))
 
 	// Reader release resolution is profile scoped and is the sole public Reader
-	// content route. It returns either one exact immutable selected edition or a
-	// finite chooser without story content.
+	// content route. It returns one exact immutable edition selected by the
+	// authoritative profile resolver.
 	mux.HandleFunc("/api/v1/reader-resolution/", withBearerProfile(func(w http.ResponseWriter, r *http.Request, profile httpprofile.Context) {
 		if r.Method != http.MethodGet {
 			methodNotAllowed(w, []string{http.MethodGet})

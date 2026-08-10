@@ -69,7 +69,6 @@ function progressDetails(input: ProgressInput): ProgressDetails {
 }
 
 function selectedLibraryEdition(story: LibraryStory): LibraryEditionSummary | null {
-  if (story.state !== 'selected' || story.selectedEdition === null) return null
   return (
     story.eligibleEditions.find(
       (edition) => edition.editionKey === story.selectedEdition,
@@ -85,7 +84,7 @@ function bounds(values: readonly number[]): LibraryCountBounds {
 export function libraryWordCountBounds(story: LibraryStory): LibraryCountBounds {
   const selected = selectedLibraryEdition(story)
   if (selected !== null) return { min: selected.wordCount, max: selected.wordCount }
-  return bounds(story.eligibleEditions.map((edition) => edition.wordCount))
+  return bounds([])
 }
 
 export function libraryChapterCountBounds(story: LibraryStory): LibraryCountBounds {
@@ -93,7 +92,7 @@ export function libraryChapterCountBounds(story: LibraryStory): LibraryCountBoun
   if (selected !== null) {
     return { min: selected.chapterCount, max: selected.chapterCount }
   }
-  return bounds(story.eligibleEditions.map((edition) => edition.chapterCount))
+  return bounds([])
 }
 
 export function libraryDisplayPercent(input: ProgressInput): number {
@@ -120,9 +119,6 @@ export function classifyLibraryProgress(
 }
 
 export function libraryActionLabel(input: ProgressInput): string {
-  if (input !== null && 'state' in input && input.state === 'chooser') {
-    return 'Choose edition'
-  }
   const { progress } = progressDetails(input)
   const kind = classifyLibraryProgress(input)
   if (kind === 'in-progress' && progress !== null) {

@@ -13,6 +13,13 @@ onMounted(async()=>{try{await refresh();}catch(error){errorMessage.value=error i
 </script>
 <template>
   <PandaAuthShell eyebrow="Parent area" title="Manage profiles" description="Update reader settings without starting a reading session.">
+    <template #navigation>
+      <nav class="profile-manage__return" aria-label="Profile navigation">
+        <button class="profile-manage__back" type="button" @click="router.push('/profiles')">
+          <span aria-hidden="true">←</span> Who’s reading?
+        </button>
+      </nav>
+    </template>
     <div class="profile-manage">
       <p v-if="loading" class="profile-manage__state" role="status">Loading profiles…</p>
       <p v-else-if="errorMessage" class="profile-manage__state profile-manage__state--error" role="alert">
@@ -55,7 +62,6 @@ onMounted(async()=>{try{await refresh();}catch(error){errorMessage.value=error i
             </li>
           </ul>
 
-          <button class="profile-manage__back" type="button" @click="router.push('/profiles')">Back to Who’s reading?</button>
         </section>
 
         <section class="profile-manage__account" aria-labelledby="account-heading">
@@ -83,6 +89,7 @@ onMounted(async()=>{try{await refresh();}catch(error){errorMessage.value=error i
 </template>
 
 <style scoped>
+.profile-manage__return { display: flex; }
 .profile-manage { display: grid; gap: 2rem; }
 .profile-manage__section,
 .profile-manage__account { display: grid; gap: 1rem; }
@@ -103,7 +110,7 @@ onMounted(async()=>{try{await refresh();}catch(error){errorMessage.value=error i
 .profile-manage__back { min-height: 2.75rem; border: 1px solid var(--panda-ink); border-radius: var(--panda-radius-compact); padding: 0.58rem 0.9rem; background: var(--panda-paper-raised); color: var(--panda-ink); font: inherit; font-weight: 800; line-height: 1.15; }
 .profile-manage__button--primary { background: var(--panda-ink); color: var(--panda-white); white-space: nowrap; }
 .profile-manage__button--primary span { margin-right: 0.18rem; font-size: 1.15em; }
-.profile-manage__back { width: fit-content; border-color: transparent; padding-inline: 0; background: transparent; text-decoration: underline; text-underline-offset: 0.2em; }
+.profile-manage__back { display: inline-flex; width: fit-content; align-items: center; gap: 0.45rem; border-color: var(--panda-line-strong); background: var(--panda-white); text-decoration: none; box-shadow: var(--panda-shadow-soft); }
 .profile-manage__empty,
 .profile-manage__state { margin: 0; border: 1px dashed var(--panda-line-strong); border-radius: var(--panda-radius-compact); padding: 1rem; color: var(--panda-muted); line-height: 1.5; }
 .profile-manage__state--error { border-style: solid; border-color: var(--panda-danger); background: var(--panda-danger-surface); color: var(--panda-danger); font-weight: 750; }

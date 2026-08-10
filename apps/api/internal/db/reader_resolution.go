@@ -292,16 +292,6 @@ func (s *Store) ReaderResolve(
 	case readerresolution.DecisionUnavailable:
 		return model.ReaderResolution{}, sql.ErrNoRows
 
-	case readerresolution.DecisionChooser:
-		if err := tx.Commit(); err != nil {
-			return model.ReaderResolution{}, err
-		}
-		return model.ReaderResolution{
-			State:            model.ReaderResolutionChooser,
-			EligibleEditions: eligible,
-			Story:            nil,
-		}, nil
-
 	case readerresolution.DecisionSelected:
 		if decision.Selected == nil {
 			return model.ReaderResolution{}, fmt.Errorf("Reader resolver selected no edition")

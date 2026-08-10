@@ -45,6 +45,12 @@ function tokenResponse(provider: 'google' | 'facebook') {
   }
 }
 
+async function installOfficialSession(page: Page, provider: "google" | "facebook" = "google"): Promise<void> {
+  await page.addInitScript((value) => {
+    window.localStorage.setItem("sb-auth-auth-token", JSON.stringify(value))
+  }, tokenResponse(provider))
+}
+
 async function expectNoSeriousOrCriticalViolations(page: Page): Promise<void> {
   await page.evaluate(async () => {
     await document.fonts.ready
@@ -60,10 +66,9 @@ async function expectNoSeriousOrCriticalViolations(page: Page): Promise<void> {
 }
 
 for (const provider of ['google', 'facebook'] as const) {
-  test(`official ${provider} PKCE callback onboards with bearer only, restores identity, and logs out`, async ({ page }) => {
+  test(`official ${provider} PKCE callback onboards with bearer only and skips one-account selection`, async ({ page }) => {
   let authorizeURL: URL | undefined
   let tokenExchange = false
-  let logoutCalled = false
   const authRequests: Array<{ method: string; authorization: string; cookie: string }> = []
 
   await page.route('https://auth.invalid/**', async (route) => {
@@ -82,13 +87,6 @@ for (const provider of ['google', 'facebook'] as const) {
       expect(body).toContain('code_verifier')
       tokenExchange = true
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(tokenResponse(provider)) })
-      return
-    }
-    if (url.pathname === '/auth/v1/logout') {
-      expect(request.method()).toBe('POST')
-      expect(request.headers().authorization).toBe(`Bearer ${accessToken}`)
-      logoutCalled = true
-      await route.fulfill({ status: 204 })
       return
     }
     await route.abort('blockedbyclient')
@@ -134,26 +132,88 @@ for (const provider of ['google', 'facebook'] as const) {
   expect(authorizeURL?.searchParams.get('redirect_to')).toBe('http://127.0.0.1:4173/auth/callback')
 
   await page.goto('/auth/callback?code=auth-code-fixture')
-  await expect(page).toHaveURL(/\/account$/)
-  await expect(page.getByRole('heading', { name: 'Choose an account' })).toBeVisible()
-  await expect(page.getByText('My Panda Pages')).toBeVisible()
-  await expect(page.getByText('Your account choice is checked against current memberships on every request.')).toBeVisible()
+  await expect(page).toHaveURL(/\/profiles$/)
+  await expect(page.getByRole('heading', { name: 'Who’s reading?' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Choose an account' })).toHaveCount(0)
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem('pandapages.selected-account-id'))).toBe(identityResponse.memberships[0]?.accountId)
   expect(tokenExchange).toBe(true)
-  expect(authRequests).toHaveLength(2)
-  expect(authRequests.map((request) => request.method)).toEqual(['POST', 'GET'])
+  expect(authRequests).toHaveLength(4)
+  expect(authRequests.map((request) => request.method)).toEqual(['POST', 'GET', 'GET', 'GET'])
   for (const request of authRequests) {
     expect(request.authorization).toBe(`Bearer ${accessToken}`)
     expect(request.cookie).toBe('')
   }
 
-  await page.getByRole('button', { name: 'Sign out' }).click()
-  await expect(page).toHaveURL(/\/account\/login$/)
+  })
+}
+
+const secondAccountID = "123e4567-e89b-12d3-a456-426614174201"
+
+test("account chooser remains for multiple memberships and selected choice is persisted", async ({ page }) => {
+  const memberships = [
+    ...identityResponse.memberships,
+    { accountId: secondAccountID, accountName: "Second Panda Pages", role: "owner" },
+  ]
+  await installOfficialSession(page)
+  await page.route("**/api/auth/me", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...identityResponse, memberships }) })
+  })
+
+  await page.goto("/account")
+  await expect(page).toHaveURL('http://127.0.0.1:4173/account')
+  await expect(page.getByRole("heading", { name: "Choose an account" })).toBeVisible()
+  await expect(page.getByText("My Panda Pages", { exact: true })).toBeVisible()
+  await expect(page.getByText("Second Panda Pages", { exact: true })).toBeVisible()
+
+  await page.getByRole("button", { name: "Choose" }).nth(1).click()
+  await expect(page).toHaveURL('http://127.0.0.1:4173/profiles')
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("pandapages.selected-account-id"))).toBe(secondAccountID)
+})
+
+test("account chooser sign-out clears the official session", async ({ page }) => {
+  await installOfficialSession(page)
+  const memberships = [
+    ...identityResponse.memberships,
+    { accountId: secondAccountID, accountName: "Second Panda Pages", role: "owner" },
+  ]
+  await page.route("**/api/auth/me", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...identityResponse, memberships }) })
+  })
+  let logoutCalled = false
+  await page.route("https://auth.invalid/auth/v1/logout**", async (route) => {
+    expect(route.request().method()).toBe("POST")
+    expect(route.request().headers().authorization).toBe(`Bearer ${accessToken}`)
+    logoutCalled = true
+    await route.fulfill({ status: 204 })
+  })
+
+  await page.goto("/account")
+  await page.getByRole("button", { name: "Sign out" }).click()
+  await expect(page).toHaveURL('http://127.0.0.1:4173/account/login')
   expect(logoutCalled).toBe(true)
   const stored = await page.evaluate(() => JSON.stringify(window.localStorage))
   expect(stored).not.toContain(accessToken)
   expect(stored).not.toContain(refreshToken)
+})
+
+test("a stale account selection is cleared and cannot bypass current memberships", async ({ page }) => {
+  await installOfficialSession(page)
+  await page.addInitScript(() => {
+    window.localStorage.setItem("pandapages.selected-account-id", "123e4567-e89b-12d3-a456-426614174299")
   })
-}
+  const memberships = [
+    ...identityResponse.memberships,
+    { accountId: secondAccountID, accountName: "Second Panda Pages", role: "owner" },
+  ]
+  await page.route("**/api/auth/me", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...identityResponse, memberships }) })
+  })
+
+  await page.goto("/account")
+  await expect(page).toHaveURL('http://127.0.0.1:4173/account')
+  await expect(page.getByRole("heading", { name: "Choose an account" })).toBeVisible()
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("pandapages.selected-account-id"))).toBeNull()
+})
 
 test('login keeps one provider launch pending at a time', async ({ page }) => {
   await page.addInitScript(() => {

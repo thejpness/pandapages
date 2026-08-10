@@ -19,13 +19,14 @@ const emit = defineEmits<{
   surprise: []
   switch: []
   lock: []
-  'leave-child': []
+  manage: []
   'sticky-offset': [height: number]
 }>()
 
 const searchInput = ref<HTMLInputElement | null>(null)
 const headerRoot = ref<HTMLElement | null>(null)
 const stickyHeader = ref(true)
+const accountMenuOpen = ref(false)
 
 let headerObserver: ResizeObserver | null = null
 const qModel = computed({
@@ -46,6 +47,15 @@ async function clearSearch() {
 function focusSearch() {
   searchInput.value?.focus()
 }
+
+function toggleAccountMenu() {
+  accountMenuOpen.value = !accountMenuOpen.value
+}
+
+function closeAccountMenu() {
+  accountMenuOpen.value = false
+}
+
 
 function updateStickyHeader() {
   if (headerRoot.value === null) return
@@ -97,26 +107,43 @@ defineExpose({ focusSearch })
           >
             Switch reader
           </button>
-          <button
+          <div
             v-if="childMode"
-            class="header-button header-button--quiet"
-            type="button"
-            @click="emit('leave-child')"
+            class="library-account-control"
+            @keydown.esc="closeAccountMenu"
           >
-            <span aria-hidden="true">‹</span>
-            Parent controls
-          </button>
-          <button
-            v-else
-            class="header-button header-button--ink"
-            type="button"
-            :disabled="locking"
-            aria-label="Sign out of Panda Pages"
-            @click="emit('lock')"
-          >
-            <span aria-hidden="true">▣</span>
-            {{ locking ? 'Signing out…' : 'Sign out' }}
-          </button>
+            <button
+              class="header-button header-button--quiet"
+              type="button"
+              aria-controls="library-parent-controls"
+              aria-haspopup="menu"
+              :aria-expanded="accountMenuOpen"
+              @click="toggleAccountMenu"
+            >
+              <span aria-hidden="true">‹</span>
+              <span class="header-button__label">Parent controls</span>
+            </button>
+            <div
+              v-if="accountMenuOpen"
+              id="library-parent-controls"
+              class="library-account-menu"
+              role="menu"
+              aria-label="Parent controls"
+            >
+              <button type="button" role="menuitem" @click="emit('manage'); closeAccountMenu()">
+                Manage profiles
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                :disabled="locking"
+                aria-label="Sign out of Panda Pages"
+                @click="emit('lock'); closeAccountMenu()"
+              >
+                {{ locking ? 'Signing out…' : 'Sign out' }}
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -380,6 +407,12 @@ defineExpose({ focusSearch })
 .surprise-button {
   flex: 0 0 auto;
 }
+
+.library-account-control { position: relative; }
+.library-account-menu { position: absolute; z-index: 1; top: calc(100% + 0.45rem); right: 0; display: grid; min-width: max-content; gap: 0.15rem; border: 1px solid var(--library-line-strong); border-radius: var(--panda-radius-compact); padding: 0.35rem; background: var(--library-white); box-shadow: var(--panda-shadow-soft); }
+.library-account-menu button { min-height: 2.75rem; border: 0; border-radius: calc(var(--panda-radius-compact) - 0.2rem); padding: 0.55rem 0.75rem; background: transparent; color: var(--library-ink); font: inherit; font-size: 0.84rem; font-weight: 800; text-align: left; cursor: pointer; }
+.library-account-menu button:hover:not(:disabled) { background: var(--library-mist); }
+.library-account-menu button:disabled { cursor: not-allowed; opacity: 0.5; }
 
 .library-result-label {
   min-height: 1rem;

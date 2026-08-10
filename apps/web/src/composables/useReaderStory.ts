@@ -20,7 +20,6 @@ export type UseReaderStoryOptions = {
 export function useReaderStory(options: UseReaderStoryOptions) {
   const story = shallowRef<ReaderResolvedStoryPayload | null>(null)
   const eligibleEditions = shallowRef<readonly ReaderEditionKey[]>([])
-  const chooser = shallowRef<readonly ReaderEditionKey[] | null>(null)
   const editionBusy = ref(false)
   const contentState = ref<ReaderContentState>({ status: 'loading' })
   const loads = createReaderLoadGeneration()
@@ -32,21 +31,9 @@ export function useReaderStory(options: UseReaderStoryOptions) {
   ): Promise<void> {
     if (!loads.isCurrent(generation)) return
     eligibleEditions.value = resolution.eligibleEditions
-
-    if (resolution.state === 'chooser') {
-      story.value = null
-      chooser.value = resolution.eligibleEditions
-      contentState.value = { status: 'ready' }
-      document.title = 'Choose a story edition · Panda Pages'
-      await nextTick()
-      return
-    }
-
     if (resolution.story.slug !== slug) {
       throw new Error('Reader response slug mismatch')
     }
-
-    chooser.value = null
     story.value = resolution.story
     contentState.value = { status: 'ready' }
     document.title = resolution.story.title + ' · Panda Pages'
@@ -66,7 +53,6 @@ export function useReaderStory(options: UseReaderStoryOptions) {
       return
     }
     story.value = null
-    chooser.value = null
     eligibleEditions.value = []
     contentState.value = readerContentFailure(getAPIErrorStatus(error))
     await nextTick()
@@ -75,7 +61,6 @@ export function useReaderStory(options: UseReaderStoryOptions) {
   async function load(slug: string, profileID: string): Promise<void> {
     const token = loads.begin()
     story.value = null
-    chooser.value = null
     eligibleEditions.value = []
     contentState.value = { status: 'loading' }
 
@@ -95,7 +80,6 @@ export function useReaderStory(options: UseReaderStoryOptions) {
     const token = loads.begin()
     editionBusy.value = true
     story.value = null
-    chooser.value = null
     contentState.value = { status: 'loading' }
 
     try {
@@ -130,7 +114,6 @@ export function useReaderStory(options: UseReaderStoryOptions) {
   function dispose() {
     loads.cancel()
     story.value = null
-    chooser.value = null
     eligibleEditions.value = []
     editionBusy.value = false
   }
@@ -138,7 +121,6 @@ export function useReaderStory(options: UseReaderStoryOptions) {
   return {
     story,
     eligibleEditions,
-    chooser,
     editionBusy,
     contentState,
     load,

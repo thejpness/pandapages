@@ -182,10 +182,11 @@ func TestReaderLibraryIntegration(t *testing.T) {
 	library, item := loadItem()
 	if library.UnavailableItemCount != 0 ||
 		item == nil ||
-		item.State != model.ReaderResolutionChooser ||
-		item.SelectedEdition != nil ||
+		item.State != model.ReaderResolutionSelected ||
+		item.SelectedEdition == nil ||
+		*item.SelectedEdition != model.ReaderEditionGrowingReaders ||
 		item.Progress != nil {
-		t.Fatalf("initial Reader Library chooser = %#v / %#v", library, item)
+		t.Fatalf("initial Reader Library profile default = %#v / %#v", library, item)
 	}
 	assertEligible(item, growingEligible)
 
@@ -283,12 +284,13 @@ func TestReaderLibraryIntegration(t *testing.T) {
 	}
 	_, item = loadItem()
 	if item == nil ||
-		item.State != model.ReaderResolutionChooser ||
-		item.SelectedEdition != nil ||
+		item.State != model.ReaderResolutionSelected ||
+		item.SelectedEdition == nil ||
+		*item.SelectedEdition != model.ReaderEditionGrowingReaders ||
 		item.Progress == nil ||
 		item.Progress.Version != versionByKey[model.ReaderEditionLittleListeners] ||
 		item.Progress.IsResolvedVersion {
-		t.Fatalf("stale-progress Reader Library chooser = %#v", item)
+		t.Fatalf("stale-progress Reader Library profile default = %#v", item)
 	}
 
 	release(

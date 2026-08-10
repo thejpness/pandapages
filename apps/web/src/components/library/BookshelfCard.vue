@@ -23,31 +23,36 @@ const actionLabel = computed(() => libraryActionLabel(props.story))
 const lengthLabel = computed(() => libraryLengthLabel(props.story))
 const chapterLabel = computed(() => libraryChapterLabel(props.story))
 const titleId = computed(() => `bookshelf-card-title-${props.story.slug}`)
+const storyTarget = computed(() => `/read/${encodeURIComponent(props.story.slug)}`)
 </script>
 
 <template>
   <article class="bookshelf-card" :aria-labelledby="titleId">
-    <div
-      class="bookshelf-card__read"
-    >
-      <span
-        class="story-cover"
-        :class="`story-cover--${cover.pattern}`"
-        :style="{
-          '--cover-background': cover.background,
-          '--cover-accent': cover.accent,
-          '--cover-ink': cover.ink,
-        }"
-        aria-hidden="true"
+    <div class="bookshelf-card__read">
+      <RouterLink
+        class="bookshelf-card__cover-link"
+        :to="storyTarget"
+        :aria-label="'Open story: ' + story.title"
       >
-        <i class="story-cover__spine"></i>
-        <i class="story-cover__pattern"></i>
-        <span class="story-cover__label">
-          <small>Panda Pages</small>
-          <strong>{{ cover.initials }}</strong>
+        <span
+          class="story-cover"
+          :class="`story-cover--${cover.pattern}`"
+          :style="{
+            '--cover-background': cover.background,
+            '--cover-accent': cover.accent,
+            '--cover-ink': cover.ink,
+          }"
+          aria-hidden="true"
+        >
+          <i class="story-cover__spine"></i>
+          <i class="story-cover__pattern"></i>
+          <span class="story-cover__label">
+            <small>Panda Pages</small>
+            <strong>{{ cover.initials }}</strong>
+          </span>
+          <span class="story-cover__corner">✦</span>
         </span>
-        <span class="story-cover__corner">✦</span>
-      </span>
+      </RouterLink>
 
       <span class="bookshelf-card__copy">
         <span class="bookshelf-card__kicker">Story</span>
@@ -78,7 +83,7 @@ const titleId = computed(() => `bookshelf-card-title-${props.story.slug}`)
     <div class="bookshelf-card__footer">
       <RouterLink
         class="bookshelf-card__action"
-        :to="`/read/${encodeURIComponent(story.slug)}`"
+        :to="storyTarget"
         :aria-label="`${actionLabel}: ${story.title}`"
       >
         {{ actionLabel }}
@@ -95,7 +100,6 @@ const titleId = computed(() => `bookshelf-card-title-${props.story.slug}`)
     </div>
   </article>
 </template>
-
 <style scoped>
 .bookshelf-card {
   display: grid;
@@ -115,6 +119,17 @@ const titleId = computed(() => `bookshelf-card-title-${props.story.slug}`)
   padding: 1rem 1rem 0.9rem;
   color: inherit;
   text-decoration: none;
+}
+
+.bookshelf-card__cover-link {
+  display: block;
+  min-width: 0;
+  border-radius: 0.45rem 0.85rem 0.85rem 0.45rem;
+}
+
+.bookshelf-card__cover-link:focus-visible {
+  outline: 3px solid var(--library-focus, var(--panda-focus));
+  outline-offset: 0.22rem;
 }
 
 .story-cover {
@@ -341,7 +356,7 @@ const titleId = computed(() => `bookshelf-card-title-${props.story.slug}`)
     box-shadow: 0 0.8rem 2rem rgba(17, 17, 15, 0.1);
   }
 
-  .bookshelf-card__read:hover .story-cover {
+  .bookshelf-card__cover-link:hover .story-cover {
     transform: rotate(-1deg);
   }
 }

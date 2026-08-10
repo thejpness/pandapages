@@ -420,9 +420,9 @@ function switchReader() {
   void router.push({ path: "/profiles", query: { next: resolveReaderDestination(route.fullPath) } })
 }
 
-function leaveReaderMode() {
+function manageProfiles() {
   leaveChildMode()
-  void router.push('/profiles')
+  void router.push("/profiles/manage")
 }
 </script>
 
@@ -444,7 +444,7 @@ function leaveReaderMode() {
       @surprise="goSurprise"
       @switch="switchReader"
       @lock="lockLibrary"
-      @leave-child="leaveReaderMode"
+      @manage="manageProfiles"
       @sticky-offset="setStickyHeaderOffset"
     />
 

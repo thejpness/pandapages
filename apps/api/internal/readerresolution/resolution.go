@@ -12,15 +12,15 @@ type DecisionKind string
 const (
 	DecisionUnavailable DecisionKind = "unavailable"
 	DecisionSelected    DecisionKind = "selected"
-	DecisionChooser     DecisionKind = "chooser"
 )
 
 type SelectionSource string
 
 const (
-	SelectionOverride     SelectionSource = "override"
-	SelectionProgress     SelectionSource = "progress"
-	SelectionOnlyEligible SelectionSource = "only_eligible"
+	SelectionOverride       SelectionSource = "override"
+	SelectionProgress       SelectionSource = "progress"
+	SelectionOnlyEligible   SelectionSource = "only_eligible"
+	SelectionProfileDefault SelectionSource = "profile_default"
 )
 
 type ReleaseEdition struct {
@@ -159,8 +159,11 @@ func Resolve(input Input) (Decision, error) {
 		}, nil
 	}
 
+	selected := eligible[0]
 	return Decision{
-		Kind:     DecisionChooser,
+		Kind:     DecisionSelected,
+		Selected: &selected,
+		Source:   SelectionProfileDefault,
 		Eligible: eligible,
 	}, nil
 }

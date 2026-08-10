@@ -23,6 +23,7 @@ test.describe('Reader context controls', () => {
     ).toHaveCount(0)
     await expect(page.getByRole('link', { name: 'Privacy', exact: true })).toHaveCount(0)
     await expect(page.getByRole('link', { name: 'Content & Copyright', exact: true })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Sign out of Panda Pages' })).toHaveCount(0)
     await page.getByRole('button', { name: 'Switch reader' }).click()
 
     await expectProfileChooser(page, `/read/${READER_SLUG}`)

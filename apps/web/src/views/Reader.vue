@@ -11,7 +11,6 @@ import {
 import { useEventListener, usePreferredReducedMotion } from '@vueuse/core'
 import { useRoute, useRouter } from 'vue-router'
 import ReaderChaptersDialog from '../components/reader/ReaderChaptersDialog.vue'
-import ReaderEditionChooserDialog from '../components/reader/ReaderEditionChooserDialog.vue'
 import ReaderHeader from '../components/reader/ReaderHeader.vue'
 import ReaderPagedView from '../components/reader/ReaderPagedView.vue'
 import ReaderProgressStatus from '../components/reader/ReaderProgressStatus.vue'
@@ -26,12 +25,12 @@ import {
   type ReaderCapturedPosition,
 } from '../composables/useReaderProgress'
 import { useReaderStory } from '../composables/useReaderStory'
+import type { ReaderEditionKey } from '../lib/api'
 import {
   buildReaderChapters,
   currentReaderChapter,
   type ReaderChapter,
 } from '../lib/reader-chapters'
-import type { ReaderEditionKey } from '../lib/api'
 import type { CrossVersionMapping } from '../lib/reader-cross-version-progress'
 import type { ReaderLocatorV2 } from '../lib/reader-locator-v2'
 import { applyReaderTheme } from '../lib/reader-theme-bootstrap'
@@ -745,15 +744,6 @@ async function loadCurrentStory() {
   await story.load(slug.value, profileID)
 }
 
-async function chooseInitialEdition(editionKey: ReaderEditionKey) {
-  const profileID = selectedReaderProfileID()
-  if (profileID === null) {
-    await moveToProfiles()
-    return
-  }
-  await story.chooseEdition(slug.value, profileID, editionKey)
-}
-
 async function changeStoryEdition(editionKey: ReaderEditionKey) {
   if (
     editionChangeBusy.value ||
@@ -904,17 +894,8 @@ onBeforeUnmount(() => {
     :data-reader-theme="preferences.theme"
     :data-reader-preference-pending="readerPlacementQueue.preferencePending.value ? 'true' : 'false'"
   >
-    <ReaderEditionChooserDialog
-      v-if="story.chooser.value"
-      :open="true"
-      :eligible-editions="story.chooser.value"
-      :busy="story.editionBusy.value"
-      @choose="chooseInitialEdition"
-      @library="goLibraryWithoutProgress"
-    />
-
     <ReaderStoryState
-      v-else-if="story.contentState.value.status !== 'ready' || !story.story.value"
+      v-if="story.contentState.value.status !== 'ready' || !story.story.value"
       :state="story.contentState.value"
       @retry="loadCurrentStory"
       @library="goLibraryWithoutProgress"

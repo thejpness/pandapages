@@ -36,6 +36,7 @@ const emit = defineEmits<{
 }>()
 
 const pageStyleExpanded = ref(false)
+const editionExpanded = ref(false)
 const currentTheme = computed(() => readerTheme(props.modelValue.theme))
 
 function update(patch: Partial<ReaderPreferencesV2>) {
@@ -69,31 +70,66 @@ function setFont(fontFamily: ReaderFontFamily) {
     @update:open="emit('update:open', $event)"
   >
     <div class="reader-settings-sections">
-      <section class="reader-edition-settings" aria-labelledby="reader-edition-settings-title">
-        <div>
-          <h2 id="reader-edition-settings-title">Story edition</h2>
-          <p class="reader-settings-help">
-            This story is currently using {{ readerEditionLabel(currentEdition) }}. Choose another available edition for this profile.
-          </p>
-        </div>
-        <div class="reader-edition-settings__options">
-          <button
-            v-for="editionKey in eligibleEditions"
-            :key="editionKey"
-            class="reader-edition-settings__option"
-            type="button"
-            :aria-pressed="currentEdition === editionKey"
-            :disabled="editionBusy || currentEdition === editionKey"
-            @click="emit('editionChange', editionKey)"
+      <section class="reader-settings-disclosure reader-edition-settings">
+        <button
+          id="reader-story-edition-disclosure"
+          class="reader-settings-disclosure__trigger"
+          type="button"
+          :aria-expanded="editionExpanded"
+          aria-controls="reader-story-edition-options"
+          @click="editionExpanded = !editionExpanded"
+        >
+          <span class="reader-settings-disclosure__copy">
+            <span class="reader-settings-disclosure__label">Story edition</span>
+            <span class="reader-settings-disclosure__current">
+              {{ readerEditionLabel(currentEdition) }} selected
+            </span>
+            <span class="reader-settings-disclosure__help">
+              Change story edition
+            </span>
+          </span>
+          <svg
+            class="reader-settings-disclosure__indicator"
+            viewBox="0 0 16 16"
+            aria-hidden="true"
+            focusable="false"
           >
-            <span>
-              <strong>{{ readerEditionLabel(editionKey) }}</strong>
-              <small>{{ readerEditionDescription(editionKey) }}</small>
-            </span>
-            <span v-if="currentEdition === editionKey" class="reader-edition-settings__current">
-              Current
-            </span>
-          </button>
+            <path d="m3.5 6 4.5 4 4.5-4" />
+          </svg>
+        </button>
+
+        <div
+          v-show="editionExpanded"
+          id="reader-story-edition-options"
+          class="reader-settings-disclosure__panel"
+          role="region"
+          aria-labelledby="reader-story-edition-disclosure"
+        >
+          <fieldset class="reader-settings-fieldset" aria-describedby="reader-story-edition-help">
+            <legend class="reader-sr-only">Story edition</legend>
+            <p id="reader-story-edition-help" class="reader-settings-help">
+              This story is currently using {{ readerEditionLabel(currentEdition) }}. Choose another available edition for this profile.
+            </p>
+            <div class="reader-edition-settings__options">
+              <button
+                v-for="editionKey in eligibleEditions"
+                :key="editionKey"
+                class="reader-edition-settings__option"
+                type="button"
+                :aria-pressed="currentEdition === editionKey"
+                :disabled="editionBusy || currentEdition === editionKey"
+                @click="emit('editionChange', editionKey)"
+              >
+                <span>
+                  <strong>{{ readerEditionLabel(editionKey) }}</strong>
+                  <small>{{ readerEditionDescription(editionKey) }}</small>
+                </span>
+                <span v-if="currentEdition === editionKey" class="reader-edition-settings__current">
+                  Current
+                </span>
+              </button>
+            </div>
+          </fieldset>
         </div>
       </section>
 

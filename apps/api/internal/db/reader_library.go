@@ -121,9 +121,9 @@ func readerLibraryEditionSummary(
 // are immutable, so every visible item is resolved from one coherent release view.
 //
 // Zero eligible editions make a story invisible. A malformed eligible immutable
-// edition quarantines only that story into UnavailableItemCount. No Classic,
-// highest, nearest, or other representative edition is invented for chooser
-// items.
+// edition quarantines only that story into UnavailableItemCount. The canonical
+// Reader resolver selects the profile default; Library does not duplicate that
+// selection logic.
 func (s *Store) ReaderLibrary(
 	accountID string,
 	profileID string,
@@ -251,8 +251,7 @@ func (s *Store) ReaderLibrary(
 		if decision.Kind == readerresolution.DecisionUnavailable {
 			continue
 		}
-		if decision.Kind != readerresolution.DecisionChooser &&
-			decision.Kind != readerresolution.DecisionSelected {
+		if decision.Kind != readerresolution.DecisionSelected {
 			if err := incrementReaderLibraryUnavailable(&result); err != nil {
 				return model.ReaderLibraryReadModel{}, err
 			}
@@ -317,21 +316,14 @@ func (s *Store) ReaderLibrary(
 		item.Author = commonAuthor
 		item.Language = commonLanguage
 
-		if decision.Kind == readerresolution.DecisionSelected {
-			if decision.Selected == nil {
-				if err := incrementReaderLibraryUnavailable(&result); err != nil {
-					return model.ReaderLibraryReadModel{}, err
-				}
-				continue
-			}
-			selected := decision.Selected.EditionKey
-			item.SelectedEdition = &selected
-		} else if decision.Selected != nil {
+		if decision.Selected == nil {
 			if err := incrementReaderLibraryUnavailable(&result); err != nil {
 				return model.ReaderLibraryReadModel{}, err
 			}
 			continue
 		}
+		selected := decision.Selected.EditionKey
+		item.SelectedEdition = &selected
 
 		if progress != nil {
 			item.Progress = &model.ReaderLibraryProgressSummary{

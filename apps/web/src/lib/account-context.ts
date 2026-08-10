@@ -21,7 +21,7 @@ export class AccountContextError extends Error {
     this.kind = kind
   }
 }
-function selectedAccountID(): string | null {
+export function selectedAccountID(): string | null {
   const value = window.localStorage.getItem(selectedAccountStorageKey);
   return value && value.trim() === value ? value : null;
 }
@@ -36,6 +36,18 @@ export function clearSelectedAccount(): void {
   window.localStorage.removeItem(selectedAccountStorageKey);
   clearSelectedReaderProfile();
   leaveChildMode();
+}
+
+export function reconcileAccountMembership(
+  memberships: readonly IdentityMembership[],
+): IdentityMembership | null {
+  const saved = selectedAccountID();
+  if (saved !== null) {
+    const membership = memberships.find((item) => item.accountId === saved);
+    if (membership !== undefined) return membership;
+    clearSelectedAccount();
+  }
+  return memberships.length === 1 ? memberships[0] ?? null : null;
 }
 export async function currentAccountContext(): Promise<AccountContext> {
   let session;
@@ -61,12 +73,8 @@ export async function currentAccountContext(): Promise<AccountContext> {
     }
   }
   const saved = selectedAccountID();
-  const membership = saved
-    ? identity.memberships.find((item) => item.accountId === saved)
-    : identity.memberships.length === 1
-      ? identity.memberships[0]
-      : undefined;
-  if (!membership) throw new AccountContextError("account_selection_required");
+  const membership = reconcileAccountMembership(identity.memberships);
+  if (membership === null) throw new AccountContextError("account_selection_required");
   // An explicit account change goes through selectAccount and clears the
   // reader choice immediately. With a sole membership there may be no stored
   // account ID at all; keep the profile preference until the server profile

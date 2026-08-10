@@ -489,13 +489,7 @@ export class ReaderApiMock {
       selected =
         eligible.find((key) => editions.get(key)?.version === progress.version) ?? null
     }
-    if (!selected && eligible.length === 1) {
-      selected = eligible[0] ?? null
-    }
-
-    if (!selected) {
-      return { state: 'chooser', eligibleEditions: eligible, story: null }
-    }
+    if (!selected) selected = eligible[0] ?? null
     const story = editions.get(selected)
     if (!story) return jsonError('not_found', 'Story not found')
     return {
@@ -518,7 +512,7 @@ export class ReaderApiMock {
       if (!selected && progress) {
         selected = eligible.find((key) => editions.get(key)?.version === progress.version) ?? null
       }
-      if (!selected && eligible.length === 1) selected = eligible[0] ?? null
+      if (!selected) selected = eligible[0] ?? null
 
       const eligibleEditions = eligible.flatMap((editionKey) => {
         const story = editions.get(editionKey)
@@ -537,7 +531,7 @@ export class ReaderApiMock {
       return [{
         ...item,
         language: identity?.language ?? 'en-GB',
-        state: selected ? 'selected' : 'chooser',
+        state: 'selected',
         eligibleEditions,
         selectedEdition: selected,
         progress: null,
