@@ -105,8 +105,8 @@ func TestAdminReleaseIntegration(t *testing.T) {
 	if currentReleaseID == "" {
 		t.Fatal("Growing-only release did not become current")
 	}
-	if _, err := store.ReaderStory(accountID, slug); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("Growing-only release became Reader-visible in Lifecycle 6: %v", err)
+	if _, err := store.ReaderResolve(accountID, profileID, slug); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("Growing-only release resolved for a Little Listeners profile: %v", err)
 	}
 	library, err := store.ReaderLibrary(accountID, profileID)
 	if err != nil {
@@ -184,12 +184,17 @@ func TestAdminReleaseIntegration(t *testing.T) {
 		*releasedItem.SelectedEdition != model.ReaderEditionLittleListeners {
 		t.Fatalf("Little Listeners profile release resolution = %#v", releasedItem)
 	}
-	readerStory, err := store.ReaderStory(accountID, slug)
-	if err != nil {
-		t.Fatalf("Classic release was not Reader-visible: %v", err)
+	resolution, err := store.ReaderResolve(accountID, profileID, slug)
+	if err != nil || resolution.State != model.ReaderResolutionSelected || resolution.Story == nil {
+		t.Fatalf("Little Listeners direct resolution = %#v / %v", resolution, err)
 	}
-	if readerStory.Version != classicDraft.Version {
-		t.Fatalf("Reader compatibility followed version %d, want Classic %d", readerStory.Version, classicDraft.Version)
+	if resolution.Story.EditionKey != listeners || resolution.Story.Version != listenerDraft.Version {
+		t.Fatalf(
+			"Little Listeners direct resolution = %#v, want %q v%d",
+			resolution.Story,
+			listeners,
+			listenerDraft.Version,
+		)
 	}
 
 	reused, err := store.AdminCreateRelease(accountID, slug, model.AdminCreateReleaseRequest{

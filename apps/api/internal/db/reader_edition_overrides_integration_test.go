@@ -139,6 +139,15 @@ func TestReaderEditionOverrideIntegration(t *testing.T) {
 	if err := store.ReaderStoryEditionOverridePut(accountID, foreignProfileID, slug, model.ReaderEditionLittleListeners); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("cross-account override write error = %v, want sql.ErrNoRows", err)
 	}
+	if _, err := store.ReaderStoryEditionOverrideGet(foreignAccountID, foreignProfileID, slug); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("foreign-account override read error = %v, want sql.ErrNoRows", err)
+	}
+	if err := store.ReaderStoryEditionOverridePut(foreignAccountID, foreignProfileID, slug, model.ReaderEditionLittleListeners); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("foreign-account override write error = %v, want sql.ErrNoRows", err)
+	}
+	if removed, err := store.ReaderStoryEditionOverrideClear(foreignAccountID, foreignProfileID, slug); err != nil || removed {
+		t.Fatalf("foreign-account override clear = %v / %v, want false / nil", removed, err)
+	}
 
 	removed, err := store.ReaderStoryEditionOverrideClear(accountID, profileID, slug)
 	if err != nil || !removed {

@@ -328,6 +328,11 @@ func TestProgressStoreIntegration(t *testing.T) {
 		if err := store.ProgressPut(accountB, profileB, slug, 1, locator, 0.2); !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("cross-account ProgressPut error = %v, want sql.ErrNoRows", err)
 		}
+		continueB, err := store.ContinueRecent(accountB, profileB, 3)
+		if err != nil || len(continueB) != 0 {
+			t.Fatalf("cross-account ContinueRecent = %#v / %v, want empty", continueB, err)
+		}
+
 	})
 
 	t.Run("identical slugs remain independent between accounts", func(t *testing.T) {

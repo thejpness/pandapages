@@ -155,7 +155,7 @@ func (s *Store) ReaderLibrary(
 	rows, err := tx.QueryContext(ctx, `
 		SELECT story.id, story.slug, story.current_release_id
 		FROM stories AS story
-		WHERE story.account_id = $1
+		WHERE `+readerStoryAccessPredicate+`
 		  AND story.current_release_id IS NOT NULL
 		ORDER BY
 			story.updated_at DESC,
