@@ -151,30 +151,33 @@ WHERE namespace.nspname = 'public'
   SELECT 1 / 0;
 \endif
 
-WITH runtime_table(name, immutable) AS (
+WITH runtime_table(name, can_update, can_delete) AS (
   VALUES
-    ('accounts', false),
-    ('account_memberships', false),
-    ('contributors', false),
-    ('external_identities', false),
-    ('principals', false),
-    ('profiles', false),
-    ('reader_story_edition_overrides', false),
-    ('reading_progress', false),
-    ('stories', false),
-    ('story_editions', false),
-    ('story_release_editions', true),
-    ('story_releases', true),
-    ('story_contributors', false),
-    ('story_sections', false),
-    ('story_source_versions', false),
-    ('story_sources', false),
-    ('story_segments', false),
-    ('story_versions', false)
+    ('accounts', true, true),
+    ('account_memberships', true, true),
+    ('contributors', true, true),
+    ('external_identities', true, true),
+    ('principals', true, true),
+    ('profiles', true, true),
+    ('reader_story_edition_overrides', true, true),
+    ('reading_progress', true, true),
+    ('source_acquisitions', false, false),
+    ('source_acquisition_reviews', true, false),
+    ('stories', true, true),
+    ('story_editions', true, true),
+    ('story_release_editions', false, false),
+    ('story_releases', false, false),
+    ('story_contributors', true, true),
+    ('story_sections', true, true),
+    ('story_source_versions', true, true),
+    ('story_sources', true, true),
+    ('story_segments', true, true),
+    ('story_versions', true, true)
 ), checked AS (
   SELECT
     runtime_table.name,
-    runtime_table.immutable,
+    runtime_table.can_update AS expected_update,
+    runtime_table.can_delete AS expected_delete,
     class.oid,
     has_table_privilege(:'application_role', class.oid, 'SELECT') AS can_select,
     has_table_privilege(:'application_role', class.oid, 'INSERT') AS can_insert,
@@ -190,7 +193,7 @@ WITH runtime_table(name, immutable) AS (
     AND class.relkind IN ('r', 'p')
 )
 SELECT
-  count(*) = 18
+  count(*) = 20
   AND to_regclass('public.child_profiles') IS NULL
   AND to_regclass('public.prompt_profiles') IS NULL
   AND to_regclass('public.profile_settings') IS NULL
@@ -201,10 +204,8 @@ SELECT
     oid IS NOT NULL
     AND can_select
     AND can_insert
-    AND (immutable OR can_update)
-    AND (immutable OR can_delete)
-    AND (NOT immutable OR NOT can_update)
-    AND (NOT immutable OR NOT can_delete)
+    AND can_update = expected_update
+    AND can_delete = expected_delete
     AND NOT can_truncate
     AND NOT can_reference
     AND NOT can_trigger
@@ -251,6 +252,8 @@ WITH runtime_table(name) AS (
     ('profiles'),
     ('reader_story_edition_overrides'),
     ('reading_progress'),
+    ('source_acquisitions'),
+    ('source_acquisition_reviews'),
     ('stories'),
     ('story_editions'),
     ('story_release_editions'),
