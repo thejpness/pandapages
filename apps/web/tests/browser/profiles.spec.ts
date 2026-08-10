@@ -254,11 +254,7 @@ test.describe('reader profile lifecycle', () => {
     await page.goto('/profiles')
     await page.getByRole('button', { name: 'Start reading as Mina' }).click()
     await expect(page).toHaveURL('/library')
-    await page.evaluate(async () => {
-      const app = (document.querySelector('#app') as HTMLElement & { __vue_app__?: { config: { globalProperties: { $router: { push: (value: string) => Promise<unknown> } } } } }).__vue_app__
-      if (!app) throw new Error('Vue application was not mounted')
-      await app.config.globalProperties.$router.push('/profiles?next=/library')
-    })
+    await page.getByRole("button", { name: "Switch reader" }).click()
     await expect(page).toHaveURL(/\/profiles\?next=\/library$/)
     await expect(page.getByRole('button', { name: 'Add profile' })).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Manage profiles' })).toHaveCount(0)
@@ -278,11 +274,7 @@ test.describe('reader profile lifecycle', () => {
     await api.install()
     await page.goto('/profiles')
     await page.getByRole('button', { name: 'Start reading as Mina' }).click()
-    await page.evaluate(async () => {
-      const app = (document.querySelector('#app') as HTMLElement & { __vue_app__?: { config: { globalProperties: { $router: { push: (value: string) => Promise<unknown> } } } } }).__vue_app__
-      if (!app) throw new Error('Vue application was not mounted')
-      await app.config.globalProperties.$router.push('/profiles?next=/library')
-    })
+    await page.getByRole("button", { name: "Switch reader" }).click()
     const tedTrigger = page.getByRole('button', { name: 'Start reading as Ted' })
     await tedTrigger.click()
     await expect(page.getByLabel('Four-digit PIN')).toBeFocused()
@@ -333,11 +325,7 @@ test.describe('reader profile lifecycle', () => {
     await page.getByLabel('Four-digit PIN').fill('1234')
     await page.getByRole('button', { name: 'Continue' }).click()
     await expect(page).toHaveURL('/library')
-    await page.evaluate(async () => {
-      const app = (document.querySelector('#app') as HTMLElement & { __vue_app__?: { config: { globalProperties: { $router: { push: (value: string) => Promise<unknown> } } } } }).__vue_app__
-      if (!app) throw new Error('Vue application was not mounted')
-      await app.config.globalProperties.$router.push('/profiles?next=/library')
-    })
+    await page.getByRole("button", { name: "Switch reader" }).click()
     await page.getByRole('button', { name: 'Start reading as Mina' }).click()
     await expect(page).toHaveURL('/library')
     await expect(page.getByRole('dialog')).toHaveCount(0)
@@ -351,11 +339,8 @@ test.describe('reader profile lifecycle', () => {
     }, fixtureProfileID)
     await page.goto('/library')
     await expect(page).toHaveURL('/library')
-    await page.evaluate(async () => {
-      const app = (document.querySelector('#app') as HTMLElement & { __vue_app__?: { config: { globalProperties: { $router: { push: (value: string) => Promise<unknown> } } } } }).__vue_app__
-      if (!app) throw new Error('Vue application was not mounted')
-      await app.config.globalProperties.$router.push('/profiles?next=/library?q=moon')
-    })
+    await page.goto("/library?q=moon")
+    await page.getByRole("button", { name: "Switch reader" }).click()
     await page.getByRole('button', { name: 'Start reading as Mina' }).click()
     await expect(page).toHaveURL('/library?q=moon')
     await expect.poll(() => page.evaluate(() => window.localStorage.getItem('pandapages.selected-reader-profile-id'))).toBe(fixtureProfileID)

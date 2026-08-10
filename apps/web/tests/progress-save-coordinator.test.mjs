@@ -405,7 +405,7 @@ test('transport and server errors remain retryable coordinator failures', async 
   assert.equal(coordinator.current().status, 'saved')
 })
 
-test('401 progress failure remains visible to the signed-session owner', async () => {
+test('401 progress failure remains visible to the bearer account holder', async () => {
   const { coordinator, persistence } = await coordinatorHarness()
   coordinator.initialize(scrollSnapshot(0, 0))
   coordinator.update(scrollSnapshot(100), { debounce: false })

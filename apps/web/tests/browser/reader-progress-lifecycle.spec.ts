@@ -26,7 +26,7 @@ async function openFailedLibraryGate(
 }
 
 test.describe('Reader progress lifecycle wiring', () => {
-  test('a baseline Retry returning 401 follows the safe signed-session transition', async ({
+  test('a baseline Retry returning 401 follows the safe bearer account transition', async ({
     page,
     api,
   }) => {
