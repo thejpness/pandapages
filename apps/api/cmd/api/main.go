@@ -140,6 +140,7 @@ func run() error {
 		AdminKey:            cfg.adminKey,
 		BearerAuthenticator: bearerAuthenticator,
 		SourceDiscovery:     sourceDiscovery,
+		SourceAcquisition:   sourceDiscovery,
 	}, store)
 
 	server := newServer(newRootHandler(public, identity, admin))

@@ -9,4 +9,5 @@ type Config struct {
 	AdminKey            string
 	BearerAuthenticator *httpbearer.Authenticator
 	SourceDiscovery     sourceprovider.Discovery
+	SourceAcquisition   sourceprovider.Acquisition
 }

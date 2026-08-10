@@ -1,0 +1,170 @@
+package gutenberg
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"io"
+	"mime"
+	"net/http"
+	"sort"
+	"strings"
+	"unicode/utf8"
+
+	"pandapages/api/internal/sourceprovider"
+)
+
+const maxSourceBytes = 10 << 20 // 10 MiB decoded plain-text source body.
+
+// Acquire obtains one server-selected, trusted plain-text representation and
+// returns an in-memory review candidate. It never writes Panda Pages data.
+func (a *Adapter) Acquire(ctx context.Context, externalID string) (sourceprovider.SourceCandidate, error) {
+	work, err := a.GetWork(ctx, externalID)
+	if err != nil {
+		return sourceprovider.SourceCandidate{}, err
+	}
+	representation, err := selectPlainTextRepresentation(work.Representations)
+	if err != nil {
+		return sourceprovider.SourceCandidate{}, err
+	}
+	content, err := a.fetchPlainText(ctx, representation.URL)
+	if err != nil {
+		return sourceprovider.SourceCandidate{}, err
+	}
+	normalised, err := normalisePlainText(content)
+	if err != nil {
+		return sourceprovider.SourceCandidate{}, err
+	}
+
+	return sourceprovider.SourceCandidate{
+		Provider:               work.Provider,
+		ExternalID:             work.ExternalID,
+		Title:                  work.Title,
+		Contributors:           work.Contributors,
+		Languages:              work.Languages,
+		LandingURL:             work.LandingURL,
+		ProviderRights:         work.ProviderRights,
+		SelectedRepresentation: representation,
+		NormalisationVersion:   normalisationVersion,
+		RetrievedContentHash:   sha256Hex(content),
+		NormalisedContentHash:  sha256HexString(normalised),
+		SourceText:             normalised,
+	}, nil
+}
+
+func selectPlainTextRepresentation(representations []sourceprovider.Representation) (sourceprovider.Representation, error) {
+	type candidate struct {
+		representation sourceprovider.Representation
+		rank           int
+	}
+	candidates := make([]candidate, 0, len(representations))
+	for _, representation := range representations {
+		mediaType, parameters, err := mime.ParseMediaType(representation.MediaType)
+		if err != nil || !strings.EqualFold(mediaType, "text/plain") || !trustedRepresentationURL(representation.URL) {
+			continue
+		}
+		rank, ok := plainTextCharsetRank(parameters["charset"])
+		if !ok {
+			continue
+		}
+		candidates = append(candidates, candidate{representation: representation, rank: rank})
+	}
+	if len(candidates) == 0 {
+		return sourceprovider.Representation{}, sourceprovider.ErrRepresentationUnavailable
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		left, right := candidates[i], candidates[j]
+		if left.rank != right.rank {
+			return left.rank < right.rank
+		}
+		if left.representation.MediaType != right.representation.MediaType {
+			return left.representation.MediaType < right.representation.MediaType
+		}
+		if left.representation.Label != right.representation.Label {
+			return left.representation.Label < right.representation.Label
+		}
+		return left.representation.URL < right.representation.URL
+	})
+	return candidates[0].representation, nil
+}
+
+func plainTextCharsetRank(raw string) (int, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "utf-8", "utf8":
+		return 0, true
+	case "":
+		return 1, true
+	case "us-ascii":
+		return 2, true
+	default:
+		return 0, false
+	}
+}
+
+func (a *Adapter) fetchPlainText(ctx context.Context, rawURL string) ([]byte, error) {
+	if !trustedRepresentationURL(rawURL) {
+		return nil, sourceprovider.ErrRepresentationUnavailable
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, sourceprovider.ErrUnavailable
+	}
+	request.Header.Set("Accept", "text/plain")
+	request.Header.Set("User-Agent", userAgent)
+
+	response, err := a.client.Do(request)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil, sourceprovider.ErrTimeout
+		}
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return nil, ctx.Err()
+		}
+		return nil, sourceprovider.ErrUnavailable
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return nil, sourceprovider.ErrUnavailable
+	}
+	if !validPlainTextContentType(response.Header.Get("Content-Type")) {
+		return nil, sourceprovider.ErrContentInvalid
+	}
+	if response.ContentLength > maxSourceBytes {
+		return nil, sourceprovider.ErrContentTooLarge
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxSourceBytes+1))
+	if err != nil {
+		return nil, sourceprovider.ErrContentInvalid
+	}
+	if len(body) > maxSourceBytes {
+		return nil, sourceprovider.ErrContentTooLarge
+	}
+	if !utf8.Valid(body) {
+		return nil, sourceprovider.ErrContentInvalid
+	}
+	return body, nil
+}
+
+func validPlainTextContentType(raw string) bool {
+	mediaType, parameters, err := mime.ParseMediaType(raw)
+	if err != nil || !strings.EqualFold(mediaType, "text/plain") {
+		return false
+	}
+	_, ok := plainTextCharsetRank(parameters["charset"])
+	return ok
+}
+
+func sha256Hex(value []byte) string {
+	sum := sha256.Sum256(value)
+	return hex.EncodeToString(sum[:])
+}
+
+func sha256HexString(value string) string {
+	hash := sha256.New()
+	_, _ = io.WriteString(hash, value)
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+var _ sourceprovider.Acquirer = (*Adapter)(nil)

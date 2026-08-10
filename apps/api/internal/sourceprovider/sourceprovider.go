@@ -11,13 +11,17 @@ import (
 const ProjectGutenberg ID = "project-gutenberg"
 
 var (
-	ErrUnknownProvider = errors.New("source provider is not supported")
-	ErrQueryInvalid    = errors.New("source provider query is invalid")
-	ErrWorkIDInvalid   = errors.New("source provider work identifier is invalid")
-	ErrWorkNotFound    = errors.New("source provider work was not found")
-	ErrTimeout         = errors.New("source provider request timed out")
-	ErrUnavailable     = errors.New("source provider is unavailable")
-	ErrResponseInvalid = errors.New("source provider response is invalid")
+	ErrUnknownProvider           = errors.New("source provider is not supported")
+	ErrQueryInvalid              = errors.New("source provider query is invalid")
+	ErrWorkIDInvalid             = errors.New("source provider work identifier is invalid")
+	ErrWorkNotFound              = errors.New("source provider work was not found")
+	ErrTimeout                   = errors.New("source provider request timed out")
+	ErrUnavailable               = errors.New("source provider is unavailable")
+	ErrResponseInvalid           = errors.New("source provider response is invalid")
+	ErrRepresentationUnavailable = errors.New("source provider has no supported representation")
+	ErrContentTooLarge           = errors.New("source provider content is too large")
+	ErrContentInvalid            = errors.New("source provider content is invalid")
+	ErrNormalisationFailed       = errors.New("source provider content could not be normalised")
 )
 
 type ID string
@@ -47,6 +51,24 @@ type WorkSummary struct {
 
 type Work = WorkSummary
 
+// SourceCandidate is reviewable provider material. It is not a canonical source
+// and does not represent Panda Pages rights approval.
+type SourceCandidate struct {
+	Provider       ID            `json:"provider"`
+	ExternalID     string        `json:"externalId"`
+	Title          string        `json:"title"`
+	Contributors   []Contributor `json:"contributors"`
+	Languages      []string      `json:"languages"`
+	LandingURL     string        `json:"landingUrl"`
+	ProviderRights string        `json:"providerRights,omitempty"`
+	// SelectedRepresentation is provenance metadata; acquisition never accepts it from callers.
+	SelectedRepresentation Representation `json:"selectedRepresentation"`
+	NormalisationVersion   string         `json:"normalisationVersion"`
+	RetrievedContentHash   string         `json:"retrievedContentHash"`
+	NormalisedContentHash  string         `json:"normalisedContentHash"`
+	SourceText             string         `json:"sourceText"`
+}
+
 type SearchResponse struct {
 	Provider ID            `json:"provider"`
 	Results  []WorkSummary `json:"results"`
@@ -60,10 +82,21 @@ type Provider interface {
 	GetWork(context.Context, string) (Work, error)
 }
 
+// Acquirer extends a provider with server-owned source candidate acquisition.
+type Acquirer interface {
+	Acquire(context.Context, string) (SourceCandidate, error)
+}
+
 // Discovery is the narrow service used by the admin HTTP layer.
 type Discovery interface {
 	Search(context.Context, ID, string, int) (SearchResponse, error)
 	GetWork(context.Context, ID, string) (Work, error)
+}
+
+// Acquisition is the narrow service used to turn a selected provider work into
+// an in-memory review candidate.
+type Acquisition interface {
+	Acquire(context.Context, ID, string) (SourceCandidate, error)
 }
 
 type Registry struct {
@@ -98,6 +131,18 @@ func (r *Registry) GetWork(ctx context.Context, providerID ID, externalID string
 		return Work{}, err
 	}
 	return provider.GetWork(ctx, externalID)
+}
+
+func (r *Registry) Acquire(ctx context.Context, providerID ID, externalID string) (SourceCandidate, error) {
+	provider, err := r.provider(providerID)
+	if err != nil {
+		return SourceCandidate{}, err
+	}
+	acquirer, ok := provider.(Acquirer)
+	if !ok {
+		return SourceCandidate{}, ErrRepresentationUnavailable
+	}
+	return acquirer.Acquire(ctx, externalID)
 }
 
 func (r *Registry) provider(id ID) (Provider, error) {
