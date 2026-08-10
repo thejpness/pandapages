@@ -15,6 +15,7 @@ import (
 
 const ownerAccount = "11111111-1111-4111-8111-111111111111"
 const adultAccount = "22222222-2222-4222-8222-222222222222"
+const secondOwnerAccount = "33333333-3333-4333-8333-333333333333"
 
 type adminVerifier struct{}
 
@@ -27,7 +28,6 @@ func (adminVerifier) Verify(_ context.Context, token string) (appidentity.Extern
 
 type adminStore struct {
 	memberships        []appidentity.Membership
-	listAccount        string
 	listCalls          int
 	editionSourceCalls int
 	editionSourceKey   model.AdminStoryEditionKey
@@ -37,47 +37,45 @@ type adminStore struct {
 func (s *adminStore) Identity(context.Context, appidentity.ExternalIdentity) (appidentity.Snapshot, error) {
 	return appidentity.Snapshot{PrincipalID: "principal", Memberships: s.memberships}, nil
 }
-func (*adminStore) AdminDraftUpsert(string, model.AdminDraftUpsertRequest) (model.AdminDraftUpsertResponse, error) {
+func (*adminStore) AdminDraftUpsert(model.AdminDraftUpsertRequest) (model.AdminDraftUpsertResponse, error) {
 	return model.AdminDraftUpsertResponse{}, nil
 }
-func (*adminStore) AdminEditionBundleUpsert(string, model.AdminEditionBundleUpsertRequest) (model.AdminEditionBundleUpsertResponse, error) {
+func (*adminStore) AdminEditionBundleUpsert(model.AdminEditionBundleUpsertRequest) (model.AdminEditionBundleUpsertResponse, error) {
 	return model.AdminEditionBundleUpsertResponse{}, nil
 }
-func (*adminStore) AdminPublishStory(string, string, string) (model.AdminStoryStatusResponse, error) {
+func (*adminStore) AdminPublishStory(string, string) (model.AdminStoryStatusResponse, error) {
 	return model.AdminStoryStatusResponse{}, nil
 }
-func (*adminStore) AdminCreateRelease(string, string, model.AdminCreateReleaseRequest) (model.AdminCreateReleaseResponse, error) {
+func (*adminStore) AdminCreateRelease(string, model.AdminCreateReleaseRequest) (model.AdminCreateReleaseResponse, error) {
 	return model.AdminCreateReleaseResponse{}, nil
 }
-func (*adminStore) AdminUnpublish(string, string) (model.AdminStoryStatusResponse, error) {
+func (*adminStore) AdminUnpublish(string) (model.AdminStoryStatusResponse, error) {
 	return model.AdminStoryStatusResponse{}, nil
 }
 func (*adminStore) AdminPreview(model.AdminPreviewRequest) (model.AdminPreviewResponse, error) {
 	return model.AdminPreviewResponse{}, nil
 }
-func (s *adminStore) AdminListStories(accountID string) (model.AdminStoriesListResponse, error) {
+func (s *adminStore) AdminListStories() (model.AdminStoriesListResponse, error) {
 	s.listCalls++
-	s.listAccount = accountID
 	return model.AdminStoriesListResponse{Items: []model.AdminStorySummary{}}, nil
 }
-func (*adminStore) AdminGetStory(string, string) (model.AdminStoryDetailResponse, error) {
+func (*adminStore) AdminGetStory(string) (model.AdminStoryDetailResponse, error) {
 	return model.AdminStoryDetailResponse{}, nil
 }
-func (*adminStore) AdminGetVersionSource(string, string, string) (model.AdminVersionSourceResponse, error) {
+func (*adminStore) AdminGetVersionSource(string, string) (model.AdminVersionSourceResponse, error) {
 	return model.AdminVersionSourceResponse{}, nil
 }
-func (*adminStore) AdminSourceUpsert(string, string, model.AdminSourceUpsertRequest) (model.AdminSourceUpsertResponse, error) {
+func (*adminStore) AdminSourceUpsert(string, model.AdminSourceUpsertRequest) (model.AdminSourceUpsertResponse, error) {
 	return model.AdminSourceUpsertResponse{}, nil
 }
-func (*adminStore) AdminGetSource(string, string) (model.AdminSourceDetailResponse, error) {
+func (*adminStore) AdminGetSource(string) (model.AdminSourceDetailResponse, error) {
 	return model.AdminSourceDetailResponse{}, nil
 }
-func (*adminStore) AdminGetSourceVersion(string, string, string) (model.AdminSourceVersionResponse, error) {
+func (*adminStore) AdminGetSourceVersion(string, string) (model.AdminSourceVersionResponse, error) {
 	return model.AdminSourceVersionResponse{}, nil
 }
 
 func (s *adminStore) AdminGetEditionVersionSource(
-	_ string,
 	_ string,
 	editionKey model.AdminStoryEditionKey,
 	versionID string,
@@ -131,11 +129,15 @@ func TestAdminRequiresOwnerBearerAccountAndKey(t *testing.T) {
 	}
 }
 
-func TestAdminUsesSelectedOwnerAccount(t *testing.T) {
-	store := &adminStore{memberships: []appidentity.Membership{{AccountID: ownerAccount, Role: appidentity.RoleOwner}}}
-	response := serveAdmin(t, store, ownerAccount, "valid", "admin-key")
-	if response.Code != http.StatusOK || store.listAccount != ownerAccount || store.listCalls != 1 {
-		t.Fatalf("status/account/calls=%d/%s/%d", response.Code, store.listAccount, store.listCalls)
+func TestAdminOwnerAccountsListSameGlobalCatalogue(t *testing.T) {
+	store := &adminStore{memberships: []appidentity.Membership{
+		{AccountID: ownerAccount, Role: appidentity.RoleOwner},
+		{AccountID: secondOwnerAccount, Role: appidentity.RoleOwner},
+	}}
+	first := serveAdmin(t, store, ownerAccount, "valid", "admin-key")
+	second := serveAdmin(t, store, secondOwnerAccount, "valid", "admin-key")
+	if first.Code != http.StatusOK || second.Code != http.StatusOK || store.listCalls != 2 {
+		t.Fatalf("statuses/calls=%d/%d/%d", first.Code, second.Code, store.listCalls)
 	}
 }
 

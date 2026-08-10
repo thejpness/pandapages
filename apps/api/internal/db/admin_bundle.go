@@ -69,11 +69,7 @@ func adminEditionBundleError(editionKey model.AdminStoryEditionKey, err error) e
 
 // AdminEditionBundleUpsert ingests exactly the five canonical reading editions
 // in one transaction. It never changes publication state.
-func (s *Store) AdminEditionBundleUpsert(accountID string, req model.AdminEditionBundleUpsertRequest) (model.AdminEditionBundleUpsertResponse, error) {
-	accountID = strings.TrimSpace(accountID)
-	if accountID == "" {
-		return model.AdminEditionBundleUpsertResponse{}, fmt.Errorf("account required")
-	}
+func (s *Store) AdminEditionBundleUpsert(req model.AdminEditionBundleUpsertRequest) (model.AdminEditionBundleUpsertResponse, error) {
 	requests, err := adminEditionBundleRequests(req)
 	if err != nil {
 		return model.AdminEditionBundleUpsertResponse{}, err
@@ -91,7 +87,7 @@ func (s *Store) AdminEditionBundleUpsert(accountID string, req model.AdminEditio
 	slug := ""
 	for _, draftReq := range requests {
 		editionKey := *draftReq.EditionKey
-		draft, err := adminDraftUpsertTx(ctx, tx, accountID, draftReq)
+		draft, err := adminDraftUpsertTx(ctx, tx, draftReq)
 		if err != nil {
 			return model.AdminEditionBundleUpsertResponse{}, adminEditionBundleError(editionKey, err)
 		}

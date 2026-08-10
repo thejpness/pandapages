@@ -53,21 +53,21 @@ func TestAdminReleaseIntegration(t *testing.T) {
 	growing := model.AdminStoryEditionGrowingReaders
 	listeners := model.AdminStoryEditionLittleListeners
 
-	classicDraft, err := store.AdminDraftUpsert(accountID, model.AdminDraftUpsertRequest{
+	classicDraft, err := store.AdminDraftUpsert(model.AdminDraftUpsertRequest{
 		Slug: slug, EditionKey: &classic, Title: "Partial Release", Language: &language,
 		Markdown: "# Partial Release\n\nClassic body.\n",
 	})
 	if err != nil {
 		t.Fatalf("create Classic draft: %v", err)
 	}
-	growingDraft, err := store.AdminDraftUpsert(accountID, model.AdminDraftUpsertRequest{
+	growingDraft, err := store.AdminDraftUpsert(model.AdminDraftUpsertRequest{
 		Slug: slug, EditionKey: &growing, Title: "Partial Release", Language: &language,
 		Markdown: "# Partial Release\n\nGrowing body.\n",
 	})
 	if err != nil {
 		t.Fatalf("create Growing Readers draft: %v", err)
 	}
-	listenerDraft, err := store.AdminDraftUpsert(accountID, model.AdminDraftUpsertRequest{
+	listenerDraft, err := store.AdminDraftUpsert(model.AdminDraftUpsertRequest{
 		Slug: slug, EditionKey: &listeners, Title: "Partial Release", Language: &language,
 		Markdown: "# Partial Release\n\nLittle Listeners body.\n",
 	})
@@ -75,7 +75,7 @@ func TestAdminReleaseIntegration(t *testing.T) {
 		t.Fatalf("create Little Listeners draft: %v", err)
 	}
 
-	first, err := store.AdminCreateRelease(accountID, slug, model.AdminCreateReleaseRequest{
+	first, err := store.AdminCreateRelease(slug, model.AdminCreateReleaseRequest{
 		Editions: []model.AdminReleaseEditionRequest{{
 			EditionKey: growing,
 			VersionID:  growingDraft.VersionID,
@@ -131,7 +131,7 @@ func TestAdminReleaseIntegration(t *testing.T) {
 		t.Fatalf("Growing-only release manifest = %s", liveManifest)
 	}
 
-	second, err := store.AdminCreateRelease(accountID, slug, model.AdminCreateReleaseRequest{
+	second, err := store.AdminCreateRelease(slug, model.AdminCreateReleaseRequest{
 		Editions: []model.AdminReleaseEditionRequest{
 			{EditionKey: listeners, VersionID: listenerDraft.VersionID},
 			{EditionKey: classic, VersionID: classicDraft.VersionID},
@@ -197,7 +197,7 @@ func TestAdminReleaseIntegration(t *testing.T) {
 		)
 	}
 
-	reused, err := store.AdminCreateRelease(accountID, slug, model.AdminCreateReleaseRequest{
+	reused, err := store.AdminCreateRelease(slug, model.AdminCreateReleaseRequest{
 		Editions: []model.AdminReleaseEditionRequest{
 			{EditionKey: classic, VersionID: classicDraft.VersionID},
 			{EditionKey: listeners, VersionID: listenerDraft.VersionID},
@@ -226,7 +226,7 @@ func TestAdminReleaseIntegration(t *testing.T) {
 			{EditionKey: growing, VersionID: listenerDraft.VersionID},
 		},
 	}
-	if _, err := store.AdminCreateRelease(accountID, slug, invalid); !errors.Is(err, model.ErrAdminReleaseNotFound) {
+	if _, err := store.AdminCreateRelease(slug, invalid); !errors.Is(err, model.ErrAdminReleaseNotFound) {
 		t.Fatalf("cross-edition release error = %v, want not found", err)
 	}
 	var afterInvalidRelease string
@@ -239,7 +239,7 @@ func TestAdminReleaseIntegration(t *testing.T) {
 		t.Fatalf("invalid release changed current pointer: %s -> %s", currentReleaseID, afterInvalidRelease)
 	}
 
-	status, err := store.AdminUnpublish(accountID, slug)
+	status, err := store.AdminUnpublish(slug)
 	if err != nil {
 		t.Fatalf("unpublish current release: %v", err)
 	}

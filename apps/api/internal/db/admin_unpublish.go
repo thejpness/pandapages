@@ -10,10 +10,9 @@ import (
 
 // AdminUnpublish withdraws the current release atomically. Immutable release
 // history, edition versions, draft pointers, and reading progress remain.
-func (s *Store) AdminUnpublish(accountID, slug string) (model.AdminStoryStatusResponse, error) {
-	accountID = strings.TrimSpace(accountID)
+func (s *Store) AdminUnpublish(slug string) (model.AdminStoryStatusResponse, error) {
 	slug = strings.TrimSpace(slug)
-	if !accountIDRe.MatchString(accountID) || storyingest.ValidateSlug(slug) != nil {
+	if storyingest.ValidateSlug(slug) != nil {
 		return model.AdminStoryStatusResponse{}, fmt.Errorf("%w", model.ErrAdminStoryNotFound)
 	}
 

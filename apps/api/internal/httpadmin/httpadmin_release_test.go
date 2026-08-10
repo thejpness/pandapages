@@ -13,20 +13,17 @@ import (
 
 type recordingReleaseStore struct {
 	*adminStore
-	accountID string
-	slug      string
-	request   model.AdminCreateReleaseRequest
-	calls     int
-	err       error
+	slug    string
+	request model.AdminCreateReleaseRequest
+	calls   int
+	err     error
 }
 
 func (s *recordingReleaseStore) AdminCreateRelease(
-	accountID string,
 	slug string,
 	req model.AdminCreateReleaseRequest,
 ) (model.AdminCreateReleaseResponse, error) {
 	s.calls++
-	s.accountID = accountID
 	s.slug = slug
 	s.request = req
 	if s.err != nil {
@@ -87,15 +84,13 @@ func TestAdminReleaseRouteAcceptsPartialCanonicalRelease(t *testing.T) {
 	}`)
 	if response.Code != http.StatusOK ||
 		store.calls != 1 ||
-		store.accountID != ownerAccount ||
 		store.slug != "partial-story" ||
 		len(store.request.Editions) != 1 ||
 		store.request.Editions[0].EditionKey != model.AdminStoryEditionGrowingReaders {
 		t.Fatalf(
-			"release status/calls/account/slug/request = %d/%d/%q/%q/%#v body=%s",
+			"release status/calls/slug/request = %d/%d/%q/%#v body=%s",
 			response.Code,
 			store.calls,
-			store.accountID,
 			store.slug,
 			store.request,
 			response.Body.String(),

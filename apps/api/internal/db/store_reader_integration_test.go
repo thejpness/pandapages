@@ -114,7 +114,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 	}
 	author := "Panda Pages Test Fixture"
 	language := "en-GB"
-	firstDraft, err := store.AdminDraftUpsert(readerAccountA, model.AdminDraftUpsertRequest{
+	firstDraft, err := store.AdminDraftUpsert(model.AdminDraftUpsertRequest{
 		Slug:     readerSlug,
 		Title:    "TEST ONLY — Coherent Reader",
 		Author:   &author,
@@ -132,11 +132,11 @@ func TestReaderStoreIntegration(t *testing.T) {
 	if err := adminDB.QueryRow(`SELECT visibility, owner_account_id FROM stories WHERE id = $1`, firstDraft.StoryID).Scan(&initialVisibility, &initialOwner); err != nil || initialVisibility != string(model.StoryVisibilityPublic) || initialOwner.Valid {
 		t.Fatalf("Story Studio story visibility/owner = %q / %#v / %v", initialVisibility, initialOwner, err)
 	}
-	if err := store.AdminPublish(readerAccountA, readerSlug, firstDraft.StoryVersionID); err != nil {
+	if err := store.AdminPublish(readerSlug, firstDraft.StoryVersionID); err != nil {
 		t.Fatalf("publish first Reader version: %v", err)
 	}
 
-	secondDraft, err := store.AdminDraftUpsert(readerAccountA, model.AdminDraftUpsertRequest{
+	secondDraft, err := store.AdminDraftUpsert(model.AdminDraftUpsertRequest{
 		Slug:     readerSlug,
 		Title:    "TEST ONLY — Coherent Reader",
 		Author:   &author,
@@ -149,7 +149,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 	if secondDraft.Version != 2 || secondDraft.SegmentsCount != 2 {
 		t.Fatalf("second draft = %#v, want version 2 with two segments", secondDraft)
 	}
-	if err := store.AdminPublish(readerAccountA, readerSlug, firstDraft.StoryVersionID); err != nil {
+	if err := store.AdminPublish(readerSlug, firstDraft.StoryVersionID); err != nil {
 		t.Fatalf("restore first publication: %v", err)
 	}
 
@@ -215,7 +215,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 		const editionSlug = "edition-aware-reader-contract"
 		editionMarkdown := "# Edition-aware contract\n\nSame immutable body in two reading editions.\n"
 
-		classicDraft, err := store.AdminDraftUpsert(readerAccountA, model.AdminDraftUpsertRequest{
+		classicDraft, err := store.AdminDraftUpsert(model.AdminDraftUpsertRequest{
 			Slug:     editionSlug,
 			Title:    "Edition-aware contract",
 			Author:   &author,
@@ -228,12 +228,12 @@ func TestReaderStoreIntegration(t *testing.T) {
 		if classicDraft.EditionKey != model.AdminStoryEditionClassic || classicDraft.Version != 1 {
 			t.Fatalf("Classic draft = %#v", classicDraft)
 		}
-		if _, err := store.AdminPublishStory(readerAccountA, editionSlug, classicDraft.VersionID); err != nil {
+		if _, err := store.AdminPublishStory(editionSlug, classicDraft.VersionID); err != nil {
 			t.Fatalf("publish Classic edition: %v", err)
 		}
 
 		growing := model.AdminStoryEditionGrowingReaders
-		growingDraft, err := store.AdminDraftUpsert(readerAccountA, model.AdminDraftUpsertRequest{
+		growingDraft, err := store.AdminDraftUpsert(model.AdminDraftUpsertRequest{
 			Slug:       editionSlug,
 			EditionKey: &growing,
 			Title:      "Edition-aware contract",
@@ -250,7 +250,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 			t.Fatalf("Growing Readers draft = %#v", growingDraft)
 		}
 
-		reusedGrowing, err := store.AdminDraftUpsert(readerAccountA, model.AdminDraftUpsertRequest{
+		reusedGrowing, err := store.AdminDraftUpsert(model.AdminDraftUpsertRequest{
 			Slug:       editionSlug,
 			EditionKey: &growing,
 			Title:      "Edition-aware contract",
@@ -267,7 +267,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 			t.Fatalf("reused Growing Readers draft = %#v", reusedGrowing)
 		}
 
-		detail, err := store.AdminGetStory(readerAccountA, editionSlug)
+		detail, err := store.AdminGetStory(editionSlug)
 		if err != nil {
 			t.Fatalf("get edition-aware story detail: %v", err)
 		}
@@ -319,12 +319,10 @@ func TestReaderStoreIntegration(t *testing.T) {
 			t.Fatalf("Growing Readers edition detail = %#v", growingEdition)
 		}
 
-		if _, err := store.AdminGetVersionSource(readerAccountA, editionSlug, growingDraft.VersionID); !errors.Is(err, model.ErrAdminStoryNotFound) {
+		if _, err := store.AdminGetVersionSource(editionSlug, growingDraft.VersionID); !errors.Is(err, model.ErrAdminStoryNotFound) {
 			t.Fatalf("legacy Classic source followed Growing Readers version: %v", err)
 		}
-		growingSource, err := store.AdminGetEditionVersionSource(
-			readerAccountA,
-			editionSlug,
+		growingSource, err := store.AdminGetEditionVersionSource(editionSlug,
 			growing,
 			growingDraft.VersionID,
 		)
@@ -338,7 +336,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 			t.Fatalf("Growing Readers source = %#v", growingSource)
 		}
 
-		if _, err := store.AdminPublishStory(readerAccountA, editionSlug, growingDraft.VersionID); !errors.Is(err, model.ErrAdminPublishNotFound) {
+		if _, err := store.AdminPublishStory(editionSlug, growingDraft.VersionID); !errors.Is(err, model.ErrAdminPublishNotFound) {
 			t.Fatalf("legacy Classic publish accepted Growing Readers version: %v", err)
 		}
 
@@ -384,7 +382,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 			"year":  1901,
 		}
 
-		first, err := store.AdminSourceUpsert(readerAccountA, sourceSlug, model.AdminSourceUpsertRequest{
+		first, err := store.AdminSourceUpsert(sourceSlug, model.AdminSourceUpsertRequest{
 			Title:      "Canonical Original",
 			Author:     &sourceAuthor,
 			Language:   &sourceLanguage,
@@ -405,7 +403,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 			t.Fatalf("Story Studio source story visibility/owner = %q / %#v / %v", sourceVisibility, sourceOwner, err)
 		}
 
-		sourceOnlyStory, err := store.AdminGetStory(readerAccountA, sourceSlug)
+		sourceOnlyStory, err := store.AdminGetStory(sourceSlug)
 		if err != nil {
 			t.Fatalf("get source-only story: %v", err)
 		}
@@ -437,7 +435,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 			t.Fatalf("source-only story persisted %d editions", sourceEditionRows)
 		}
 
-		detail, err := store.AdminGetSource(readerAccountA, sourceSlug)
+		detail, err := store.AdminGetSource(sourceSlug)
 		if err != nil {
 			t.Fatalf("get canonical source detail: %v", err)
 		}
@@ -450,7 +448,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 			t.Fatalf("canonical source detail = %#v", detail)
 		}
 
-		snapshot, err := store.AdminGetSourceVersion(readerAccountA, sourceSlug, first.VersionID)
+		snapshot, err := store.AdminGetSourceVersion(sourceSlug, first.VersionID)
 		if err != nil {
 			t.Fatalf("get canonical source v1: %v", err)
 		}
@@ -461,7 +459,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 			t.Fatalf("canonical source v1 = %#v", snapshot)
 		}
 
-		reused, err := store.AdminSourceUpsert(readerAccountA, sourceSlug, model.AdminSourceUpsertRequest{
+		reused, err := store.AdminSourceUpsert(sourceSlug, model.AdminSourceUpsertRequest{
 			Title:      " Canonical Original ",
 			Author:     &sourceAuthor,
 			Language:   &sourceLanguage,
@@ -478,7 +476,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 		}
 
 		revisedBody := originalBody + "A corrected final line.\n"
-		revised, err := store.AdminSourceUpsert(readerAccountA, sourceSlug, model.AdminSourceUpsertRequest{
+		revised, err := store.AdminSourceUpsert(sourceSlug, model.AdminSourceUpsertRequest{
 			Title:      "Canonical Original",
 			Author:     &sourceAuthor,
 			Language:   &sourceLanguage,
@@ -494,7 +492,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 			t.Fatalf("revised canonical source = %#v", revised)
 		}
 
-		detail, err = store.AdminGetSource(readerAccountA, sourceSlug)
+		detail, err = store.AdminGetSource(sourceSlug)
 		if err != nil {
 			t.Fatalf("get revised canonical source detail: %v", err)
 		}
@@ -506,18 +504,18 @@ func TestReaderStoreIntegration(t *testing.T) {
 			detail.Versions[1].Version != 1 {
 			t.Fatalf("revised source history = %#v", detail)
 		}
-		oldSnapshot, err := store.AdminGetSourceVersion(readerAccountA, sourceSlug, first.VersionID)
+		oldSnapshot, err := store.AdminGetSourceVersion(sourceSlug, first.VersionID)
 		if err != nil {
 			t.Fatalf("get retained canonical source v1: %v", err)
 		}
 		if oldSnapshot.SourceText != originalBody || oldSnapshot.IsCurrent {
 			t.Fatalf("retained canonical source v1 = %#v", oldSnapshot)
 		}
-		if _, err := store.AdminGetSource(readerAccountB, sourceSlug); err != nil {
+		if _, err := store.AdminGetSource(sourceSlug); err != nil {
 			t.Fatalf("global source detail error = %v", err)
 		}
 
-		classicDraft, err := store.AdminDraftUpsert(readerAccountA, model.AdminDraftUpsertRequest{
+		classicDraft, err := store.AdminDraftUpsert(model.AdminDraftUpsertRequest{
 			Slug:     sourceSlug,
 			Title:    "Adapted Classic",
 			Author:   &author,
@@ -531,11 +529,11 @@ func TestReaderStoreIntegration(t *testing.T) {
 			classicDraft.EditionKey != model.AdminStoryEditionClassic {
 			t.Fatalf("Classic source-independent version = %#v", classicDraft)
 		}
-		if _, err := store.AdminPublishStory(readerAccountA, sourceSlug, classicDraft.VersionID); err != nil {
+		if _, err := store.AdminPublishStory(sourceSlug, classicDraft.VersionID); err != nil {
 			t.Fatalf("publish sourced Classic: %v", err)
 		}
 
-		storyAfterEdition, err := store.AdminGetStory(readerAccountA, sourceSlug)
+		storyAfterEdition, err := store.AdminGetStory(sourceSlug)
 		if err != nil {
 			t.Fatalf("get sourced story after Classic: %v", err)
 		}
@@ -555,12 +553,12 @@ func TestReaderStoreIntegration(t *testing.T) {
 			t.Fatalf("Reader confused canonical source with adaptation: %#v", readerStory)
 		}
 
-		if _, err := store.AdminGetSource(readerAccountA, readerSlug); !errors.Is(err, model.ErrAdminSourceNotFound) {
+		if _, err := store.AdminGetSource(readerSlug); !errors.Is(err, model.ErrAdminSourceNotFound) {
 			t.Fatalf("existing Classic was incorrectly backfilled as a source: %v", err)
 		}
 	})
 
-	accountBDraft, err := store.AdminDraftUpsert(readerAccountB, model.AdminDraftUpsertRequest{
+	accountBDraft, err := store.AdminDraftUpsert(model.AdminDraftUpsertRequest{
 		Slug:     readerAccountBSlug,
 		Title:    "Account B isolated story",
 		Author:   &author,
@@ -570,7 +568,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert account B Reader draft: %v", err)
 	}
-	if err := store.AdminPublish(readerAccountB, readerAccountBSlug, accountBDraft.StoryVersionID); err != nil {
+	if err := store.AdminPublish(readerAccountBSlug, accountBDraft.StoryVersionID); err != nil {
 		t.Fatalf("publish account B story: %v", err)
 	}
 	t.Run("public Reader story access is global", func(t *testing.T) {
@@ -606,7 +604,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 		}
 	})
 
-	if _, err := store.AdminDraftUpsert(readerAccountA, model.AdminDraftUpsertRequest{
+	if _, err := store.AdminDraftUpsert(model.AdminDraftUpsertRequest{
 		Slug:     "unpublished-reader-story",
 		Title:    "Unpublished",
 		Language: &language,
@@ -621,16 +619,16 @@ func TestReaderStoreIntegration(t *testing.T) {
 			t.Fatalf("initial draft outcomes = %q / %q", firstDraft.Outcome, secondDraft.Outcome)
 		}
 
-		globalCatalogue, err := store.AdminListStories(readerAccountC)
+		globalCatalogue, err := store.AdminListStories()
 		if err != nil || len(globalCatalogue.Items) == 0 {
 			t.Fatalf("global catalogue from account C = %#v / %v", globalCatalogue, err)
 		}
 
-		catalogue, err := store.AdminListStories(readerAccountA)
+		catalogue, err := store.AdminListStories()
 		if err != nil {
 			t.Fatalf("list account A catalogue: %v", err)
 		}
-		repeatedCatalogue, err := store.AdminListStories(readerAccountA)
+		repeatedCatalogue, err := store.AdminListStories()
 		if err != nil {
 			t.Fatalf("repeat account A catalogue: %v", err)
 		}
@@ -673,7 +671,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 			}
 		}
 
-		detail, err := store.AdminGetStory(readerAccountA, readerSlug)
+		detail, err := store.AdminGetStory(readerSlug)
 		if err != nil {
 			t.Fatalf("get account A story detail: %v", err)
 		}
@@ -696,7 +694,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 			t.Fatalf("detail loaded source content: %s", encodedDetail)
 		}
 
-		source, err := store.AdminGetVersionSource(readerAccountA, readerSlug, firstDraft.VersionID)
+		source, err := store.AdminGetVersionSource(readerSlug, firstDraft.VersionID)
 		if err != nil {
 			t.Fatalf("get protected version source: %v", err)
 		}
@@ -705,17 +703,17 @@ func TestReaderStoreIntegration(t *testing.T) {
 			source.Health != model.AdminVersionHealthReady || !source.IsPublished || source.IsDraft {
 			t.Fatalf("protected version source = %#v", source)
 		}
-		if _, err := store.AdminGetVersionSource(readerAccountA, readerSlug, accountBDraft.VersionID); !errors.Is(err, model.ErrAdminStoryNotFound) {
+		if _, err := store.AdminGetVersionSource(readerSlug, accountBDraft.VersionID); !errors.Is(err, model.ErrAdminStoryNotFound) {
 			t.Fatalf("cross-account version source error = %v", err)
 		}
-		unpublishedDetail, err := store.AdminGetStory(readerAccountA, "unpublished-reader-story")
+		unpublishedDetail, err := store.AdminGetStory("unpublished-reader-story")
 		if err != nil {
 			t.Fatalf("get second story detail: %v", err)
 		}
-		if _, err := store.AdminGetVersionSource(readerAccountA, readerSlug, unpublishedDetail.DraftVersion.VersionID); !errors.Is(err, model.ErrAdminStoryNotFound) {
+		if _, err := store.AdminGetVersionSource(readerSlug, unpublishedDetail.DraftVersion.VersionID); !errors.Is(err, model.ErrAdminStoryNotFound) {
 			t.Fatalf("cross-story version source error = %v", err)
 		}
-		if _, err := store.AdminGetStory(readerAccountC, readerSlug); err != nil {
+		if _, err := store.AdminGetStory(readerSlug); err != nil {
 			t.Fatalf("global story detail error = %v", err)
 		}
 
@@ -744,14 +742,14 @@ func TestReaderStoreIntegration(t *testing.T) {
 		}
 
 		const unpublishSlug = "story-studio-unpublish"
-		unpublishDraft, err := store.AdminDraftUpsert(readerAccountA, model.AdminDraftUpsertRequest{
+		unpublishDraft, err := store.AdminDraftUpsert(model.AdminDraftUpsertRequest{
 			Slug: unpublishSlug, Title: "Story Studio unpublish", Markdown: "# Story Studio unpublish\n\nReadable progress.\n",
 		})
 		if err != nil {
 			t.Fatalf("create unpublish fixture: %v", err)
 		}
 		t.Cleanup(func() { _, _ = adminDB.Exec(`DELETE FROM stories WHERE id = $1`, unpublishDraft.StoryID) })
-		publishedStatus, err := store.AdminPublishStory(readerAccountA, unpublishSlug, unpublishDraft.VersionID)
+		publishedStatus, err := store.AdminPublishStory(unpublishSlug, unpublishDraft.VersionID)
 		if err != nil || publishedStatus.Status != model.AdminStoryStatusPublished ||
 			publishedStatus.PublishedVersion == nil || publishedStatus.PublishedVersion.VersionID != unpublishDraft.VersionID {
 			t.Fatalf("typed publication response/error = %#v / %v", publishedStatus, err)
@@ -769,7 +767,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 			t.Fatalf("count progress before unpublish: %v", err)
 		}
 
-		unpublishedStatus, err := store.AdminUnpublish(readerAccountA, unpublishSlug)
+		unpublishedStatus, err := store.AdminUnpublish(unpublishSlug)
 		if err != nil {
 			t.Fatalf("unpublish story: %v", err)
 		}
@@ -790,7 +788,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 		if editionDraftAfterUnpublish != unpublishDraft.VersionID {
 			t.Fatalf("Classic draft after unpublish = %q", editionDraftAfterUnpublish)
 		}
-		repeatedUnpublish, err := store.AdminUnpublish(readerAccountA, unpublishSlug)
+		repeatedUnpublish, err := store.AdminUnpublish(unpublishSlug)
 		if err != nil || !reflect.DeepEqual(repeatedUnpublish, unpublishedStatus) {
 			t.Fatalf("repeated unpublish response/error = %#v / %v; first %#v", repeatedUnpublish, err, unpublishedStatus)
 		}
@@ -824,11 +822,11 @@ func TestReaderStoreIntegration(t *testing.T) {
 				t.Fatalf("unpublished story remained in Library: %#v", item)
 			}
 		}
-		if _, err := store.AdminUnpublish(readerAccountB, "missing-unpublish-story"); !errors.Is(err, model.ErrAdminStoryNotFound) {
+		if _, err := store.AdminUnpublish("missing-unpublish-story"); !errors.Is(err, model.ErrAdminStoryNotFound) {
 			t.Fatalf("missing unpublish error = %v", err)
 		}
 
-		retained, err := store.AdminGetStory(readerAccountA, unpublishSlug)
+		retained, err := store.AdminGetStory(unpublishSlug)
 		if err != nil || retained.Status != model.AdminStoryStatusDraftOnly ||
 			retained.VersionCount != 1 || retained.DraftVersion == nil ||
 			retained.DraftVersion.VersionID != unpublishDraft.VersionID ||
@@ -866,7 +864,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 			if slug == corruptSlug {
 				markdown = fmt.Sprintf("# %s\n\n%s\n", title, privateBodyMarker)
 			}
-			draft, err := store.AdminDraftUpsert(readerAccountC, model.AdminDraftUpsertRequest{
+			draft, err := store.AdminDraftUpsert(model.AdminDraftUpsertRequest{
 				Slug:     slug,
 				Title:    title,
 				Language: &language,
@@ -881,7 +879,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 					t.Errorf("remove catalogue fixture %s: %v", storyID, err)
 				}
 			})
-			if err := store.AdminPublish(readerAccountC, slug, draft.VersionID); err != nil {
+			if err := store.AdminPublish(slug, draft.VersionID); err != nil {
 				t.Fatalf("publish %s catalogue fixture: %v", slug, err)
 			}
 			drafts[slug] = draft
@@ -920,11 +918,11 @@ func TestReaderStoreIntegration(t *testing.T) {
 			t.Fatalf("malformed immutable frontmatter shape = type %q / title %t / language %t", frontmatterType, hasTitle, hasLanguage)
 		}
 
-		catalogue, err := store.AdminListStories(readerAccountC)
+		catalogue, err := store.AdminListStories()
 		if err != nil {
 			t.Fatalf("list catalogue with malformed immutable frontmatter: %v", err)
 		}
-		repeated, err := store.AdminListStories(readerAccountC)
+		repeated, err := store.AdminListStories()
 		if err != nil {
 			t.Fatalf("repeat catalogue with malformed immutable frontmatter: %v", err)
 		}
@@ -1002,7 +1000,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 
 	t.Run("database rejects a foreign edition draft pointer and repair state never leaks corrupt content", func(t *testing.T) {
 		const pointerSlug = "story-studio-foreign-pointer"
-		pointerDraft, err := store.AdminDraftUpsert(readerAccountA, model.AdminDraftUpsertRequest{
+		pointerDraft, err := store.AdminDraftUpsert(model.AdminDraftUpsertRequest{
 			Slug: pointerSlug, Title: "Account A pointer story", Markdown: "# Account A pointer story\n\nSafe metadata.\n",
 		})
 		if err != nil {
@@ -1019,7 +1017,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 		} else if !strings.Contains(err.Error(), "story_editions_draft_version_fkey") {
 			t.Fatalf("cross-story edition draft pointer failed outside story_editions_draft_version_fkey: %v", err)
 		}
-		pointerDetail, err := store.AdminGetStory(readerAccountA, pointerSlug)
+		pointerDetail, err := store.AdminGetStory(pointerSlug)
 		if err != nil {
 			t.Fatalf("get pointer story after rejected corruption: %v", err)
 		}
@@ -1030,7 +1028,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 		}
 
 		const corruptSlug = "story-studio-corrupt-version"
-		corruptDraft, err := store.AdminDraftUpsert(readerAccountA, model.AdminDraftUpsertRequest{
+		corruptDraft, err := store.AdminDraftUpsert(model.AdminDraftUpsertRequest{
 			Slug: corruptSlug, Title: "Corrupt version", Markdown: "# Corrupt version\n\nSafe original.\n",
 		})
 		if err != nil {
@@ -1045,7 +1043,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 		`, corruptDraft.VersionID, privateMarker); err != nil {
 			t.Fatalf("corrupt content hash: %v", err)
 		}
-		corruptDetail, err := store.AdminGetStory(readerAccountA, corruptSlug)
+		corruptDetail, err := store.AdminGetStory(corruptSlug)
 		if err != nil {
 			t.Fatalf("get corrupt story detail: %v", err)
 		}
@@ -1060,7 +1058,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 		if strings.Contains(string(encoded), privateMarker) || strings.Contains(string(encoded), "noncanonical persisted content") {
 			t.Fatalf("corrupt detail leaked internal content/diagnostic: %s", encoded)
 		}
-		if _, err := store.AdminGetVersionSource(readerAccountA, corruptSlug, corruptDraft.VersionID); !errors.Is(err, model.ErrAdminVersionRepairRequired) ||
+		if _, err := store.AdminGetVersionSource(corruptSlug, corruptDraft.VersionID); !errors.Is(err, model.ErrAdminVersionRepairRequired) ||
 			strings.Contains(err.Error(), privateMarker) {
 			t.Fatalf("corrupt version source error = %v", err)
 		}
@@ -1073,13 +1071,13 @@ func TestReaderStoreIntegration(t *testing.T) {
 			Language: &language,
 			Markdown: "# Idempotent repair story\n\nReadable body.\n",
 		}
-		draft, err := store.AdminDraftUpsert(readerAccountA, req)
+		draft, err := store.AdminDraftUpsert(req)
 		if err != nil {
 			t.Fatalf("insert idempotency target: %v", err)
 		}
 		t.Cleanup(func() { _, _ = adminDB.Exec(`DELETE FROM stories WHERE id = $1`, draft.StoryID) })
 
-		exactReuse, err := store.AdminDraftUpsert(readerAccountA, req)
+		exactReuse, err := store.AdminDraftUpsert(req)
 		if err != nil {
 			t.Fatalf("reuse exact immutable version: %v", err)
 		}
@@ -1111,7 +1109,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 			t.Run("same body changed "+metadataChange.name, func(t *testing.T) {
 				changed := req
 				metadataChange.change(&changed)
-				if _, err := store.AdminDraftUpsert(readerAccountA, changed); !errors.Is(err, model.ErrAdminVersionRepairRequired) {
+				if _, err := store.AdminDraftUpsert(changed); !errors.Is(err, model.ErrAdminVersionRepairRequired) {
 					t.Fatalf("metadata-only reuse error = %v, want repair-required", err)
 				}
 				var (
@@ -1156,7 +1154,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 		`, draft.StoryVersionID, strings.Repeat("f", 64)); err != nil {
 			t.Fatalf("tamper same-count idempotency target: %v", err)
 		}
-		if _, err := store.AdminDraftUpsert(readerAccountA, req); !errors.Is(err, model.ErrAdminVersionRepairRequired) {
+		if _, err := store.AdminDraftUpsert(req); !errors.Is(err, model.ErrAdminVersionRepairRequired) {
 			t.Fatalf("same-count tampered reuse error = %v, want repair-required", err)
 		}
 		var (
@@ -1187,10 +1185,10 @@ func TestReaderStoreIntegration(t *testing.T) {
 			t.Fatalf("corrupt idempotency target: %v", err)
 		}
 
-		if _, err := store.AdminDraftUpsert(readerAccountA, req); !errors.Is(err, model.ErrAdminVersionRepairRequired) {
+		if _, err := store.AdminDraftUpsert(req); !errors.Is(err, model.ErrAdminVersionRepairRequired) {
 			t.Fatalf("corrupt idempotent reuse error = %v, want repair-required", err)
 		}
-		if err := store.AdminPublish(readerAccountA, req.Slug, draft.StoryVersionID); !errors.Is(err, model.ErrAdminPublishInvalid) {
+		if err := store.AdminPublish(req.Slug, draft.StoryVersionID); !errors.Is(err, model.ErrAdminPublishInvalid) {
 			t.Fatalf("publish corrupt idempotency target error = %v, want publish-invalid", err)
 		}
 
@@ -1220,12 +1218,12 @@ func TestReaderStoreIntegration(t *testing.T) {
 			Language: &language,
 			Markdown: "---\ndisplayNote: Keep this note\nlargeMeasure: 1e21\npresentation:\n  tone: calm\n---\n# Reuse additive frontmatter\n\nReadable body.\n",
 		}
-		draft, err := store.AdminDraftUpsert(readerAccountA, req)
+		draft, err := store.AdminDraftUpsert(req)
 		if err != nil {
 			t.Fatalf("insert additive-frontmatter target: %v", err)
 		}
 		t.Cleanup(func() { _, _ = adminDB.Exec(`DELETE FROM stories WHERE id = $1`, draft.StoryID) })
-		exact, err := store.AdminDraftUpsert(readerAccountA, req)
+		exact, err := store.AdminDraftUpsert(req)
 		if err != nil {
 			t.Fatalf("reuse exact additive frontmatter: %v", err)
 		}
@@ -1235,7 +1233,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 
 		changed := req
 		changed.Markdown = strings.Replace(req.Markdown, "Keep this note", "Different note", 1)
-		if _, err := store.AdminDraftUpsert(readerAccountA, changed); !errors.Is(err, model.ErrAdminVersionRepairRequired) {
+		if _, err := store.AdminDraftUpsert(changed); !errors.Is(err, model.ErrAdminVersionRepairRequired) {
 			t.Fatalf("changed additive-frontmatter reuse error = %v, want repair-required", err)
 		}
 		var pointer string
@@ -1254,7 +1252,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 			Language: &language,
 			Markdown: "# Reuse optional author\n\nReadable body.\n",
 		}
-		draft, err := store.AdminDraftUpsert(readerAccountA, req)
+		draft, err := store.AdminDraftUpsert(req)
 		if err != nil {
 			t.Fatalf("insert optional-author target: %v", err)
 		}
@@ -1272,7 +1270,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 				if _, err := adminDB.Exec(variant.statement, draft.StoryVersionID); err != nil {
 					t.Fatalf("set %s optional author: %v", variant.name, err)
 				}
-				exact, err := store.AdminDraftUpsert(readerAccountA, req)
+				exact, err := store.AdminDraftUpsert(req)
 				if err != nil {
 					t.Fatalf("reuse %s optional author: %v", variant.name, err)
 				}
@@ -1469,14 +1467,14 @@ func TestReaderStoreIntegration(t *testing.T) {
 					Language: &language,
 					Markdown: "# Persisted mismatch target\n\nFirst paragraph.\n\nSecond paragraph.\n",
 				}
-				draft, err := store.AdminDraftUpsert(readerAccountA, req)
+				draft, err := store.AdminDraftUpsert(req)
 				if err != nil {
 					t.Fatalf("insert persisted mismatch target: %v", err)
 				}
 				t.Cleanup(func() { _, _ = adminDB.Exec(`DELETE FROM stories WHERE id = $1`, draft.StoryID) })
 				test.mutate(t, draft)
 
-				if _, err := store.AdminDraftUpsert(readerAccountA, req); !errors.Is(err, model.ErrAdminVersionRepairRequired) {
+				if _, err := store.AdminDraftUpsert(req); !errors.Is(err, model.ErrAdminVersionRepairRequired) {
 					t.Fatalf("corrupt reuse error = %v, want repair-required", err)
 				}
 				var (
@@ -1503,7 +1501,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 			Language: &language,
 			Markdown: "# Reuse version lock\n\nReadable body.\n",
 		}
-		draft, err := store.AdminDraftUpsert(readerAccountA, req)
+		draft, err := store.AdminDraftUpsert(req)
 		if err != nil {
 			t.Fatalf("insert reuse lock target: %v", err)
 		}
@@ -1531,7 +1529,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 		lockingStore := newReaderIntegrationStoreWithApplicationName(t, databaseURL, reuseApplicationName)
 		reuseResult := make(chan error, 1)
 		go func() {
-			_, err := lockingStore.AdminDraftUpsert(readerAccountA, req)
+			_, err := lockingStore.AdminDraftUpsert(req)
 			reuseResult <- err
 		}()
 
@@ -1593,7 +1591,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 			Language: &language,
 			Markdown: "# Reuse segment lock\n\nReadable body.\n",
 		}
-		draft, err := store.AdminDraftUpsert(readerAccountA, req)
+		draft, err := store.AdminDraftUpsert(req)
 		if err != nil {
 			t.Fatalf("insert reuse segment-lock target: %v", err)
 		}
@@ -1621,7 +1619,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 		lockingStore := newReaderIntegrationStoreWithApplicationName(t, databaseURL, reuseApplicationName)
 		reuseResult := make(chan error, 1)
 		go func() {
-			_, err := lockingStore.AdminDraftUpsert(readerAccountA, req)
+			_, err := lockingStore.AdminDraftUpsert(req)
 			reuseResult <- err
 		}()
 
@@ -1678,7 +1676,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 
 	t.Run("publication validates immutable metadata identities and readable content atomically", func(t *testing.T) {
 		const slug = "publication-validation-story"
-		first, err := store.AdminDraftUpsert(readerAccountA, model.AdminDraftUpsertRequest{
+		first, err := store.AdminDraftUpsert(model.AdminDraftUpsertRequest{
 			Slug:     slug,
 			Title:    "Publication validation v1",
 			Language: &language,
@@ -1688,10 +1686,10 @@ func TestReaderStoreIntegration(t *testing.T) {
 			t.Fatalf("insert publication validation v1: %v", err)
 		}
 		t.Cleanup(func() { _, _ = adminDB.Exec(`DELETE FROM stories WHERE id = $1`, first.StoryID) })
-		if err := store.AdminPublish(readerAccountA, slug, first.StoryVersionID); err != nil {
+		if err := store.AdminPublish(slug, first.StoryVersionID); err != nil {
 			t.Fatalf("publish validation v1: %v", err)
 		}
-		second, err := store.AdminDraftUpsert(readerAccountA, model.AdminDraftUpsertRequest{
+		second, err := store.AdminDraftUpsert(model.AdminDraftUpsertRequest{
 			Slug:     slug,
 			Title:    "Publication validation v2",
 			Language: &language,
@@ -1755,7 +1753,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 				); err != nil {
 					t.Fatalf("mutate %s: %v", mutation.name, err)
 				}
-				if err := store.AdminPublish(readerAccountA, slug, second.StoryVersionID); !errors.Is(err, model.ErrAdminPublishInvalid) {
+				if err := store.AdminPublish(slug, second.StoryVersionID); !errors.Is(err, model.ErrAdminPublishInvalid) {
 					t.Fatalf("publish noncanonical %s error = %v, want publish-invalid", mutation.name, err)
 				}
 				assertCurrentClassic(first.StoryVersionID)
@@ -1788,7 +1786,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 				`, second.StoryVersionID, mutation.path, mutation.badValue); err != nil {
 					t.Fatalf("mutate %s: %v", mutation.name, err)
 				}
-				if err := store.AdminPublish(readerAccountA, slug, second.StoryVersionID); !errors.Is(err, model.ErrAdminPublishInvalid) {
+				if err := store.AdminPublish(slug, second.StoryVersionID); !errors.Is(err, model.ErrAdminPublishInvalid) {
 					t.Fatalf("publish %s error = %v, want publish-invalid", mutation.name, err)
 				}
 				assertCurrentClassic(first.StoryVersionID)
@@ -1834,7 +1832,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 				); err != nil {
 					t.Fatalf("mutate %s: %v", mutation.name, err)
 				}
-				if err := store.AdminPublish(readerAccountA, slug, second.StoryVersionID); !errors.Is(err, model.ErrAdminPublishInvalid) {
+				if err := store.AdminPublish(slug, second.StoryVersionID); !errors.Is(err, model.ErrAdminPublishInvalid) {
 					t.Fatalf("publish noncanonical %s error = %v, want publish-invalid", mutation.name, err)
 				}
 				assertCurrentClassic(first.StoryVersionID)
@@ -1902,7 +1900,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 				t.Fatalf("insert raw-HTML-only segment: %v", err)
 			}
 
-			if err := store.AdminPublish(readerAccountA, slug, rawVersionID); !errors.Is(err, model.ErrAdminPublishInvalid) {
+			if err := store.AdminPublish(slug, rawVersionID); !errors.Is(err, model.ErrAdminPublishInvalid) {
 				t.Fatalf("publish raw-HTML-only version error = %v, want publish-invalid", err)
 			}
 			assertCurrentClassic(first.StoryVersionID)
@@ -1918,7 +1916,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 		if _, err := adminDB.Exec(`UPDATE story_versions SET frontmatter = frontmatter - 'title' WHERE id = $1`, second.StoryVersionID); err != nil {
 			t.Fatalf("remove immutable title: %v", err)
 		}
-		if err := store.AdminPublish(readerAccountA, slug, second.StoryVersionID); !errors.Is(err, model.ErrAdminPublishInvalid) {
+		if err := store.AdminPublish(slug, second.StoryVersionID); !errors.Is(err, model.ErrAdminPublishInvalid) {
 			t.Fatalf("publish missing immutable title error = %v, want publish-invalid", err)
 		}
 		assertCurrentClassic(first.StoryVersionID)
@@ -1937,7 +1935,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 		`, second.StoryVersionID); err != nil {
 			t.Fatalf("corrupt chapter propagation: %v", err)
 		}
-		if err := store.AdminPublish(readerAccountA, slug, second.StoryVersionID); !errors.Is(err, model.ErrAdminPublishInvalid) {
+		if err := store.AdminPublish(slug, second.StoryVersionID); !errors.Is(err, model.ErrAdminPublishInvalid) {
 			t.Fatalf("publish invalid chapter identity error = %v, want publish-invalid", err)
 		}
 		assertCurrentClassic(first.StoryVersionID)
@@ -1974,7 +1972,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 		lockingStore := newReaderIntegrationStoreWithApplicationName(t, databaseURL, publishApplicationName)
 		publishResult := make(chan error, 1)
 		go func() {
-			publishResult <- lockingStore.AdminPublish(readerAccountA, slug, second.StoryVersionID)
+			publishResult <- lockingStore.AdminPublish(slug, second.StoryVersionID)
 		}()
 		lockDeadline := time.Now().Add(5 * time.Second)
 		lockObserved := false
@@ -2024,11 +2022,11 @@ func TestReaderStoreIntegration(t *testing.T) {
 			t.Fatalf("restore rendered segment: %v", err)
 		}
 
-		if err := store.AdminPublish(readerAccountA, slug, accountBDraft.StoryVersionID); !errors.Is(err, model.ErrAdminPublishNotFound) {
+		if err := store.AdminPublish(slug, accountBDraft.StoryVersionID); !errors.Is(err, model.ErrAdminPublishNotFound) {
 			t.Fatalf("cross-account version publish error = %v, want existing not-found semantics", err)
 		}
 		assertCurrentClassic(first.StoryVersionID)
-		if err := store.AdminPublish(readerAccountA, slug, second.StoryVersionID); err != nil {
+		if err := store.AdminPublish(slug, second.StoryVersionID); err != nil {
 			t.Fatalf("publish restored validation v2: %v", err)
 		}
 		assertCurrentClassic(second.StoryVersionID)
@@ -2053,7 +2051,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 		if _, err := resolveSelectedReaderStory(readerAccountA, readerProfileA, readerSlug); !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("ReaderStory unsafe published HTML error = %v, want not-found", err)
 		}
-		if _, err := store.AdminGetVersionSource(readerAccountA, readerSlug, firstDraft.StoryVersionID); !errors.Is(err, model.ErrAdminVersionRepairRequired) {
+		if _, err := store.AdminGetVersionSource(readerSlug, firstDraft.StoryVersionID); !errors.Is(err, model.ErrAdminVersionRepairRequired) {
 			t.Fatalf("Story Studio unsafe version source error = %v, want repair-required", err)
 		}
 		if _, err := adminDB.Exec(`
@@ -2104,10 +2102,10 @@ func TestReaderStoreIntegration(t *testing.T) {
 	})
 
 	t.Run("Reader remains coherent during current-release changes", func(t *testing.T) {
-		if err := store.AdminPublish(readerAccountA, readerSlug, secondDraft.StoryVersionID); err != nil {
+		if err := store.AdminPublish(readerSlug, secondDraft.StoryVersionID); err != nil {
 			t.Fatalf("publish second Reader version before release race: %v", err)
 		}
-		if err := store.AdminPublish(readerAccountA, readerSlug, firstDraft.StoryVersionID); err != nil {
+		if err := store.AdminPublish(readerSlug, firstDraft.StoryVersionID); err != nil {
 			t.Fatalf("restore first Reader version before release race: %v", err)
 		}
 
@@ -2214,10 +2212,39 @@ func TestReaderStoreIntegration(t *testing.T) {
 		if _, err := resolveSelectedReaderStory(readerAccountC, readerProfileC, readerSlug); err != nil {
 			t.Fatalf("public ReaderResolve from account C: %v", err)
 		}
-		if _, err := store.AdminGetStory(readerAccountB, readerAccountBSlug); !errors.Is(err, model.ErrAdminStoryNotFound) {
+		if _, err := store.AdminGetStory(readerAccountBSlug); !errors.Is(err, model.ErrAdminStoryNotFound) {
 			t.Fatalf("private story appeared in global Story Studio detail: %v", err)
 		}
-		adminCatalogue, err := store.AdminListStories(readerAccountB)
+		if _, err := store.AdminGetSource(readerAccountBSlug); !errors.Is(err, model.ErrAdminSourceNotFound) {
+			t.Fatalf("private story appeared in global Story Studio source: %v", err)
+		}
+		if _, err := store.AdminGetVersionSource(readerAccountBSlug, accountBDraft.VersionID); !errors.Is(err, model.ErrAdminStoryNotFound) {
+			t.Fatalf("private story appeared in global Story Studio version source: %v", err)
+		}
+		if _, err := store.AdminCreateRelease(readerAccountBSlug, model.AdminCreateReleaseRequest{
+			Editions: []model.AdminReleaseEditionRequest{{
+				EditionKey: model.AdminStoryEditionClassic,
+				VersionID:  accountBDraft.VersionID,
+			}},
+		}); !errors.Is(err, model.ErrAdminReleaseNotFound) {
+			t.Fatalf("private story release was not rejected: %v", err)
+		}
+		if _, err := store.AdminUnpublish(readerAccountBSlug); !errors.Is(err, model.ErrAdminStoryNotFound) {
+			t.Fatalf("private story unpublish was not rejected: %v", err)
+		}
+		if _, err := store.AdminDraftUpsert(model.AdminDraftUpsertRequest{
+			Slug: readerAccountBSlug, Title: "Overwrite private story", Language: &language,
+			Markdown: "# Overwrite private story\n\nMust not change private content.\n",
+		}); !errors.Is(err, model.ErrAdminStoryNotFound) {
+			t.Fatalf("private story draft upsert was not rejected: %v", err)
+		}
+		if _, err := store.AdminSourceUpsert(readerAccountBSlug, model.AdminSourceUpsertRequest{
+			Title: "Overwrite private source", Language: &language, Rights: map[string]any{"label": "Test"},
+			SourceText: "Must not create a source for private content.\n",
+		}); !errors.Is(err, model.ErrAdminSourceNotFound) {
+			t.Fatalf("private story source upsert was not rejected: %v", err)
+		}
+		adminCatalogue, err := store.AdminListStories()
 		if err != nil {
 			t.Fatalf("list public Story Studio catalogue: %v", err)
 		}
@@ -2319,7 +2346,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 		}
 		assertProgressState(t, got, firstDraft.Version, locator, 0.42)
 
-		if err := store.AdminPublish(readerAccountA, readerSlug, secondDraft.StoryVersionID); err != nil {
+		if err := store.AdminPublish(readerSlug, secondDraft.StoryVersionID); err != nil {
 			t.Fatalf("publish second Reader version: %v", err)
 		}
 		if err := store.ProgressPut(readerAccountA, readerProfileA, readerSlug, firstDraft.Version, locator, 0.82); !errors.Is(err, sql.ErrNoRows) {
@@ -2340,7 +2367,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 		}
 		assertProgressState(t, got, secondDraft.Version, draftLocator, 0.83)
 
-		if err := store.AdminPublish(readerAccountA, readerSlug, firstDraft.StoryVersionID); err != nil {
+		if err := store.AdminPublish(readerSlug, firstDraft.StoryVersionID); err != nil {
 			t.Fatalf("restore first publication: %v", err)
 		}
 	})
@@ -2349,14 +2376,14 @@ func TestReaderStoreIntegration(t *testing.T) {
 		if _, err := adminDB.Exec(`DELETE FROM reading_progress WHERE story_id = $1`, firstDraft.StoryID); err != nil {
 			t.Fatalf("clear progress before lock test: %v", err)
 		}
-		if err := store.AdminPublish(readerAccountA, readerSlug, secondDraft.StoryVersionID); err != nil {
+		if err := store.AdminPublish(readerSlug, secondDraft.StoryVersionID); err != nil {
 			t.Fatalf("publish second version before lock test: %v", err)
 		}
 		var secondReleaseID string
 		if err := adminDB.QueryRow(`SELECT current_release_id FROM stories WHERE id = $1`, firstDraft.StoryID).Scan(&secondReleaseID); err != nil {
 			t.Fatalf("read second current release before lock test: %v", err)
 		}
-		if err := store.AdminPublish(readerAccountA, readerSlug, firstDraft.StoryVersionID); err != nil {
+		if err := store.AdminPublish(readerSlug, firstDraft.StoryVersionID); err != nil {
 			t.Fatalf("publish first version before lock test: %v", err)
 		}
 		var firstReleaseID string

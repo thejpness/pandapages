@@ -427,17 +427,14 @@ func selectEditionMetadata(
 // The legacy source route calls this with Classic so existing clients cannot
 // accidentally follow a non-Classic version identifier.
 func (s *Store) AdminGetEditionVersionSource(
-	accountID string,
 	slug string,
 	editionKey model.AdminStoryEditionKey,
 	versionID string,
 ) (model.AdminVersionSourceResponse, error) {
-	accountID = strings.TrimSpace(accountID)
 	slug = strings.TrimSpace(slug)
 	versionID = strings.TrimSpace(versionID)
 	editionKey = model.AdminStoryEditionKey(strings.TrimSpace(string(editionKey)))
-	if !accountIDRe.MatchString(accountID) ||
-		storyingest.ValidateSlug(slug) != nil ||
+	if storyingest.ValidateSlug(slug) != nil ||
 		!model.ValidAdminStoryEditionKey(editionKey) ||
 		!accountIDRe.MatchString(versionID) {
 		return model.AdminVersionSourceResponse{}, fmt.Errorf("%w", model.ErrAdminStoryNotFound)

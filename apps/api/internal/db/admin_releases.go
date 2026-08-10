@@ -242,13 +242,11 @@ func releaseMatchesSelections(
 // records are never mutated; publishing a changed manifest creates a new
 // release number for the story.
 func (s *Store) AdminCreateRelease(
-	accountID string,
 	slug string,
 	req model.AdminCreateReleaseRequest,
 ) (model.AdminCreateReleaseResponse, error) {
-	accountID = strings.TrimSpace(accountID)
 	slug = strings.TrimSpace(slug)
-	if !accountIDRe.MatchString(accountID) || storyingest.ValidateSlug(slug) != nil {
+	if storyingest.ValidateSlug(slug) != nil {
 		return model.AdminCreateReleaseResponse{}, fmt.Errorf("%w", model.ErrAdminReleaseNotFound)
 	}
 	selections, err := normalizeAdminReleaseRequest(req)

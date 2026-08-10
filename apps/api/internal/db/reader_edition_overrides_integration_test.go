@@ -56,7 +56,7 @@ func TestReaderEditionOverrideIntegration(t *testing.T) {
 	store := newReaderIntegrationStore(t, databaseURL)
 	author := "Panda Pages Reader Resolution Fixture"
 	language := "en-GB"
-	bundle, err := store.AdminEditionBundleUpsert(accountID, model.AdminEditionBundleUpsertRequest{
+	bundle, err := store.AdminEditionBundleUpsert(model.AdminEditionBundleUpsertRequest{
 		Slug: slug, Title: "Reader Edition Override", Author: &author, Language: &language,
 		Editions: []model.AdminEditionBundleInput{
 			{EditionKey: model.AdminStoryEditionClassic, Markdown: "# Reader Edition Override\n\nClassic body.\n"},
@@ -74,7 +74,7 @@ func TestReaderEditionOverrideIntegration(t *testing.T) {
 		versionByKey[result.EditionKey] = result.VersionID
 	}
 
-	_, err = store.AdminCreateRelease(accountID, slug, model.AdminCreateReleaseRequest{
+	_, err = store.AdminCreateRelease(slug, model.AdminCreateReleaseRequest{
 		Editions: []model.AdminReleaseEditionRequest{
 			{EditionKey: model.AdminStoryEditionGrowingReaders, VersionID: versionByKey[model.ReaderEditionGrowingReaders]},
 			{EditionKey: model.AdminStoryEditionStoryExplorers, VersionID: versionByKey[model.ReaderEditionStoryExplorers]},
@@ -102,7 +102,7 @@ func TestReaderEditionOverrideIntegration(t *testing.T) {
 		t.Fatalf("stored override = %#v / %v", override, err)
 	}
 
-	_, err = store.AdminCreateRelease(accountID, slug, model.AdminCreateReleaseRequest{
+	_, err = store.AdminCreateRelease(slug, model.AdminCreateReleaseRequest{
 		Editions: []model.AdminReleaseEditionRequest{
 			{EditionKey: model.AdminStoryEditionGrowingReaders, VersionID: versionByKey[model.ReaderEditionGrowingReaders]},
 			{EditionKey: model.AdminStoryEditionLittleListeners, VersionID: versionByKey[model.ReaderEditionLittleListeners]},

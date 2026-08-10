@@ -31,14 +31,9 @@ func TestAdminEditionBundleIntegration(t *testing.T) {
 		t.Fatalf("refusing bundle setup in database %q; want %q", databaseName, readerIntegrationDBName)
 	}
 
-	const accountID = "d2140000-0000-4000-8000-000000000001"
 	const slug = "five-edition-bundle-integration"
-	if _, err := adminDB.Exec(`INSERT INTO accounts (id, name) VALUES ($1, 'Five Edition Bundle Integration') ON CONFLICT (id) DO NOTHING`, accountID); err != nil {
-		t.Fatalf("insert bundle account: %v", err)
-	}
 	t.Cleanup(func() {
 		_, _ = adminDB.Exec(`DELETE FROM stories WHERE slug = $1`, slug)
-		_, _ = adminDB.Exec(`DELETE FROM accounts WHERE id = $1`, accountID)
 	})
 
 	store := newReaderIntegrationStore(t, databaseURL)
@@ -56,7 +51,7 @@ func TestAdminEditionBundleIntegration(t *testing.T) {
 		},
 	}
 
-	first, err := store.AdminEditionBundleUpsert(accountID, request)
+	first, err := store.AdminEditionBundleUpsert(request)
 	if err != nil {
 		t.Fatalf("initial five-edition ingest: %v", err)
 	}
@@ -93,7 +88,7 @@ func TestAdminEditionBundleIntegration(t *testing.T) {
 		t.Fatalf("bundle state editions/versions/classic-draft/current-release = %d/%d/%q/%v", editionCount, versionCount, classicDraftID, currentReleaseID)
 	}
 
-	reused, err := store.AdminEditionBundleUpsert(accountID, request)
+	reused, err := store.AdminEditionBundleUpsert(request)
 	if err != nil {
 		t.Fatalf("idempotent five-edition ingest: %v", err)
 	}
@@ -107,7 +102,7 @@ func TestAdminEditionBundleIntegration(t *testing.T) {
 	invalid.Editions = append([]model.AdminEditionBundleInput(nil), request.Editions...)
 	invalid.Editions[0].Markdown = "# Five Edition Bundle\n\nChanged Classic body.\n"
 	invalid.Editions[4].Markdown = "   "
-	if _, err := store.AdminEditionBundleUpsert(accountID, invalid); err == nil {
+	if _, err := store.AdminEditionBundleUpsert(invalid); err == nil {
 		t.Fatal("partially invalid bundle unexpectedly succeeded")
 	} else {
 		var validationErr *model.AdminValidationError

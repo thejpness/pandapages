@@ -683,7 +683,7 @@ func touchStoryAfterDraft(
 // AdminDraftUpsert creates or updates a global public-library story. Body hashes retain their historical role
 // as idempotency candidate keys, but reuse succeeds only when the complete
 // locked immutable version still matches the canonical incoming story.
-func (s *Store) AdminDraftUpsert(accountID string, req model.AdminDraftUpsertRequest) (model.AdminDraftUpsertResponse, error) {
+func (s *Store) AdminDraftUpsert(req model.AdminDraftUpsertRequest) (model.AdminDraftUpsertResponse, error) {
 	ctx, cancel := s.ctx()
 	defer cancel()
 
@@ -693,7 +693,7 @@ func (s *Store) AdminDraftUpsert(accountID string, req model.AdminDraftUpsertReq
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	out, err := adminDraftUpsertTx(ctx, tx, accountID, req)
+	out, err := adminDraftUpsertTx(ctx, tx, req)
 	if err != nil {
 		return model.AdminDraftUpsertResponse{}, err
 	}
@@ -703,12 +703,7 @@ func (s *Store) AdminDraftUpsert(accountID string, req model.AdminDraftUpsertReq
 	return out, nil
 }
 
-func adminDraftUpsertTx(ctx context.Context, tx *sql.Tx, accountID string, req model.AdminDraftUpsertRequest) (model.AdminDraftUpsertResponse, error) {
-	accountID = strings.TrimSpace(accountID)
-	if accountID == "" {
-		return model.AdminDraftUpsertResponse{}, fmt.Errorf("account required")
-	}
-
+func adminDraftUpsertTx(ctx context.Context, tx *sql.Tx, req model.AdminDraftUpsertRequest) (model.AdminDraftUpsertResponse, error) {
 	editionKey, err := adminDraftEditionKey(req)
 	if err != nil {
 		return model.AdminDraftUpsertResponse{}, err
@@ -1038,16 +1033,16 @@ func adminDraftUpsertTx(ctx context.Context, tx *sql.Tx, accountID string, req m
 	}, nil
 }
 
-func (s *Store) AdminPublish(accountID string, slug string, versionID string) error {
-	_, err := s.AdminPublishStory(accountID, slug, versionID)
+func (s *Store) AdminPublish(slug string, versionID string) error {
+	_, err := s.AdminPublishStory(slug, versionID)
 	return err
 }
 
 // AdminPublishStory is retained only as an internal Classic compatibility
 // helper for existing Store-level fixtures. Story Studio publication uses
 // AdminCreateRelease and can publish any canonical one-to-five edition subset.
-func (s *Store) AdminPublishStory(accountID string, slug string, versionID string) (model.AdminStoryStatusResponse, error) {
-	_, err := s.AdminCreateRelease(accountID, slug, model.AdminCreateReleaseRequest{
+func (s *Store) AdminPublishStory(slug string, versionID string) (model.AdminStoryStatusResponse, error) {
+	_, err := s.AdminCreateRelease(slug, model.AdminCreateReleaseRequest{
 		Editions: []model.AdminReleaseEditionRequest{{
 			EditionKey: model.AdminStoryEditionClassic,
 			VersionID:  strings.TrimSpace(versionID),
@@ -1065,7 +1060,7 @@ func (s *Store) AdminPublishStory(accountID string, slug string, versionID strin
 		}
 	}
 
-	detail, err := s.AdminGetStory(accountID, slug)
+	detail, err := s.AdminGetStory(slug)
 	if err != nil {
 		return model.AdminStoryStatusResponse{}, err
 	}
