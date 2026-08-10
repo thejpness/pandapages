@@ -88,18 +88,6 @@ func (s *Store) ctx() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), qt)
 }
 
-func strPtr(ns sql.NullString) *string {
-	if !ns.Valid {
-		return nil
-	}
-	v := strings.TrimSpace(ns.String)
-	if v == "" {
-		return nil
-	}
-	out := v
-	return &out
-}
-
 func clamp01(p float64) float64 {
 	if p < 0 {
 		return 0
@@ -184,199 +172,6 @@ func libraryVersionMetadata(
 	}
 
 	return title, author, language, nil
-}
-
-/* ----------------------------- Reader ----------------------------- */
-
-func lockClassicReaderVersion(
-	ctx context.Context,
-	tx *sql.Tx,
-	accountID string,
-	slug string,
-) (string, string, error) {
-	var (
-		storyID          string
-		currentReleaseID sql.NullString
-	)
-	if err := tx.QueryRowContext(ctx, `
-		SELECT story.id, story.current_release_id
-		FROM stories AS story
-		WHERE story.account_id = $1
-		  AND story.slug = $2
-		FOR SHARE OF story
-	`, accountID, slug).Scan(&storyID, &currentReleaseID); err != nil {
-		return "", "", err
-	}
-	if !currentReleaseID.Valid {
-		return "", "", sql.ErrNoRows
-	}
-
-	var versionID string
-	if err := tx.QueryRowContext(ctx, `
-		SELECT member.story_version_id
-		FROM story_release_editions AS member
-		JOIN story_editions AS edition
-		  ON edition.id = member.edition_id
-		 AND edition.story_id = member.story_id
-		WHERE member.release_id = $1
-		  AND member.story_id = $2
-		  AND edition.edition_key = 'classic'
-	`, currentReleaseID.String, storyID).Scan(&versionID); err != nil {
-		return "", "", err
-	}
-	return storyID, versionID, nil
-}
-
-func (s *Store) ReaderStory(accountID, slug string) (model.ReaderStory, error) {
-	ctx, cancel := s.ctx()
-	defer cancel()
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return model.ReaderStory{}, err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	storyID, versionID, err := lockClassicReaderVersion(ctx, tx, accountID, slug)
-	if err != nil {
-		return model.ReaderStory{}, err
-	}
-	if _, err := validateStoredReaderVersion(ctx, tx, storyID, versionID, slug); err != nil {
-		if errors.Is(err, errStoredVersionInvalid) || errors.Is(err, sql.ErrNoRows) {
-			return model.ReaderStory{}, sql.ErrNoRows
-		}
-		return model.ReaderStory{}, err
-	}
-	// The story-row lock keeps current release selection stable while the
-	// immutable Classic member is revalidated and read. Release manifests are
-	// immutable, so the validated version remains authoritative through commit.
-	rows, err := tx.QueryContext(ctx, `
-		SELECT
-			st.slug,
-			st.title,
-			NULLIF(BTRIM(st.author), ''),
-			st.language,
-			version.version,
-			segment.ordinal,
-			segment.segment_kind,
-			segment.heading_level,
-			segment.content_key,
-			segment.content_occurrence,
-			segment.chapter_key,
-			segment.chapter_occurrence,
-			segment.rendered_html,
-			segment.word_count
-		FROM stories st
-		JOIN story_versions AS version
-		  ON version.id = $3
-		 AND version.story_id = st.id
-		LEFT JOIN story_segments AS segment
-		  ON segment.story_version_id = version.id
-		WHERE st.account_id = $1
-		  AND st.slug = $2
-		  AND st.id = $4
-		ORDER BY segment.ordinal
-	`, accountID, slug, versionID, storyID)
-	if err != nil {
-		return model.ReaderStory{}, err
-	}
-	defer rows.Close()
-
-	var story model.ReaderStory
-	found := false
-	story.Segments = make([]model.ReaderSegment, 0, 64)
-	for rows.Next() {
-		var (
-			author            sql.NullString
-			ordinal           sql.NullInt64
-			kind              sql.NullString
-			headingLevel      sql.NullInt64
-			contentKey        sql.NullString
-			contentOccurrence sql.NullInt64
-			chapterKey        sql.NullString
-			chapterOccurrence sql.NullInt64
-			renderedHTML      sql.NullString
-			wordCount         sql.NullInt64
-		)
-		if err := rows.Scan(
-			&story.Slug,
-			&story.Title,
-			&author,
-			&story.Language,
-			&story.Version,
-			&ordinal,
-			&kind,
-			&headingLevel,
-			&contentKey,
-			&contentOccurrence,
-			&chapterKey,
-			&chapterOccurrence,
-			&renderedHTML,
-			&wordCount,
-		); err != nil {
-			return model.ReaderStory{}, err
-		}
-		found = true
-		story.Author = strPtr(author)
-		if !ordinal.Valid {
-			continue
-		}
-
-		segment := model.ReaderSegment{
-			Ordinal:           int(ordinal.Int64),
-			Kind:              kind.String,
-			ContentKey:        contentKey.String,
-			ContentOccurrence: int(contentOccurrence.Int64),
-			RenderedHTML:      renderedHTML.String,
-			WordCount:         int(wordCount.Int64),
-		}
-		if headingLevel.Valid {
-			value := int(headingLevel.Int64)
-			segment.HeadingLevel = &value
-		}
-		if chapterKey.Valid {
-			value := chapterKey.String
-			segment.ChapterKey = &value
-		}
-		if chapterOccurrence.Valid {
-			value := int(chapterOccurrence.Int64)
-			segment.ChapterOccurrence = &value
-		}
-		story.Segments = append(story.Segments, segment)
-	}
-	if err := rows.Err(); err != nil {
-		return model.ReaderStory{}, err
-	}
-	if !found {
-		return model.ReaderStory{}, sql.ErrNoRows
-	}
-	if len(story.Segments) == 0 {
-		// Historical versions created outside the current ingestion path must not
-		// produce a successful but unreadable Reader payload.
-		return model.ReaderStory{}, sql.ErrNoRows
-	}
-	storedIdentities := make([]readercontract.StoredSegmentIdentity, 0, len(story.Segments))
-	for _, segment := range story.Segments {
-		if segment.WordCount < 0 {
-			return model.ReaderStory{}, fmt.Errorf("published Reader segment word count is invalid")
-		}
-		storedIdentities = append(storedIdentities, readercontract.StoredSegmentIdentity{
-			Ordinal:           segment.Ordinal,
-			Kind:              readercontract.SegmentKind(segment.Kind),
-			HeadingLevel:      segment.HeadingLevel,
-			ContentKey:        segment.ContentKey,
-			ContentOccurrence: segment.ContentOccurrence,
-			ChapterKey:        segment.ChapterKey,
-			ChapterOccurrence: segment.ChapterOccurrence,
-		})
-	}
-	if _, err := readercontract.ValidateStoredSegmentIdentities(storedIdentities); err != nil {
-		return model.ReaderStory{}, fmt.Errorf("validate published Reader segment identities: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return model.ReaderStory{}, err
-	}
-	return story, nil
 }
 
 /* ----------------------------- Progress ----------------------------- */
@@ -577,9 +372,9 @@ func (s *Store) ContinueRecent(accountID, profileID string, limit int) ([]model.
 		FROM reading_progress AS progress
 		JOIN stories AS story
 		  ON story.id = progress.story_id
-		 AND story.account_id = progress.account_id
-		WHERE progress.account_id = $2
-		  AND progress.profile_id = $3
+		WHERE `+readerStoryAccessPredicate+`
+		  AND progress.account_id = $1
+		  AND progress.profile_id = $2
 		  AND EXISTS (
 			SELECT 1
 			FROM story_release_editions AS member
@@ -597,8 +392,8 @@ func (s *Store) ContinueRecent(accountID, profileID string, limit int) ([]model.
 			  )
 		  )
 		ORDER BY progress.updated_at DESC
-		LIMIT $1
-	`, limit, accountID, profileID,
+		LIMIT $3
+	`, accountID, profileID, limit,
 		allowed[0], allowed[1], allowed[2], allowed[3], allowed[4],
 	)
 	if err != nil {

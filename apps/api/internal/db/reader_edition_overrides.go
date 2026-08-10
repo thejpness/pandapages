@@ -23,8 +23,7 @@ func (s *Store) ReaderStoryEditionOverrideGet(
 	err := s.db.QueryRowContext(ctx, `
 		SELECT override.edition_key
 		FROM profiles AS profile
-		JOIN stories AS story
-		  ON story.account_id = profile.account_id
+		CROSS JOIN stories AS story
 		LEFT JOIN reader_story_edition_overrides AS override
 		  ON override.account_id = profile.account_id
 		 AND override.profile_id = profile.id
@@ -32,6 +31,7 @@ func (s *Store) ReaderStoryEditionOverrideGet(
 		WHERE profile.account_id = $1
 		  AND profile.id = $2
 		  AND story.slug = $3
+		  AND `+readerStoryAccessPredicate+`
 	`, accountID, profileID, slug).Scan(&editionKey)
 	if err != nil {
 		return nil, err
@@ -79,11 +79,11 @@ func (s *Store) ReaderStoryEditionOverridePut(
 	err = tx.QueryRowContext(ctx, `
 		SELECT profile.reading_level, story.id, story.current_release_id
 		FROM profiles AS profile
-		JOIN stories AS story
-		  ON story.account_id = profile.account_id
+		CROSS JOIN stories AS story
 		WHERE profile.account_id = $1
 		  AND profile.id = $2
 		  AND story.slug = $3
+		  AND `+readerStoryAccessPredicate+`
 		FOR SHARE OF profile, story
 	`, accountID, profileID, slug).Scan(
 		&readingLevelValue,
@@ -157,9 +157,9 @@ func (s *Store) ReaderStoryEditionOverrideClear(
 		  AND override.profile_id = $2
 		  AND profile.account_id = override.account_id
 		  AND profile.id = override.profile_id
-		  AND story.account_id = override.account_id
 		  AND story.id = override.story_id
 		  AND story.slug = $3
+		  AND `+readerStoryAccessPredicate+`
 	`, accountID, profileID, slug)
 	if err != nil {
 		return false, err

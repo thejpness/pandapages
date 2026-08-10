@@ -27,7 +27,9 @@ const (
 	readerAccountB            = "b2140000-0000-4000-8000-000000000001"
 	readerAccountC            = "c2140000-0000-4000-8000-000000000001"
 	readerProfileA            = "a2140000-0000-4000-8000-000000000011"
+	readerProfileB            = "b2140000-0000-4000-8000-000000000011"
 	readerProfileC            = "c2140000-0000-4000-8000-000000000011"
+	readerAccountBSlug        = "reader-store-story-account-b"
 	readerSlug                = "reader-store-story"
 )
 
@@ -65,13 +67,28 @@ func TestReaderStoreIntegration(t *testing.T) {
 	if _, err := adminDB.Exec(`
 		INSERT INTO profiles (id, account_id, name, reading_level) VALUES
 			($1, $2, 'Reader A', 'classic'),
-			($3, $4, 'Reader C', 'classic')
+			($3, $4, 'Reader B', 'classic'),
+			($5, $6, 'Reader C', 'classic')
 		ON CONFLICT (id) DO NOTHING
-	`, readerProfileA, readerAccountA, readerProfileC, readerAccountC); err != nil {
+	`,
+		readerProfileA, readerAccountA,
+		readerProfileB, readerAccountB,
+		readerProfileC, readerAccountC,
+	); err != nil {
 		t.Fatalf("insert Reader profiles: %v", err)
 	}
 
 	store := newReaderIntegrationStore(t, databaseURL)
+	resolveSelectedReaderStory := func(accountID, profileID, slug string) (model.ReaderStory, error) {
+		resolution, err := store.ReaderResolve(accountID, profileID, slug)
+		if err != nil {
+			return model.ReaderStory{}, err
+		}
+		if resolution.State != model.ReaderResolutionSelected || resolution.Story == nil {
+			return model.ReaderStory{}, sql.ErrNoRows
+		}
+		return resolution.Story.ReaderStory, nil
+	}
 	author := "Panda Pages Test Fixture"
 	language := "en-GB"
 	firstDraft, err := store.AdminDraftUpsert(readerAccountA, model.AdminDraftUpsertRequest{
@@ -297,7 +314,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 			t.Fatalf("legacy Classic publish accepted Growing Readers version: %v", err)
 		}
 
-		readerStory, err := store.ReaderStory(readerAccountA, editionSlug)
+		readerStory, err := resolveSelectedReaderStory(readerAccountA, readerProfileA, editionSlug)
 		if err != nil {
 			t.Fatalf("read Classic story after Growing Readers draft: %v", err)
 		}
@@ -497,7 +514,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 			t.Fatalf("source stopped owning Story Studio identity = %#v", storyAfterEdition)
 		}
 
-		readerStory, err := store.ReaderStory(readerAccountA, sourceSlug)
+		readerStory, err := resolveSelectedReaderStory(readerAccountA, readerProfileA, sourceSlug)
 		if err != nil {
 			t.Fatalf("read sourced Classic: %v", err)
 		}
@@ -511,7 +528,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 	})
 
 	accountBDraft, err := store.AdminDraftUpsert(readerAccountB, model.AdminDraftUpsertRequest{
-		Slug:     readerSlug,
+		Slug:     readerAccountBSlug,
 		Title:    "Account B isolated story",
 		Author:   &author,
 		Language: &language,
@@ -520,9 +537,42 @@ func TestReaderStoreIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert account B Reader draft: %v", err)
 	}
-	if err := store.AdminPublish(readerAccountB, readerSlug, accountBDraft.StoryVersionID); err != nil {
+	if err := store.AdminPublish(readerAccountB, readerAccountBSlug, accountBDraft.StoryVersionID); err != nil {
 		t.Fatalf("publish account B story: %v", err)
 	}
+	t.Run("Reader story access stays account scoped", func(t *testing.T) {
+		contains := func(library model.ReaderLibraryReadModel, slug string) bool {
+			for _, item := range library.Items {
+				if item.Slug == slug {
+					return true
+				}
+			}
+			return false
+		}
+
+		libraryA, err := store.ReaderLibrary(readerAccountA, readerProfileA)
+		if err != nil || !contains(libraryA, readerSlug) || contains(libraryA, readerAccountBSlug) {
+			t.Fatalf("account A Library = %#v / %v", libraryA, err)
+		}
+		libraryB, err := store.ReaderLibrary(readerAccountB, readerProfileB)
+		if err != nil || !contains(libraryB, readerAccountBSlug) || contains(libraryB, readerSlug) {
+			t.Fatalf("account B Library = %#v / %v", libraryB, err)
+		}
+
+		for _, test := range []struct {
+			account string
+			profile string
+			slug    string
+		}{
+			{account: readerAccountA, profile: readerProfileA, slug: readerAccountBSlug},
+			{account: readerAccountB, profile: readerProfileB, slug: readerSlug},
+		} {
+			if _, err := store.ReaderResolve(test.account, test.profile, test.slug); !errors.Is(err, sql.ErrNoRows) {
+				t.Fatalf("cross-account ReaderResolve(%s, %s) error = %v, want sql.ErrNoRows", test.account, test.slug, err)
+			}
+		}
+	})
+
 	if _, err := store.AdminDraftUpsert(readerAccountA, model.AdminDraftUpsertRequest{
 		Slug:     "unpublished-reader-story",
 		Title:    "Unpublished",
@@ -675,7 +725,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 			publishedStatus.PublishedVersion == nil || publishedStatus.PublishedVersion.VersionID != unpublishDraft.VersionID {
 			t.Fatalf("typed publication response/error = %#v / %v", publishedStatus, err)
 		}
-		publishedReader, err := store.ReaderStory(readerAccountA, unpublishSlug)
+		publishedReader, err := resolveSelectedReaderStory(readerAccountA, readerProfileA, unpublishSlug)
 		if err != nil {
 			t.Fatalf("read unpublish fixture before unpublish: %v", err)
 		}
@@ -731,7 +781,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 			progressAfter != progressBefore || progressAfter != 1 {
 			t.Fatalf("unpublish persistence state = current %#v, versions %d, progress %d", currentReleaseAfter, versionCount, progressAfter)
 		}
-		if _, err := store.ReaderStory(readerAccountA, unpublishSlug); !errors.Is(err, sql.ErrNoRows) {
+		if _, err := resolveSelectedReaderStory(readerAccountA, readerProfileA, unpublishSlug); !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("unpublished Reader lookup error = %v", err)
 		}
 		library, err := store.ReaderLibrary(readerAccountA, readerProfileA)
@@ -1749,7 +1799,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 				}
 				assertCurrentClassic(first.StoryVersionID)
 				if mutation.assertReader {
-					readerStory, err := store.ReaderStory(readerAccountA, slug)
+					readerStory, err := resolveSelectedReaderStory(readerAccountA, readerProfileA, slug)
 					if err != nil {
 						t.Fatalf("read prior safe publication after %s refusal: %v", mutation.name, err)
 					}
@@ -1816,7 +1866,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 				t.Fatalf("publish raw-HTML-only version error = %v, want publish-invalid", err)
 			}
 			assertCurrentClassic(first.StoryVersionID)
-			readerStory, err := store.ReaderStory(readerAccountA, slug)
+			readerStory, err := resolveSelectedReaderStory(readerAccountA, readerProfileA, slug)
 			if err != nil {
 				t.Fatalf("read prior safe publication after raw-only refusal: %v", err)
 			}
@@ -1960,7 +2010,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 		`, firstDraft.StoryVersionID, "<iframe srcdoc=\"<script>globalThis.__ppUnsafe=true</script>\"></iframe>"); err != nil {
 			t.Fatalf("tamper published rendered HTML: %v", err)
 		}
-		if _, err := store.ReaderStory(readerAccountA, readerSlug); !errors.Is(err, sql.ErrNoRows) {
+		if _, err := resolveSelectedReaderStory(readerAccountA, readerProfileA, readerSlug); !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("ReaderStory unsafe published HTML error = %v, want not-found", err)
 		}
 		if _, err := store.AdminGetVersionSource(readerAccountA, readerSlug, firstDraft.StoryVersionID); !errors.Is(err, model.ErrAdminVersionRepairRequired) {
@@ -1973,13 +2023,13 @@ func TestReaderStoreIntegration(t *testing.T) {
 		`, firstDraft.StoryVersionID, originalRenderedHTML); err != nil {
 			t.Fatalf("restore canonical published segment: %v", err)
 		}
-		if _, err := store.ReaderStory(readerAccountA, readerSlug); err != nil {
+		if _, err := resolveSelectedReaderStory(readerAccountA, readerProfileA, readerSlug); err != nil {
 			t.Fatalf("ReaderStory after historical repair: %v", err)
 		}
 	})
 
 	t.Run("ingestion assigns six ordered identities and H2 chapters", func(t *testing.T) {
-		story, err := store.ReaderStory(readerAccountA, readerSlug)
+		story, err := resolveSelectedReaderStory(readerAccountA, readerProfileA, readerSlug)
 		if err != nil {
 			t.Fatalf("ReaderStory: %v", err)
 		}
@@ -2072,7 +2122,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 			}
 		}()
 		for range 150 {
-			story, err := store.ReaderStory(readerAccountA, readerSlug)
+			story, err := resolveSelectedReaderStory(readerAccountA, readerProfileA, readerSlug)
 			if err != nil {
 				close(stop)
 				wg.Wait()
@@ -2104,7 +2154,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 	})
 
 	t.Run("account and publication boundaries return not found", func(t *testing.T) {
-		accountBStory, err := store.ReaderStory(readerAccountB, readerSlug)
+		accountBStory, err := resolveSelectedReaderStory(readerAccountB, readerProfileB, readerAccountBSlug)
 		if err != nil {
 			t.Fatalf("ReaderStory account B: %v", err)
 		}
@@ -2113,19 +2163,20 @@ func TestReaderStoreIntegration(t *testing.T) {
 		}
 		for _, test := range []struct {
 			account string
+			profile string
 			slug    string
 		}{
-			{account: readerAccountC, slug: readerSlug},
-			{account: readerAccountA, slug: "unpublished-reader-story"},
-			{account: readerAccountA, slug: "missing-reader-story"},
+			{account: readerAccountC, profile: readerProfileC, slug: readerSlug},
+			{account: readerAccountA, profile: readerProfileA, slug: "unpublished-reader-story"},
+			{account: readerAccountA, profile: readerProfileA, slug: "missing-reader-story"},
 		} {
-			if _, err := store.ReaderStory(test.account, test.slug); !errors.Is(err, sql.ErrNoRows) {
-				t.Fatalf("ReaderStory(%s, %s) error = %v, want sql.ErrNoRows", test.account, test.slug, err)
+			if _, err := resolveSelectedReaderStory(test.account, test.profile, test.slug); !errors.Is(err, sql.ErrNoRows) {
+				t.Fatalf("ReaderResolve(%s, %s) error = %v, want sql.ErrNoRows", test.account, test.slug, err)
 			}
 		}
 	})
 
-	story, err := store.ReaderStory(readerAccountA, readerSlug)
+	story, err := resolveSelectedReaderStory(readerAccountA, readerProfileA, readerSlug)
 	if err != nil {
 		t.Fatalf("load progress target: %v", err)
 	}

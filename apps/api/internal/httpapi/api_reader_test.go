@@ -28,8 +28,8 @@ func TestRetiredReaderPathsAreRemoved(t *testing.T) {
 			t.Fatalf("%s status = %d, want 404", path, response.Code)
 		}
 	}
-	if store.readerCalls != 0 {
-		t.Fatal("retired Reader path reached Reader Store")
+	if store.readerResolutionCalls != 0 {
+		t.Fatal("retired Reader path reached Reader resolution Store")
 	}
 }
 

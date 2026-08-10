@@ -15,6 +15,12 @@ type readerProfileStoryAccess struct {
 	CurrentReleaseID string
 }
 
+// readerStoryAccessPredicate is the one current Reader story-scope rule. Every
+// Reader-facing story query binds the selected account as $1 before applying
+// release, edition, progress, or override logic. The later visibility change
+// deliberately has one predicate to replace.
+const readerStoryAccessPredicate = `story.account_id = $1`
+
 // lockReaderProfileStoryAccess takes the mutable profile and story rows
 // separately. This keeps Reading Level and current-release selection stable
 // without relying on a locking join that PostgreSQL could later recheck.
@@ -47,7 +53,7 @@ func lockReaderProfileStoryAccess(
 	if err := tx.QueryRowContext(ctx, `
 		SELECT story.id, story.current_release_id
 		FROM stories AS story
-		WHERE story.account_id = $1
+		WHERE `+readerStoryAccessPredicate+`
 		  AND story.slug = $2
 		FOR SHARE OF story
 	`, accountID, slug).Scan(&storyID, &currentReleaseID); err != nil {

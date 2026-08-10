@@ -31,11 +31,6 @@ type authTestStore struct {
 	libraryProfile            string
 	libraryResponse           model.ReaderLibraryReadModel
 	libraryErr                error
-	readerCalls               int
-	readerAccount             string
-	readerSlug                string
-	readerResponse            model.ReaderStory
-	readerErr                 error
 	readerResolutionCalls     int
 	readerResolutionAccount   string
 	readerResolutionProfile   string
@@ -138,12 +133,6 @@ func (s *authTestStore) ReaderLibrary(accountID, profileID string) (model.Reader
 		s.libraryResponse.Items = []model.ReaderLibraryItem{}
 	}
 	return s.libraryResponse, s.libraryErr
-}
-func (s *authTestStore) ReaderStory(accountID, slug string) (model.ReaderStory, error) {
-	s.readerCalls++
-	s.readerAccount = accountID
-	s.readerSlug = slug
-	return s.readerResponse, s.readerErr
 }
 func (s *authTestStore) ReaderResolve(accountID, profileID, slug string) (model.ReaderResolution, error) {
 	s.readerResolutionCalls++
