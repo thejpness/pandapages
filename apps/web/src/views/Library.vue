@@ -416,10 +416,6 @@ onBeforeRouteLeave((to) => {
 onBeforeRouteUpdate((to) => {
   claimRouteUpdateNavigation(to)
 })
-
-function navigateFromLibrary(path: string) {
-  void router.push(path)
-}
 function switchReader() {
   void router.push({ path: "/profiles", query: { next: resolveReaderDestination(route.fullPath) } })
 }
@@ -446,10 +442,7 @@ function leaveReaderMode() {
       @update:sort="setSort"
       @clear="clearSearch"
       @surprise="goSurprise"
-      @profiles="switchReader"
       @switch="switchReader"
-      @journey="navigateFromLibrary('/journey')"
-      @admin="navigateFromLibrary('/admin/stories')"
       @lock="lockLibrary"
       @leave-child="leaveReaderMode"
       @sticky-offset="setStickyHeaderOffset"
