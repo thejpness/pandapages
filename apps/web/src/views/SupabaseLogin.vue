@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import PandaAuthShell from '../components/app/PandaAuthShell.vue'
+import ProductAttribution from '../components/app/ProductAttribution.vue'
 import { startSupabaseLogin, type SupabaseOAuthProvider } from '../lib/supabase-auth'
 
 const activeProvider = ref<SupabaseOAuthProvider | null>(null)
@@ -48,6 +49,9 @@ async function signIn(provider: SupabaseOAuthProvider) {
       </button>
       <p v-if="errorMessage" class="identity-error" role="alert">{{ errorMessage }}</p>
     </div>
+    <template #footer>
+      <ProductAttribution />
+    </template>
   </PandaAuthShell>
 </template>
 

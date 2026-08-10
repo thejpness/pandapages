@@ -177,6 +177,21 @@ test.describe('Public landing page', () => {
     await expect(page.getByRole('banner')).toHaveCount(1)
     await expect(page.getByRole('main')).toHaveAttribute('id', 'main-content')
     await expect(page.getByRole('contentinfo')).toHaveCount(1)
+    await expect(
+      page.getByText('Panda Pages is a South Coast Apps product', {
+        exact: true,
+      }),
+    ).toBeVisible()
+    const southCoastApps = page.getByRole('link', {
+      name: 'South Coast Apps',
+      exact: true,
+    })
+    await expect(southCoastApps).toHaveAttribute(
+      'href',
+      'https://southcoastapps.co.uk',
+    )
+    await southCoastApps.focus()
+    await expect(southCoastApps).toBeFocused()
 
     for (const name of [
       'Browse stories',

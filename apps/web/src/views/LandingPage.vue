@@ -310,7 +310,10 @@
         />
         <span class="brand-name">Panda Pages</span>
       </a>
-      <p>Classic stories. Quiet reading. Happy imaginations.</p>
+      <div class="site-footer__copy">
+        <p>Classic stories. Quiet reading. Happy imaginations.</p>
+        <ProductAttribution />
+      </div>
       <nav aria-label="Footer links">
         <a :href="storiesHref">Stories</a>
         <a href="#why">Why Panda Pages</a>
@@ -359,6 +362,7 @@ import {
   DialogTitle,
 } from 'reka-ui'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import ProductAttribution from '../components/app/ProductAttribution.vue'
 
 type BenefitIcon = 'ad-free' | 'calm' | 'share' | 'anywhere'
 type InstallPlatform = 'ios' | 'android' | 'other'
@@ -1998,6 +2002,12 @@ onBeforeUnmount(() => {
   font-family: var(--serif);
   font-size: 0.84rem;
   text-align: center;
+}
+
+.site-footer__copy {
+  display: grid;
+  justify-items: center;
+  gap: 0.15rem;
 }
 
 .site-footer nav {

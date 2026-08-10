@@ -1077,6 +1077,9 @@ test.describe('Library 2 bookshelf', () => {
 
     await page.goto('/library?q=moon')
     await expect(page.getByRole('heading', { name: 'Choose tonight’s story' })).toBeVisible()
+    await expect(
+      page.getByText('Panda Pages is a South Coast Apps product', { exact: true }),
+    ).toHaveCount(0)
     await page.getByRole('button', { name: 'Switch reader' }).click()
 
     await expectPath(page, '/profiles', '/library?q=moon')

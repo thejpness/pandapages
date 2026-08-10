@@ -18,6 +18,9 @@ test.describe('Reader context controls', () => {
     api,
   }) => {
     await gotoReader(page, api, READER_SLUG)
+    await expect(
+      page.getByText('Panda Pages is a South Coast Apps product', { exact: true }),
+    ).toHaveCount(0)
     await page.getByRole('button', { name: 'Switch reader' }).click()
 
     await expectProfileChooser(page, `/read/${READER_SLUG}`)
