@@ -153,7 +153,6 @@ jobs:
     env:
       APP_DATABASE_URL: postgres://pandapages_app:ci-only-app-password-not-for-production@postgres:5432/pandapages?sslmode=disable
       MIGRATION_DATABASE_URL: postgres://pandapages_migrator:ci-only-migration-password-not-for-production@postgres:5432/pandapages?sslmode=disable
-      POSTGRES_PASSWORD: ci-only-admin-password-not-for-production
       PP_ADMIN_KEY: ci-only-admin-key-not-for-production-00000000
       SUPABASE_URL: https://auth-ci.invalid
       SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci-only-not-for-production
