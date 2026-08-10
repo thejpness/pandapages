@@ -21,7 +21,6 @@ common_environment=(
   "APP_DATABASE_URL=$app_url"
   "MIGRATION_DATABASE_URL=$migration_url"
   "POSTGRES_PASSWORD=$admin_password"
-  'PP_ADMIN_IPS=192.0.2.1/32'
   'PP_ADMIN_KEY=ci-only-admin-key-not-for-production-00000000'
   'SUPABASE_URL=https://auth-ci.invalid'
   'SUPABASE_PUBLISHABLE_KEY=sb_publishable_ci-only-not-for-production'
@@ -73,7 +72,9 @@ for compose_file in docker-compose.yml docker-compose.dev.yml; do
   expect_compose_failure "$compose_file" SUPABASE_PUBLISHABLE_KEY
   expect_compose_failure "$compose_file" SUPABASE_JWT_AUDIENCE
 done
-printf 'ok 2 - runtime and migration credentials each fail closed when absent\n'
+expect_compose_failure docker-compose.yml POSTGRES_PASSWORD
+expect_compose_failure docker-compose.yml PP_ADMIN_KEY
+printf 'ok 2 - required runtime, migration, authentication, and production credentials fail closed when absent\n'
 
 for config in "$production_json" "$development_json"; do
   jq -e --arg app "$app_url" --arg migration "$migration_url" '
@@ -105,7 +106,7 @@ jq -e ' .services.postgres.environment.POSTGRES_PASSWORD_FILE == "/run/secrets/p
 printf 'ok 3 - API, migration, and administrative containers receive only their own credential\n'
 
 if APP_DATABASE_URL='' MIGRATION_DATABASE_URL="$migration_url" \
-  POSTGRES_PASSWORD="$admin_password" PP_ADMIN_IPS=192.0.2.1/32 \
+  POSTGRES_PASSWORD="$admin_password" PP_ADMIN_KEY=ci-only-admin-key-not-for-production-00000000 \
   SUPABASE_URL=https://auth-ci.invalid SUPABASE_PUBLISHABLE_KEY=sb_publishable_ci-only-not-for-production SUPABASE_JWT_AUDIENCE=authenticated \
   docker compose --env-file /dev/null -f docker-compose.yml config --quiet \
   >"$test_root/empty-runtime.out" 2>"$test_root/empty-runtime.err"; then
@@ -113,7 +114,7 @@ if APP_DATABASE_URL='' MIGRATION_DATABASE_URL="$migration_url" \
   exit 1
 fi
 if MIGRATION_DATABASE_URL='' APP_DATABASE_URL="$app_url" \
-  POSTGRES_PASSWORD="$admin_password" PP_ADMIN_IPS=192.0.2.1/32 \
+  POSTGRES_PASSWORD="$admin_password" PP_ADMIN_KEY=ci-only-admin-key-not-for-production-00000000 \
   SUPABASE_URL=https://auth-ci.invalid SUPABASE_PUBLISHABLE_KEY=sb_publishable_ci-only-not-for-production SUPABASE_JWT_AUDIENCE=authenticated \
   docker compose --env-file /dev/null -f docker-compose.yml config --quiet \
   >"$test_root/empty-migration.out" 2>"$test_root/empty-migration.err"; then

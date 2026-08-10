@@ -1,55 +1,69 @@
 # Panda Pages admin ingress
 
-Production admin API routes are protected by two Traefik middlewares: an IP
-allowlist and server-side X-PP-Admin-Key injection. The browser must never
-receive or send the admin key.
+Production Story Studio and administrator API access use layered application
+and ingress controls.
+
+The browser authenticates with Supabase. Panda Pages then resolves the
+authenticated principal's account membership, and administrator routes require
+owner authority.
+
+Traefik provides an additional independent server-side boundary by injecting
+`X-PP-Admin-Key` into requests routed to `/api/v1/admin/`.
+
+The browser must never receive, persist, or send the admin key.
+
+## Production boundary
+
+Administrator access requires:
+
+1. a valid Supabase bearer session;
+2. an explicit Panda Pages account membership;
+3. owner authority for that account;
+4. the independent `PP_ADMIN_KEY` injected by Traefik.
+
+The former production source-IP allowlist has been retired. Administrator
+access is therefore not coupled to a particular broadband address or network.
+
+The Go API remains authoritative for authentication and owner authorisation.
+The Traefik admin key is an additional server-side ingress credential, not a
+replacement for Supabase authentication or Panda Pages membership checks.
 
 ## Required environment
 
-PP_ADMIN_IPS is required in production and must contain CIDR values. A single
-IPv4 address uses /32; multiple CIDRs are comma-separated. Keep real IP
-addresses and all secrets in the deployment environment, never in Git.
+Production requires:
 
-If the administrator's public IP changes, Traefik will return 403 Forbidden
-until the allowlist is updated. A bare-text, 9-byte Forbidden response means
-Traefik rejected the request before it reached Go. A JSON 401 response means
-the request passed ingress and reached application authentication.
+`PP_ADMIN_KEY=<independent-random-secret>`
 
-The administrator's home broadband uses a dynamic public IP. The current /32
-is therefore a temporary operational correction, and the same Traefik 403 may
-recur whenever the ISP assigns a different address. Do not add automatic
-public-IP detection or automatic allowlist rewriting; update and validate the
-deployment environment manually.
+Keep the real value only in the permission-restricted deployment environment.
+It must not be committed to Git, exposed through Vite, or sent by browser code.
 
-## Longer-term boundary
+Production Compose fails closed when `PP_ADMIN_KEY` is missing or empty.
 
-Keep the current IP allowlist and server-side admin-key injection until a
-replacement has been implemented and validated.
+## Routing
 
-- For one administrator, put the admin interface behind Tailscale or WireGuard
-  and restrict ingress to that private network.
-- For future external identity, follow
-  [ADR 0001](../../docs/architecture/decisions/0001-supabase-auth-boundary-and-browser-session-model.md):
-  use Supabase Auth only while Panda Pages retains application authorisation.
-- Kratos will not be revived.
+The dedicated administrator router handles:
 
-Do not weaken or remove the existing boundary during that migration.
+`/api/v1/admin/`
 
-## Safe update procedure
+Traefik injects the configured admin key before forwarding the request to the
+Go API.
 
-On the production host:
+Ordinary public API traffic does not receive this injected credential.
 
-1. Edit the permission-restricted deployment .env and set
-   PP_ADMIN_IPS=<ADMIN_PUBLIC_IP>/32 (or the required comma-separated CIDRs).
-2. Confirm the file still has mode 0600 and contains no duplicate
-   PP_ADMIN_IPS assignment.
-3. Validate without printing the rendered configuration or secrets:
-   docker compose config --quiet.
-4. Recreate only the API service so Traefik reloads its container labels:
-   docker compose up -d --no-deps --force-recreate api.
-5. Verify an authorised session receives 200, a signed-out session receives
-   the application's 401, and a source outside the allowlist still receives
-   403.
+## Deployment validation
 
-Do not commit .env, administrator IP addresses, admin keys, session secrets,
-cookies, or tokens.
+After updating production configuration:
+
+1. confirm the deployment `.env` remains permission restricted;
+2. run `docker compose config --quiet`;
+3. recreate the API/web stack through the normal deployment procedure;
+4. sign in through Supabase;
+5. verify an owner can access Story Studio;
+6. verify a non-owner authenticated account cannot use owner-only routes;
+7. verify a signed-out request cannot use protected administrator routes.
+
+Google and other external identity providers are configured through Supabase.
+Their provider secrets do not belong in Panda Pages browser configuration.
+
+Do not commit `.env`, admin keys, OAuth provider secrets, bearer tokens, or
+other production credentials.

@@ -154,7 +154,6 @@ jobs:
       APP_DATABASE_URL: postgres://pandapages_app:ci-only-app-password-not-for-production@postgres:5432/pandapages?sslmode=disable
       MIGRATION_DATABASE_URL: postgres://pandapages_migrator:ci-only-migration-password-not-for-production@postgres:5432/pandapages?sslmode=disable
       POSTGRES_PASSWORD: ci-only-admin-password-not-for-production
-      PP_ADMIN_IPS: 192.0.2.1/32
       PP_ADMIN_KEY: ci-only-admin-key-not-for-production-00000000
       SUPABASE_URL: https://auth-ci.invalid
       SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci-only-not-for-production
@@ -177,21 +176,6 @@ jobs:
 
       - name: Validate production web security headers
         run: scripts/tests/web-security-headers-contract.sh
-
-      - name: Confirm production admin allowlist fails closed
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if env -u PP_ADMIN_IPS docker compose --env-file /dev/null -f docker-compose.yml config --quiet >/dev/null 2>&1; then
-            echo "Production Compose unexpectedly accepted a missing PP_ADMIN_IPS" >&2
-            exit 1
-          fi
-
-          if PP_ADMIN_IPS= docker compose --env-file /dev/null -f docker-compose.yml config --quiet >/dev/null 2>&1; then
-            echo "Production Compose unexpectedly accepted an empty PP_ADMIN_IPS" >&2
-            exit 1
-          fi
 
       - name: Validate operations scripts
         shell: bash

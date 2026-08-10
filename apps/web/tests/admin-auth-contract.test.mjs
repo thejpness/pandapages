@@ -95,16 +95,18 @@ test('Compose keeps browser credentials out and proxy credentials server-side', 
     new URL('../../../docker-compose.dev.yml', import.meta.url),
     'utf8'
   )
-  const requiredAllowlist =
-    'ipallowlist.sourcerange=' +
-    '$' +
-    '{PP_ADMIN_IPS:?PP_ADMIN_IPS must contain the authorised admin CIDR(s)}'
-
   assert.match(
     productionCompose,
-    /pandapages-api-admin\.middlewares=pandapages-admin-ips@docker,pandapages-admin-key@docker/
+    /pandapages-api-admin\.middlewares=pandapages-admin-key@docker/
   )
-  assert.ok(productionCompose.includes(requiredAllowlist))
+  assert.match(
+    productionCompose,
+    /pandapages-admin-key\.headers\.customrequestheaders\.X-PP-Admin-Key=/
+  )
+  assert.doesNotMatch(
+    productionCompose,
+    /PP_ADMIN_IPS|pandapages-admin-ips|ipallowlist/
+  )
   assert.doesNotMatch(productionCompose, /PP_COOKIE_SECURE|PP_PASSCODE|PP_SESSION_SECRET/)
   assert.doesNotMatch(productionCompose, /VITE_ADMIN_KEY/)
 
