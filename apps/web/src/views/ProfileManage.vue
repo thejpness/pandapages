@@ -19,6 +19,11 @@ onMounted(async()=>{try{await refresh();}catch(error){errorMessage.value=error i
         {{ errorMessage }}
       </p>
       <template v-else>
+        <nav class="profile-manage__return" aria-label="Profile navigation">
+          <button class="profile-manage__back" type="button" @click="router.push(&quot;/profiles&quot;)">
+            <span aria-hidden="true">←</span> Who’s reading?
+          </button>
+        </nav>
         <section class="profile-manage__section" aria-labelledby="reader-profiles-heading">
           <div class="profile-manage__section-heading">
             <div>
@@ -55,7 +60,6 @@ onMounted(async()=>{try{await refresh();}catch(error){errorMessage.value=error i
             </li>
           </ul>
 
-          <button class="profile-manage__back" type="button" @click="router.push('/profiles')">Back to Who’s reading?</button>
         </section>
 
         <section class="profile-manage__account" aria-labelledby="account-heading">
@@ -83,6 +87,7 @@ onMounted(async()=>{try{await refresh();}catch(error){errorMessage.value=error i
 </template>
 
 <style scoped>
+.profile-manage__return { display: flex; }
 .profile-manage { display: grid; gap: 2rem; }
 .profile-manage__section,
 .profile-manage__account { display: grid; gap: 1rem; }

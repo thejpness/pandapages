@@ -1,5 +1,5 @@
 import { AxeBuilder } from '@axe-core/playwright'
-import { expect, test as base } from './support/auth'
+import { expect, fixtureAccessToken, test as base } from './support/auth'
 import type { Page, Route } from '@playwright/test'
 
 type ReaderEditionKeyFixture =
@@ -1060,9 +1060,10 @@ test.describe('Library 2 bookshelf', () => {
       .getByRole('searchbox', { name: 'Search the library' })
       .fill('Moon')
     await page.getByRole('button', { name: 'Parent controls' }).click()
-    await expectPath(page, '/profiles')
+    await page.getByRole('menuitem', { name: 'Manage profiles' }).click()
+    await expectPath(page, '/profiles/manage')
     await page.clock.fastForward(220)
-    await expectPath(page, '/profiles')
+    await expectPath(page, '/profiles/manage')
   })
 
   test('Library header Switch reader preserves reader state and its safe destination', async ({
@@ -1096,17 +1097,43 @@ test.describe('Library 2 bookshelf', () => {
     await expect.poll(() => page.evaluate((key) => window.localStorage.getItem(key), SELECTED_PROFILE_STORAGE_KEY)).toBe(tedID)
   })
 
-  test('Library header Parent controls enters the parent profile surface', async ({
+  test('Library header Parent controls exposes adult navigation without clearing the reader selection', async ({
     page,
   }) => {
     await gotoReadyLibrary(page)
     await page.getByRole('button', { name: 'Parent controls' }).click()
+    await expect(page.getByRole('menu', { name: 'Parent controls' })).toBeVisible()
+    await page.getByRole('menuitem', { name: 'Manage profiles' }).click()
 
-    await expectPath(page, '/profiles')
-    await expect(page.getByText('Selected reader', { exact: true })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Add profile' })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Manage profiles' })).toBeVisible()
+    await expectPath(page, '/profiles/manage')
+    await expect(page.getByRole('heading', { name: 'Manage profiles' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Who’s reading?' })).toBeVisible()
     await expect.poll(() => page.evaluate((key) => window.localStorage.getItem(key), SELECTED_PROFILE_STORAGE_KEY)).toBe(LIBRARY_PROFILE_ID)
+  })
+
+  test('Library parent controls sign out through the existing session action', async ({
+    page,
+  }) => {
+    await gotoReadyLibrary(page)
+    let logoutCalled = false
+    await page.route('https://auth.invalid/auth/v1/logout**', async (route) => {
+      expect(route.request().method()).toBe('POST')
+      expect(route.request().headers().authorization).toBe('Bearer ' + fixtureAccessToken)
+      logoutCalled = true
+      await route.fulfill({ status: 204 })
+    })
+
+    const parentControls = page.getByRole('button', { name: 'Parent controls' })
+    await parentControls.focus()
+    await page.keyboard.press('Enter')
+    await expect(parentControls).toHaveAttribute('aria-expanded', 'true')
+    const signOut = page.getByRole('menuitem', { name: 'Sign out of Panda Pages' })
+    await signOut.focus()
+    await page.keyboard.press('Enter')
+
+    await expect(page).toHaveURL('http://127.0.0.1:4173/account/login')
+    expect(logoutCalled).toBe(true)
+    await expect.poll(() => page.evaluate((key) => window.localStorage.getItem(key), SELECTED_PROFILE_STORAGE_KEY)).toBeNull()
   })
 
   test('pending search ownership is released for a public route link', async ({
