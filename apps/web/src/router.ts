@@ -24,6 +24,10 @@ export const router = createRouter({
     },
 
     {
+      path: "/privacy",
+      component: () => import("./views/PrivacyPolicy.vue"),
+    },
+    {
       path: "/account/login",
       component: () => import("./views/SupabaseLogin.vue"),
     },

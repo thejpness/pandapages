@@ -317,6 +317,7 @@
       <nav aria-label="Footer links">
         <a :href="storiesHref">Stories</a>
         <a href="#why">Why Panda Pages</a>
+        <a href="/privacy">Privacy</a>
         <button type="button" @click="handleInstall">Install app</button>
       </nav>
     </footer>
