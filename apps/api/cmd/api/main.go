@@ -21,6 +21,8 @@ import (
 	"pandapages/api/internal/httpidentity"
 	"pandapages/api/internal/httpmiddleware"
 	"pandapages/api/internal/httpprofile"
+	"pandapages/api/internal/sourceprovider"
+	"pandapages/api/internal/sourceprovider/gutenberg"
 	"pandapages/api/internal/supabaseauth"
 )
 
@@ -123,6 +125,10 @@ func run() error {
 		return fmt.Errorf("configure Supabase bearer verifier: %w", err)
 	}
 	bearerAuthenticator := httpbearer.New(verifier, store)
+	sourceDiscovery, err := sourceprovider.NewRegistry(gutenberg.New(gutenberg.Config{}))
+	if err != nil {
+		return fmt.Errorf("configure source providers: %w", err)
+	}
 
 	public := httpapi.New(httpapi.Config{
 		BearerAuthenticator: bearerAuthenticator,
@@ -133,6 +139,7 @@ func run() error {
 	admin := httpadmin.New(httpadmin.Config{
 		AdminKey:            cfg.adminKey,
 		BearerAuthenticator: bearerAuthenticator,
+		SourceDiscovery:     sourceDiscovery,
 	}, store)
 
 	server := newServer(newRootHandler(public, identity, admin))

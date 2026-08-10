@@ -8,11 +8,13 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
 	"pandapages/api/internal/appidentity"
 	"pandapages/api/internal/model"
+	"pandapages/api/internal/sourceprovider"
 )
 
 type Store interface {
@@ -35,7 +37,8 @@ type Store interface {
 const (
 	// Admin endpoints need a bigger body limit for large Gutenberg books.
 	// Keep public APIs small; only admin gets this.
-	maxJSONBodyBytes = 20 << 20 // 20MB
+	maxJSONBodyBytes           = 20 << 20 // 20MB
+	sourceProviderMaximumLimit = 20
 )
 
 func New(cfg Config, store Store) http.Handler {
@@ -47,6 +50,7 @@ func New(cfg Config, store Store) http.Handler {
 		panic("bearer account authenticator is required")
 	}
 
+	discovery := cfg.SourceDiscovery
 	mux := http.NewServeMux()
 
 	withAdmin := func(next http.HandlerFunc) http.HandlerFunc {
@@ -146,6 +150,39 @@ func New(cfg Config, store Store) http.Handler {
 			return
 		}
 
+		noStore(w)
+		writeJSON(w, http.StatusOK, out)
+	}))
+
+	mux.HandleFunc("GET /api/v1/admin/source-providers/{provider}/search", withAdmin(func(w http.ResponseWriter, r *http.Request) {
+		if discovery == nil {
+			writeErr(w, http.StatusServiceUnavailable, "source_provider_unavailable", "source provider is unavailable")
+			return
+		}
+		limit, err := sourceProviderLimit(r.URL.Query().Get("limit"))
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "source_provider_query_invalid", "source provider search is invalid")
+			return
+		}
+		out, err := discovery.Search(r.Context(), sourceprovider.ID(strings.TrimSpace(r.PathValue("provider"))), r.URL.Query().Get("q"), limit)
+		if err != nil {
+			writeSourceProviderError(w, err, false)
+			return
+		}
+		noStore(w)
+		writeJSON(w, http.StatusOK, out)
+	}))
+
+	mux.HandleFunc("GET /api/v1/admin/source-providers/{provider}/works/{externalID}", withAdmin(func(w http.ResponseWriter, r *http.Request) {
+		if discovery == nil {
+			writeErr(w, http.StatusServiceUnavailable, "source_provider_unavailable", "source provider is unavailable")
+			return
+		}
+		out, err := discovery.GetWork(r.Context(), sourceprovider.ID(strings.TrimSpace(r.PathValue("provider"))), strings.TrimSpace(r.PathValue("externalID")))
+		if err != nil {
+			writeSourceProviderError(w, err, true)
+			return
+		}
 		noStore(w)
 		writeJSON(w, http.StatusOK, out)
 	}))
@@ -360,6 +397,37 @@ func adminKeyOK(got, want string) bool {
 		return false
 	}
 	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}
+
+func sourceProviderLimit(raw string) (int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil
+	}
+	limit, err := strconv.Atoi(raw)
+	if err != nil || limit < 1 || limit > sourceProviderMaximumLimit {
+		return 0, sourceprovider.ErrQueryInvalid
+	}
+	return limit, nil
+}
+
+func writeSourceProviderError(w http.ResponseWriter, err error, isWork bool) {
+	switch {
+	case errors.Is(err, sourceprovider.ErrUnknownProvider):
+		writeErr(w, http.StatusNotFound, "source_provider_invalid", "source provider is not supported")
+	case errors.Is(err, sourceprovider.ErrQueryInvalid), errors.Is(err, sourceprovider.ErrWorkIDInvalid):
+		writeErr(w, http.StatusBadRequest, "source_provider_query_invalid", "source provider request is invalid")
+	case isWork && errors.Is(err, sourceprovider.ErrWorkNotFound):
+		writeErr(w, http.StatusNotFound, "source_provider_work_not_found", "source provider work was not found")
+	case errors.Is(err, sourceprovider.ErrTimeout):
+		writeErr(w, http.StatusGatewayTimeout, "source_provider_timeout", "source provider did not respond in time")
+	case errors.Is(err, sourceprovider.ErrResponseInvalid):
+		slog.Error("source provider response was invalid")
+		writeErr(w, http.StatusBadGateway, "source_provider_response_invalid", "source provider returned an invalid response")
+	default:
+		slog.Error("source provider request failed")
+		writeErr(w, http.StatusBadGateway, "source_provider_unavailable", "source provider is unavailable")
+	}
 }
 
 func noStore(w http.ResponseWriter) {
