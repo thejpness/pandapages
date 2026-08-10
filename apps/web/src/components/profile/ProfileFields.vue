@@ -1,6 +1,12 @@
 <script setup lang="ts">
 import type { ReaderEditionKey } from "../../lib/api";
-import { readerEditionDescription, readerEditionLabel, readerEditionOrder } from "../../lib/reader-editions";
+import {
+  readerEditionAgeGuideNote,
+  readerEditionAgeStage,
+  readerEditionDescription,
+  readerEditionOptionLabel,
+  readerEditionOrder,
+} from "../../lib/reader-editions";
 defineProps<{ nameId: string; levelId: string; disabled?: boolean }>();
 const name = defineModel<string>("name", { required: true });
 const readingLevel = defineModel<ReaderEditionKey>("readingLevel", { required: true });
@@ -14,13 +20,17 @@ const readingLevel = defineModel<ReaderEditionKey>("readingLevel", { required: t
     </div>
     <div class="profile-fields__field">
       <label :for="levelId">Reading level</label>
-      <select :id="levelId" v-model="readingLevel" :aria-describedby="`${levelId}-hint`">
+      <select :id="levelId" v-model="readingLevel" :aria-describedby="`${levelId}-hint ${levelId}-guide`">
         <option v-for="key in readerEditionOrder" :key="key" :value="key">
-          {{ readerEditionLabel(key) }}
+          {{ readerEditionOptionLabel(key) }}
         </option>
       </select>
       <p :id="`${levelId}-hint`" class="profile-fields__hint">
-        {{ readerEditionDescription(readingLevel) }}
+        <strong>{{ readerEditionAgeStage(readingLevel) }}</strong>
+        <span>{{ readerEditionDescription(readingLevel) }}</span>
+      </p>
+      <p :id="`${levelId}-guide`" class="profile-fields__guide">
+        {{ readerEditionAgeGuideNote }}
       </p>
     </div>
   </fieldset>
@@ -67,6 +77,18 @@ const readingLevel = defineModel<ReaderEditionKey>("readingLevel", { required: t
   margin: 0;
   color: var(--panda-muted);
   font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.profile-fields__hint strong,
+.profile-fields__hint span {
+  display: block;
+}
+
+.profile-fields__guide {
+  margin: 0;
+  color: var(--panda-muted);
+  font-size: 0.82rem;
   line-height: 1.45;
 }
 
