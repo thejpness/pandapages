@@ -1,4 +1,5 @@
-import { expect, test } from '@playwright/test'
+import { AxeBuilder } from '@axe-core/playwright'
+import { expect, test, type Page } from '@playwright/test'
 
 const accessToken = 'local-access-token-without-private-claims'
 const refreshToken = 'local-refresh-token-owned-by-official-client'
@@ -18,7 +19,7 @@ const identityResponse = {
   ],
 }
 
-function tokenResponse() {
+function tokenResponse(provider: 'google' | 'facebook') {
   const now = new Date().toISOString()
   return {
     access_token: accessToken,
@@ -34,7 +35,7 @@ function tokenResponse() {
       email_confirmed_at: now,
       confirmed_at: now,
       last_sign_in_at: now,
-      app_metadata: { provider: 'google', providers: ['google'] },
+      app_metadata: { provider, providers: [provider] },
       user_metadata: {},
       identities: [],
       created_at: now,
@@ -44,7 +45,22 @@ function tokenResponse() {
   }
 }
 
-test('official PKCE callback onboards with bearer only, restores identity, and logs out', async ({ page }) => {
+async function expectNoSeriousOrCriticalViolations(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    await document.fonts.ready
+  })
+  const violations = (await new AxeBuilder({ page }).analyze()).violations
+    .filter((violation) => violation.impact === 'serious' || violation.impact === 'critical')
+    .map((violation) => ({
+      id: violation.id,
+      impact: violation.impact,
+      targets: violation.nodes.map((node) => node.target),
+    }))
+  expect(violations).toEqual([])
+}
+
+for (const provider of ['google', 'facebook'] as const) {
+  test(`official ${provider} PKCE callback onboards with bearer only, restores identity, and logs out`, async ({ page }) => {
   let authorizeURL: URL | undefined
   let tokenExchange = false
   let logoutCalled = false
@@ -65,7 +81,7 @@ test('official PKCE callback onboards with bearer only, restores identity, and l
       expect(body).toContain('auth-code-fixture')
       expect(body).toContain('code_verifier')
       tokenExchange = true
-      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(tokenResponse()) })
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(tokenResponse(provider)) })
       return
     }
     if (url.pathname === '/auth/v1/logout') {
@@ -101,9 +117,18 @@ test('official PKCE callback onboards with bearer only, restores identity, and l
   await page.goto('/account/login')
   await expect(page.getByRole('heading', { name: 'Sign in to Panda Pages' })).toBeVisible()
   await expect(page.getByText('Use your adult account to continue to Panda Pages.')).toBeVisible()
-  await page.getByRole('button', { name: 'Continue with Google' }).click()
+  await expect(page.getByRole('button', { name: 'Continue with Google' })).toBeVisible()
+  const providerButton = page.getByRole('button', { name: `Continue with ${provider[0].toUpperCase()}${provider.slice(1)}` })
+  if (provider === 'facebook') {
+    await providerButton.focus()
+    await page.keyboard.press('Enter')
+  } else {
+    await providerButton.click()
+  }
 
   await expect.poll(() => authorizeURL?.pathname).toBe('/auth/v1/authorize')
+  await page.waitForURL('https://auth.invalid/auth/v1/authorize**')
+  expect(authorizeURL?.searchParams.get('provider')).toBe(provider)
   expect(authorizeURL?.searchParams.get('code_challenge_method')).toBe('s256')
   expect(authorizeURL?.searchParams.get('code_challenge')).toMatch(/^[A-Za-z0-9_-]{43}$/)
   expect(authorizeURL?.searchParams.get('redirect_to')).toBe('http://127.0.0.1:4173/auth/callback')
@@ -127,6 +152,71 @@ test('official PKCE callback onboards with bearer only, restores identity, and l
   const stored = await page.evaluate(() => JSON.stringify(window.localStorage))
   expect(stored).not.toContain(accessToken)
   expect(stored).not.toContain(refreshToken)
+  })
+}
+
+test('login keeps one provider launch pending at a time', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(crypto.subtle, 'digest', {
+      configurable: true,
+      value: () => new Promise(() => {}),
+    })
+  })
+
+  await page.goto('/account/login')
+  const google = page.getByRole('button', { name: 'Continue with Google' })
+  const facebook = page.getByRole('button', { name: 'Continue with Facebook' })
+  await google.focus()
+  await page.keyboard.press('Enter')
+
+  await expect(page.getByRole('button', { name: 'Opening secure sign-in…' })).toBeDisabled()
+  await expect(facebook).toBeDisabled()
+  await expect(page.locator('.identity-actions')).toHaveAttribute('aria-busy', 'true')
+})
+
+test('login initiation failure stays on Panda Pages and presents a safe error', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(crypto, 'getRandomValues', {
+      configurable: true,
+      value: () => {
+        throw new Error('test-only OAuth random failure')
+      },
+    })
+  })
+
+  await page.goto('/account/login')
+  await page.getByRole('button', { name: 'Continue with Facebook' }).click()
+
+  const error = page.getByRole('alert')
+  await expect(error).toHaveText('Secure sign-in could not start. Check the local Auth configuration and try again.')
+  await expect(error).not.toContainText('test-only')
+  await expect(page.getByRole('button', { name: 'Continue with Google' })).toBeEnabled()
+  await expect(page.getByRole('button', { name: 'Continue with Facebook' })).toBeEnabled()
+  await expect(page).toHaveURL(/\/account\/login$/)
+})
+
+test('login provider controls are accessible and fit a narrow viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 568 })
+  await page.goto('/account/login')
+
+  const google = page.getByRole('button', { name: 'Continue with Google' })
+  const facebook = page.getByRole('button', { name: 'Continue with Facebook' })
+  await expect(google).toBeVisible()
+  await expect(facebook).toBeVisible()
+  for (const mark of [google.locator('img'), facebook.locator('img')]) {
+    await expect(mark).toHaveAttribute('alt', '')
+    await expect(mark).toHaveAttribute('aria-hidden', 'true')
+  }
+
+  const [googleBox, facebookBox, scrollWidth] = await Promise.all([
+    google.boundingBox(),
+    facebook.boundingBox(),
+    page.evaluate(() => document.documentElement.scrollWidth),
+  ])
+  expect(googleBox?.width).toBe(facebookBox?.width)
+  expect(googleBox?.height).toBe(facebookBox?.height)
+  expect(scrollWidth).toBeLessThanOrEqual(320)
+  await expectNoSeriousOrCriticalViolations(page)
 })
 
 test('identity session restoration fails closed without an official session', async ({ page }) => {
