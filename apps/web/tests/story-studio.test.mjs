@@ -250,3 +250,25 @@ test('sensitive server error text is never projected into Story Studio', async (
     retryable: false,
   })
 })
+
+test('HTML import keeps an anchored body chapter without contents duplication', async () => {
+  const form = await loadForm()
+  const imported = form.convertImportedStoryFile({
+    filename: 'sample.html',
+    mediaType: 'text/html',
+    text: `
+      <header>*** START OF THE PROJECT GUTENBERG EBOOK SAMPLE ***</header>
+      <h1>Sample</h1>
+      <h3>Contents</h3>
+      <table><tr><td><a class="pginternal" href="#chap01">BOOK I.</a></td></tr></table>
+      <div class="chapter"><h2><a id="chap01"></a>BOOK I</h2><p>Body text.</p></div>
+      <footer>*** END OF THE PROJECT GUTENBERG EBOOK SAMPLE ***</footer>
+    `,
+  })
+  const h2 = [...imported.markdown.matchAll(/^##\s*(.*?)\s*$/gm)].map((match) => match[1])
+
+  assert.equal(h2.filter((heading) => heading === 'BOOK I').length, 1)
+  assert.equal(h2.filter((heading) => heading === '').length, 0)
+  assert.match(imported.markdown, /## BOOK I/)
+  assert.match(imported.markdown, /Body text\./)
+})
