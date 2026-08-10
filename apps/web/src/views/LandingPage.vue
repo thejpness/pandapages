@@ -317,7 +317,7 @@
       <nav aria-label="Footer links">
         <a :href="storiesHref">Stories</a>
         <a href="#why">Why Panda Pages</a>
-        <a href="/privacy">Privacy</a>
+        <PublicTrustLinks />
         <button type="button" @click="handleInstall">Install app</button>
       </nav>
     </footer>
@@ -364,6 +364,7 @@ import {
 } from 'reka-ui'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import ProductAttribution from '../components/app/ProductAttribution.vue'
+import PublicTrustLinks from '../components/app/PublicTrustLinks.vue'
 
 type BenefitIcon = 'ad-free' | 'calm' | 'share' | 'anywhere'
 type InstallPlatform = 'ios' | 'android' | 'other'

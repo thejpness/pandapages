@@ -2,6 +2,7 @@
 import { onUnmounted, watchEffect } from 'vue'
 import { RouterLink } from 'vue-router'
 import ProductAttribution from './ProductAttribution.vue'
+import PublicTrustLinks from './PublicTrustLinks.vue'
 const props = defineProps<{ title: string; summary?: string }>()
 watchEffect(() => { document.title = `${props.title} | Panda Pages` })
 onUnmounted(() => { document.title = 'Panda Pages' })
@@ -12,10 +13,10 @@ onUnmounted(() => { document.title = 'Panda Pages' })
     <a class="public-info-layout__skip" href="#public-info-main">Skip to main content</a>
     <header class="public-info-layout__header">
       <RouterLink class="public-info-layout__brand" to="/" aria-label="Panda Pages home"><img src="/logo.png" alt="" width="48" height="48" decoding="async" /><span><strong>Panda Pages</strong><small>Stories for curious readers</small></span></RouterLink>
-      <nav class="public-info-layout__nav" aria-label="Public information"><RouterLink to="/privacy">Privacy</RouterLink></nav>
+      <nav class="public-info-layout__nav" aria-label="Public information"><PublicTrustLinks /></nav>
     </header>
     <main id="public-info-main" class="public-info-layout__main" tabindex="-1"><article><p class="public-info-layout__eyebrow">Panda Pages information</p><h1>{{ title }}</h1><p v-if="summary" class="public-info-layout__summary">{{ summary }}</p><div class="public-info-layout__content"><slot /></div></article></main>
-    <footer class="public-info-layout__footer"><ProductAttribution /><nav aria-label="Legal navigation"><RouterLink to="/privacy">Privacy</RouterLink></nav></footer>
+    <footer class="public-info-layout__footer"><ProductAttribution /><nav aria-label="Legal navigation"><PublicTrustLinks /></nav></footer>
   </div>
 </template>
 

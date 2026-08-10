@@ -65,8 +65,11 @@ test.describe('Public information pages', () => {
 
     const legalNavigation = page.getByRole('navigation', { name: 'Legal navigation' })
     const privacyLink = legalNavigation.getByRole('link', { name: 'Privacy', exact: true })
-    await privacyLink.focus()
-    await expect(privacyLink).toBeFocused()
+    const contentAndCopyrightLink = legalNavigation.getByRole('link', { name: 'Content & Copyright', exact: true })
+    await expect(privacyLink).toHaveAttribute('href', '/privacy')
+    await expect(contentAndCopyrightLink).toHaveAttribute('href', '/content-and-copyright')
+    await contentAndCopyrightLink.focus()
+    await expect(contentAndCopyrightLink).toBeFocused()
   })
 
   test('Content & Copyright is directly reachable while signed out and explains provenance boundaries', async ({ page }) => {
@@ -96,7 +99,11 @@ test.describe('Public information pages', () => {
     expect(contentText).not.toContain('support@southcoastapps.co.uk')
     expect(apiRequests).toEqual([])
 
-    const privacyLink = page.getByRole('link', { name: 'Panda Pages Privacy Policy' })
+    const legalNavigation = page.getByRole('navigation', { name: 'Legal navigation' })
+    const privacyLink = legalNavigation.getByRole('link', { name: 'Privacy', exact: true })
+    const contentAndCopyrightLink = legalNavigation.getByRole('link', { name: 'Content & Copyright', exact: true })
+    await expect(privacyLink).toHaveAttribute('href', '/privacy')
+    await expect(contentAndCopyrightLink).toHaveAttribute('href', '/content-and-copyright')
     await privacyLink.focus()
     await expect(privacyLink).toBeFocused()
     await page.reload()
