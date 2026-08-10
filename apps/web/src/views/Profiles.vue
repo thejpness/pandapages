@@ -12,6 +12,7 @@ import { clearSelectedReaderProfile, reconcileReaderProfileSelection, selectedRe
 import { isChildMode, isChildModeFor } from "../lib/reader-mode";
 const route=useRoute();const router=useRouter();const profiles=ref<readonly ReaderProfile[]>([]);const selectedID=ref<string|null>(null);const loading=ref(true);const busy=ref(false);const errorMessage=ref("");const pinTarget=ref<ReaderProfile|null>(null);const pinValue=ref("");const pinError=ref("");const pinTrigger=ref<HTMLElement|null>(null);const unavailable=computed(()=>route.query.unavailable==='1');
 const destination=()=>resolveReaderDestination(route.query.next);const message=(error:unknown)=>error instanceof Error&&error.message?error.message:"Profiles could not be updated. Please try again.";
+function openProfileCreator(){void router.push({path:"/profiles/new",query:{from:"chooser"}});}
 function readerStatus(profileID:string){if(selectedID.value!==profileID)return null;return isChildModeFor(profileID)?'Current reader':'Selected reader';}
 function restore(){const value=reconcileReaderProfileSelection(selectedReaderProfileID(),profiles.value);if(!value){clearSelectedReaderProfile();selectedID.value=null;return;}selectedID.value=value.id;}
 async function refresh(){profiles.value=await listReaderProfiles(await currentAccountContext());restore();}
@@ -48,11 +49,11 @@ onMounted(async()=>{try{await refresh();}catch(error){errorMessage.value=message
       </section>
       <template v-else>
         <p v-if="unavailable" class="profile-notice" role="status">Readers could not be checked just now. Choose one when the connection is available.</p>
-        <section v-if="profiles.length === 0" class="profile-state profile-state--empty">
+        <button v-if="profiles.length === 0" class="profile-state profile-state--empty profile-state--action" type="button" @click="openProfileCreator">
           <span class="profile-state__mark" aria-hidden="true">+</span>
-          <h2>Add the first reader</h2>
-          <p>Every story starts with choosing who is reading.</p>
-        </section>
+          <span class="profile-state__title">Add the first reader</span>
+          <span class="profile-state__description">Every story starts with choosing who is reading.</span>
+        </button>
         <ul v-else class="profile-grid" aria-label="Readers">
           <li v-for="profile in profiles" :key="profile.id">
             <button class="profile-choice" type="button" :aria-label="`Start reading as ${profile.name}`" @click="choose(profile, $event.currentTarget)">
@@ -71,7 +72,7 @@ onMounted(async()=>{try{await refresh();}catch(error){errorMessage.value=message
       </template>
 
       <nav v-if="!isChildMode()" class="profile-chooser__parent-actions" aria-label="Profile management">
-        <button class="profile-chooser__add" type="button" @click="router.push({ path: &quot;/profiles/new&quot;, query: { from: &quot;chooser&quot; } })"><span aria-hidden="true">+</span>Add profile</button>
+        <button class="profile-chooser__add" type="button" @click="openProfileCreator"><span aria-hidden="true">+</span>Add profile</button>
         <button class="profile-chooser__manage" type="button" @click="router.push(&quot;/profiles/manage&quot;)">Manage profiles</button>
       </nav>
     </main>
@@ -182,8 +183,11 @@ onMounted(async()=>{try{await refresh();}catch(error){errorMessage.value=message
 
 .profile-state { display: grid; max-width: 30rem; justify-items: center; gap: 0.65rem; margin: 0 auto; border: 1px solid var(--panda-line-strong); border-radius: var(--panda-radius-card); padding: clamp(1.4rem, 6vw, 2.5rem); background: var(--panda-paper-raised); box-shadow: var(--panda-shadow-soft); text-align: center; }
 .profile-state__mark { display: grid; width: 2.75rem; aspect-ratio: 1; place-items: center; border: 1px solid currentColor; border-radius: 50%; color: var(--panda-soft-ink); font-size: 1.2rem; font-weight: 850; }
-.profile-state h2 { font-family: var(--panda-serif); font-size: 1.5rem; }
-.profile-state p { color: var(--panda-muted); line-height: 1.5; }
+.profile-state h2, .profile-state__title { font-family: var(--panda-serif); font-size: 1.5rem; font-weight: 680; }
+.profile-state p, .profile-state__description { color: var(--panda-muted); line-height: 1.5; }
+.profile-state--action { width: min(100%, 30rem); cursor: pointer; font: inherit; }
+.profile-state--action:hover { border-color: var(--panda-ink); }
+.profile-state--action:active { transform: translateY(1px); }
 .profile-state--error { border-color: var(--panda-danger); }
 .profile-state--error .profile-state__mark { color: var(--panda-danger); }
 .profile-notice { width: min(100%, 44rem); margin: 0 auto 1.25rem; border: 1px solid var(--panda-warning); border-radius: var(--panda-radius-compact); padding: 0.75rem 0.9rem; background: var(--panda-warning-surface); color: var(--panda-warning); font-weight: 700; line-height: 1.45; text-align: center; }

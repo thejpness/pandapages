@@ -175,6 +175,27 @@ test.describe('reader profile lifecycle', () => {
   test('create is dedicated and does not start or select a reader', async ({ page }) => {
     const api = new ProfilesApiMock(page); await api.install(); await page.goto('/profiles/new?from=chooser'); await page.getByLabel('Reader name').fill('Ted'); await page.getByLabel('Reading level').selectOption('little-listeners'); await page.getByRole('button', { name: 'Create profile' }).click(); await expect(page).toHaveURL('/profiles'); await expect.poll(() => page.evaluate(() => window.localStorage.getItem('pandapages.selected-reader-profile-id'))).toBeNull(); await expect(page.getByRole('button', { name: 'Start reading as Ted' })).toBeVisible();
   });
+  test('the empty reader card and Add profile use the same profile-creation destination', async ({ page }) => {
+    const api = new ProfilesApiMock(page)
+    await api.install()
+    await page.goto('/profiles')
+
+    const emptyState = page.getByRole('button', { name: 'Add the first reader' })
+    await expect(emptyState).toBeVisible()
+    await expect(page.getByText('Every story starts with choosing who is reading.')).toBeVisible()
+    await emptyState.click()
+    await expect(page).toHaveURL('/profiles/new?from=chooser')
+
+    await page.goto('/profiles')
+    await emptyState.focus()
+    await expect(emptyState).toBeFocused()
+    await page.keyboard.press('Space')
+    await expect(page).toHaveURL('/profiles/new?from=chooser')
+
+    await page.goto('/profiles')
+    await page.getByRole('button', { name: 'Add profile' }).click()
+    await expect(page).toHaveURL('/profiles/new?from=chooser')
+  })
   test('manage lists profiles and preserves parent utilities', async ({ page }) => {
     const api = new ProfilesApiMock(page); api.profiles = [{ id: fixtureProfileID, name: 'Mina', pin_enabled: false, reading_level: 'classic' }]; await api.install(); await page.goto('/profiles/manage'); await expect(page.getByRole('heading', { level: 1, name: 'Manage profiles' })).toBeVisible(); await expect(page.getByRole('button', { name: 'Edit Mina' })).toBeVisible(); await expect(page.getByRole('button', { name: 'Add profile' })).toBeVisible(); await expect(page.getByRole('button', { name: 'Story Studio' })).toBeVisible(); await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
   });
