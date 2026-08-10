@@ -1,20 +1,20 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import PandaAuthShell from '../components/app/PandaAuthShell.vue'
-import { startSupabaseLogin } from '../lib/supabase-auth'
+import { startSupabaseLogin, type SupabaseOAuthProvider } from '../lib/supabase-auth'
 
-const busy = ref(false)
+const activeProvider = ref<SupabaseOAuthProvider | null>(null)
 const errorMessage = ref('')
 
-async function signIn() {
-  if (busy.value) return
-  busy.value = true
+async function signIn(provider: SupabaseOAuthProvider) {
+  if (activeProvider.value) return
+  activeProvider.value = provider
   errorMessage.value = ''
   try {
-    await startSupabaseLogin()
+    await startSupabaseLogin(provider)
   } catch {
     errorMessage.value = 'Secure sign-in could not start. Check the local Auth configuration and try again.'
-    busy.value = false
+    activeProvider.value = null
   }
 }
 </script>
@@ -25,9 +25,12 @@ async function signIn() {
     title="Sign in to Panda Pages"
     description="Use your adult account to continue to Panda Pages."
   >
-    <div class="identity-actions">
-      <button type="button" class="identity-primary" :disabled="busy" @click="signIn">
-        {{ busy ? 'Opening secure sign-in…' : 'Continue with Google' }}
+    <div class="identity-actions" :aria-busy="activeProvider ? 'true' : undefined">
+      <button type="button" class="identity-primary" :disabled="Boolean(activeProvider)" @click="signIn('google')">
+        {{ activeProvider === 'google' ? 'Opening secure sign-in…' : 'Continue with Google' }}
+      </button>
+      <button type="button" class="identity-primary" :disabled="Boolean(activeProvider)" @click="signIn('facebook')">
+        {{ activeProvider === 'facebook' ? 'Opening secure sign-in…' : 'Continue with Facebook' }}
       </button>
       <p v-if="errorMessage" class="identity-error" role="alert">{{ errorMessage }}</p>
     </div>

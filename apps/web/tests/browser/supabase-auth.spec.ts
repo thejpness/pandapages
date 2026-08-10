@@ -104,6 +104,7 @@ test('official PKCE callback onboards with bearer only, restores identity, and l
   await page.getByRole('button', { name: 'Continue with Google' }).click()
 
   await expect.poll(() => authorizeURL?.pathname).toBe('/auth/v1/authorize')
+  expect(authorizeURL?.searchParams.get('provider')).toBe('google')
   expect(authorizeURL?.searchParams.get('code_challenge_method')).toBe('s256')
   expect(authorizeURL?.searchParams.get('code_challenge')).toMatch(/^[A-Za-z0-9_-]{43}$/)
   expect(authorizeURL?.searchParams.get('redirect_to')).toBe('http://127.0.0.1:4173/auth/callback')

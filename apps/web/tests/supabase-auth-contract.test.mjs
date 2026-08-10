@@ -17,6 +17,15 @@ test('official client owns PKCE persistence and callback exchange', () => {
   assert.doesNotMatch(source, /setItem\(|getItem\(/)
 })
 
+test('Google and Facebook use the same Supabase OAuth callback contract', () => {
+  assert.match(source, /export type SupabaseOAuthProvider = 'google' \| 'facebook'/)
+  assert.match(source, /startSupabaseLogin\(provider: SupabaseOAuthProvider\)/)
+  assert.match(source, /signInWithOAuth\(\{\s*provider,/)
+  assert.match(source, /redirectTo: callbackURL\(\)/)
+  assert.match(source, /skipBrowserRedirect: true/)
+  assert.doesNotMatch(source, /localhost:3000/)
+})
+
 test('bearer client is limited to the new auth family and omits cookies', () => {
   assert.match(source, /identityRequest\('\/api\/auth\/onboard', 'POST'/)
   assert.match(source, /identityRequest\('\/api\/auth\/me', 'GET'/)

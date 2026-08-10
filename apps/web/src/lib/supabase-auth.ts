@@ -22,6 +22,8 @@ export type AuthenticatedIdentity = Readonly<{
   memberships: readonly IdentityMembership[]
 }>
 
+export type SupabaseOAuthProvider = 'google' | 'facebook'
+
 function configuredOrigin(): string {
   if (!supabaseURL || !publishableKey) {
     throw new Error('Supabase identity foundation is not configured')
@@ -66,10 +68,10 @@ function callbackURL(): string {
   return new URL('/auth/callback', window.location.origin).toString()
 }
 
-export async function startSupabaseLogin(): Promise<void> {
+export async function startSupabaseLogin(provider: SupabaseOAuthProvider): Promise<void> {
   const origin = configuredOrigin()
   const { data, error } = await supabaseClient().auth.signInWithOAuth({
-    provider: 'google',
+    provider,
     options: {
       redirectTo: callbackURL(),
       skipBrowserRedirect: true,
