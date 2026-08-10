@@ -1590,9 +1590,6 @@ test.describe('Library 2 bookshelf', () => {
           page.getByRole('button', { name: 'Parent controls' }),
         ).toBeVisible()
         await expect(
-          page.getByRole('button', { name: 'Parent options' }),
-        ).toHaveCount(0)
-        await expect(
           page.getByRole('button', { name: 'Sign out of Panda Pages' }),
         ).toHaveCount(0)
       })
@@ -1723,9 +1720,6 @@ test.describe('Library 2 bookshelf', () => {
     ).toBe(0)
     await expect(brand).toBeVisible()
     await expect(leaveReaderMode).toBeVisible()
-    await expect(
-      page.getByRole('button', { name: 'Parent options' }),
-    ).toHaveCount(0)
     await expect(
       page.getByRole('button', { name: 'Sign out of Panda Pages' }),
     ).toHaveCount(0)

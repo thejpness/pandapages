@@ -1,13 +1,8 @@
 # Test fixture lifecycle
 
-Normal Panda Pages migrations leave an empty application database: no accounts,
-reader profiles, adult principals, memberships, stories, story versions,
-segments, or reading progress. Migration `00023` retires the legacy
-child/prompt/settings/generation scaffolding, migration `00024` retires the old
-mutable story-source mirror, and migration `00025` retires the untouched
-historical Default account/profile bootstrap.
+Panda Pages now has one clean greenfield migration, `00001_baseline.sql`. It creates the current schema only; normal migrations create no account, reader profile, membership, story, release, source, or progress fixture.
 
-## Historical migration decision
+## Archived migration-history rationale
 
 Migration `00008_seed_test_data.sql` shipped in the original migration history
 and is recorded as applied in the PostgreSQL storage audit. It cannot be
@@ -126,7 +121,7 @@ The seed command accepts no database URL or password. It:
 - targets either the single running development PostgreSQL container labelled
   `com.pandapages.test-seed-target=local-development`, or an explicitly named
   disposable integration container with the dedicated test label;
-- requires the target to be running with current migration `00025` applied;
+- requires the target to be running with baseline migration `00001` applied;
 - uses container-local `psql`, prints no database credential, performs no
   network request, and creates no temporary credential file.
 
@@ -165,17 +160,6 @@ PostgreSQL resources and proves:
 The suite runs in the protected `Configuration` CI job. It uses only generated
 non-production data and local Docker resources.
 
-`scripts/tests/account-integrity-migration-integration.sh` separately creates
-disposable PostgreSQL databases and exercises a representative version-14
-upgrade, a fresh full migration chain, version-15 rollback/reapplication,
-fail-closed orphan and cross-account preflight cases, derived progress/settings
-account-ownership backfills, composite constraints, account deletion
-restriction, data preservation, and version-aware `/readyz`. Its containers,
-network, volume, credentials, and temporary evidence are generated for the run
-and removed afterward.
+`scripts/tests/account-integrity-integration.sh` creates a disposable baseline database and verifies current account/profile/story ownership constraints and fail-closed cross-account cases.
 
-`scripts/tests/reader-store-integration.sh`, in the protected `Backend` job,
-separately proves SQL/Go key parity, migration 13→14 and Down/Up behaviour,
-direct locator constraints, coherent reads during republish, account isolation,
-strict progress validation, removed Reader 1 endpoints, and no false HTTP
-success after a database write failure.
+`scripts/tests/reader-store-integration.sh`, in the protected `Backend` job, proves baseline release, Reader resolution, account isolation, current-release coherence, and strict progress validation.

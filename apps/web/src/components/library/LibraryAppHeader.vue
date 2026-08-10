@@ -1,12 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
-import {
-  PopoverContent,
-  PopoverPortal,
-  PopoverRoot,
-  PopoverTrigger,
-} from 'reka-ui'
 import type { LibrarySort } from '../../lib/library-sorting'
 
 const props = defineProps<{
@@ -23,10 +17,7 @@ const emit = defineEmits<{
   'update:sort': [value: LibrarySort]
   clear: []
   surprise: []
-  profiles: []
   switch: []
-  journey: []
-  admin: []
   lock: []
   'leave-child': []
   'sticky-offset': [height: number]
@@ -34,15 +25,9 @@ const emit = defineEmits<{
 
 const searchInput = ref<HTMLInputElement | null>(null)
 const headerRoot = ref<HTMLElement | null>(null)
-const parentMenuOpen = ref(false)
-const parentFirstAction = ref<HTMLButtonElement | null>(null)
-const parentLastAction = ref<HTMLButtonElement | null>(null)
-const lockButton = ref<HTMLButtonElement | null>(null)
 const stickyHeader = ref(true)
 
 let headerObserver: ResizeObserver | null = null
-let onwardFocus: HTMLElement | null = null
-
 const qModel = computed({
   get: () => props.q,
   set: (value: string) => emit('update:q', value),
@@ -60,44 +45,6 @@ async function clearSearch() {
 
 function focusSearch() {
   searchInput.value?.focus()
-}
-
-function chooseParentAction(action: 'profiles' | 'journey' | 'admin') {
-  parentMenuOpen.value = false
-  if (action === 'profiles') emit('profiles')
-  else if (action === 'journey') emit('journey')
-  else emit('admin')
-}
-
-function handleParentTriggerKeydown(event: KeyboardEvent) {
-  if (event.key !== 'Tab' || event.shiftKey || !parentMenuOpen.value) return
-  event.preventDefault()
-  parentFirstAction.value?.focus()
-}
-
-function handleParentMenuKeydown(event: KeyboardEvent) {
-  if (event.key !== 'Tab') return
-  const active = document.activeElement
-
-  if (event.shiftKey && active === parentFirstAction.value) {
-    event.preventDefault()
-    parentMenuOpen.value = false
-    return
-  }
-
-  if (!event.shiftKey && active === parentLastAction.value) {
-    event.preventDefault()
-    onwardFocus = lockButton.value
-    parentMenuOpen.value = false
-  }
-}
-
-function handleParentCloseAutoFocus(event: Event) {
-  if (onwardFocus === null) return
-  event.preventDefault()
-  const target = onwardFocus
-  onwardFocus = null
-  void nextTick(() => target.focus({ preventScroll: true }))
 }
 
 function updateStickyHeader() {
@@ -142,63 +89,6 @@ defineExpose({ focusSearch })
         </RouterLink>
 
         <div class="library-header__actions">
-          <PopoverRoot v-if="!childMode" v-model:open="parentMenuOpen">
-            <div class="parent-options">
-              <PopoverTrigger as-child>
-                <button
-                  class="header-button header-button--quiet"
-                  type="button"
-                  @keydown="handleParentTriggerKeydown"
-                >
-                  <span aria-hidden="true">•••</span>
-                  <span class="header-button__label">Parent options</span>
-                </button>
-              </PopoverTrigger>
-              <PopoverPortal>
-                <PopoverContent
-                  class="parent-menu"
-                  align="end"
-                  side="bottom"
-                  :side-offset="8"
-                  :collision-padding="16"
-                  :prioritize-position="true"
-                  position-strategy="fixed"
-                  sticky="always"
-                  @open-auto-focus="$event.preventDefault()"
-                  @close-auto-focus="handleParentCloseAutoFocus"
-                  @keydown.capture="handleParentMenuKeydown"
-                >
-                  <button
-                    ref="parentFirstAction"
-                    class="parent-menu__item"
-                    type="button"
-                    @click="chooseParentAction('profiles')"
-                  >
-                    <span aria-hidden="true">◉</span>
-                    Who’s reading?
-                  </button>
-                  <button
-                    class="parent-menu__item"
-                    type="button"
-                    @click="chooseParentAction('journey')"
-                  >
-                    <span aria-hidden="true">◌</span>
-                    Reading profile
-                  </button>
-                  <button
-                    ref="parentLastAction"
-                    class="parent-menu__item"
-                    type="button"
-                    @click="chooseParentAction('admin')"
-                  >
-                    <span aria-hidden="true">⚙</span>
-                    Admin
-                  </button>
-                </PopoverContent>
-              </PopoverPortal>
-            </div>
-          </PopoverRoot>
-
           <button
             v-if="childMode"
             class="header-button header-button--ink"
@@ -209,7 +99,6 @@ defineExpose({ focusSearch })
           </button>
           <button
             v-if="childMode"
-            ref="lockButton"
             class="header-button header-button--quiet"
             type="button"
             @click="emit('leave-child')"
@@ -219,7 +108,6 @@ defineExpose({ focusSearch })
           </button>
           <button
             v-else
-            ref="lockButton"
             class="header-button header-button--ink"
             type="button"
             :disabled="locking"
@@ -568,62 +456,5 @@ defineExpose({ focusSearch })
   .library-sort__chevron {
     display: none;
   }
-}
-</style>
-
-<style scoped>
-.parent-options {
-  position: relative;
-}
-
-:global(.parent-menu) {
-  z-index: 80;
-  box-sizing: border-box;
-  width: min(
-    13rem,
-    calc(100vw - 2rem - env(safe-area-inset-left) - env(safe-area-inset-right))
-  );
-  max-width: var(--reka-popover-content-available-width);
-  max-height: min(
-    60dvh,
-    var(--reka-popover-content-available-height, 60dvh)
-  );
-  overflow: auto;
-  overscroll-behavior: contain;
-  border: 1px solid var(--panda-line-strong);
-  border-radius: var(--panda-radius-card);
-  padding: 0.35rem;
-  background: var(--panda-white);
-  color: var(--panda-ink);
-  box-shadow: var(--panda-shadow);
-  font-family: var(--panda-sans);
-}
-
-.parent-menu__item {
-  display: flex;
-  width: 100%;
-  min-height: 2.75rem;
-  align-items: center;
-  gap: 0.65rem;
-  border-radius: var(--panda-radius-compact);
-  padding: 0.55rem 0.7rem;
-  font-size: 0.88rem;
-  font-weight: 760;
-  outline: none;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  user-select: none;
-}
-
-.parent-menu__item:hover,
-.parent-menu__item:focus-visible {
-  background: var(--panda-mist);
-}
-
-.parent-menu__item:focus-visible {
-  outline: 3px solid var(--panda-focus);
-  outline-offset: -3px;
 }
 </style>

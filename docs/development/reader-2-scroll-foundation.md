@@ -1,9 +1,6 @@
-# Reader 2 scroll foundation
+# Reader 2 scroll foundation (historical)
 
-The Reader 2 scroll foundation is the primary browser reading experience. It
-uses the coherent GET /api/v1/reader/{slug} response and strict Locator v2
-progress contract introduced by migration 00014; it does not change the API,
-database, segment identity, chapter identity, or progress schema.
+This document records the pre-profile-aware Reader 2 foundation. Current Reader content is resolved through the profile-scoped reader-resolution contract; retain the Locator v2 and scroll rationale below as historical implementation context.
 
 ## Frontend ownership
 

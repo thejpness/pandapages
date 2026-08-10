@@ -1,6 +1,8 @@
-# Reader 2 backend contract
+# Reader 2 backend foundation (historical)
 
-Reader 2 is a coordinated beta clean break across PostgreSQL, the Go API, and
+This document records the Reader 2 foundation before profile-aware release resolution. Current Reader access uses explicit account and profile context with `GET /api/v1/reader-resolution/{slug}` and `GET`/`PUT /api/v1/reader-edition/{slug}`.
+
+Reader 2 was a coordinated beta clean break across PostgreSQL, the Go API, and
 the current Vue Reader. It replaces the two-request Reader 1 content model and
 mode-specific progress locators. It is not a compatibility layer.
 

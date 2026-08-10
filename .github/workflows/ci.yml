@@ -180,7 +180,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bash -n \
+          scripts=(
             scripts/lib/postgresql-backup-common.sh \
             scripts/postgresql-backup.sh \
             scripts/postgresql-backup-healthcheck.sh \
@@ -190,20 +190,27 @@ jobs:
             scripts/postgresql-readonly-audit.sh \
             scripts/postgresql-roles.sh \
             scripts/postgresql-restore-rehearsal.sh \
-            scripts/tests/account-store-integration.sh \
             scripts/tests/account-integrity-integration.sh \
             scripts/tests/env-example-contract.sh \
             scripts/tests/identity-store-integration.sh \
             scripts/tests/postgresql-backup-integration.sh \
             scripts/tests/postgresql-backup-unit.sh \
             scripts/tests/postgresql-fixtures-integration.sh \
-            scripts/tests/progress-store-integration.sh \
             scripts/tests/reader-store-integration.sh \
             scripts/tests/postgresql-roles-contract.sh \
             scripts/tests/web-security-headers-contract.sh \
             scripts/tests/postgresql-roles-integration.sh \
+            scripts/tests/postgresql-stable-readiness.sh \
             scripts/dev/bootstrap-postgresql.sh \
             scripts/dev/seed-test-data.sh
+          )
+          for script in "${scripts[@]}"; do
+            [[ -f "$script" ]] || {
+              printf "Missing operations script: %s\n" "$script" >&2
+              exit 1
+            }
+            bash -n "$script"
+          done
           scripts/postgresql-backup.sh --help >/dev/null
           scripts/postgresql-backup-healthcheck.sh --help >/dev/null
           scripts/postgresql-backup-notify.sh --help >/dev/null

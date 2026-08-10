@@ -230,7 +230,7 @@ test('getLibrary uses explicit profile scope and rejects malformed success bodie
   const originalFetch = globalThis.fetch
   t.after(() => { globalThis.fetch = originalFetch })
 
-  const { module: api, source } = await apiModule()
+  const { module: api } = await apiModule()
   const requests = []
   const payload = { items: [story()] }
   globalThis.fetch = async (url, init) => {
@@ -247,8 +247,6 @@ test('getLibrary uses explicit profile scope and rejects malformed success bodie
   assert.equal(requests[0].url, '/api/v1/library')
   assert.equal(requests[0].init.credentials, 'omit')
   assert.equal(new Headers(requests[0].init.headers).get('X-PP-Profile-ID'), profileID)
-  assert.match(source, /profileScopedRequest<unknown>\(["']\/api\/v1\/library["'], profileID\)/)
-  assert.match(source, /return parseLibraryResponse\(data\)/)
 
   globalThis.fetch = async () =>
     new Response(JSON.stringify({ items: [{ slug: 'incomplete' }] }), {

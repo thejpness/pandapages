@@ -11,8 +11,7 @@ authorization boundary.
 While reader mode is active, Panda Pages keeps adult/account surfaces out of the
 reader experience:
 
-- `/profiles` returns to `/library`;
-- `/journey` returns to `/library`;
+- `/profiles` remains available as the reader switcher; it keeps parent-management actions hidden while reader mode is active;
 - `/admin` and Story Studio routes return to `/library`;
 - `/account` returns to `/library`.
 
@@ -26,8 +25,8 @@ available so an expired or absent adult session can recover normally.
 
 ## Leaving reader mode
 
-The current product deliberately leaves **Leave reader mode** ungated. Activating
-it clears the in-memory reader-mode state and opens the Parent Hub.
+The current product deliberately leaves **Parent controls** ungated. Activating
+it clears the in-memory reader-mode state and opens the parent profile surface.
 
 This is a product/UX choice for the current release, not a claim that Panda Pages
 prevents a child with physical access to the device from reaching the Parent
