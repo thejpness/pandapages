@@ -285,3 +285,15 @@ test('HTML heading conversion preserves descendant text without empty headings',
   }
   assert.equal(form.htmlStoryToMarkdown('<h2><a id="chap01"></a></h2>'), '')
 })
+
+test('HTML import removes marked navigation while retaining repeated body headings', async () => {
+  const form = await loadForm()
+  const markdown = form.htmlStoryToMarkdown(
+    '<nav><a href="#chapter-one">Chapter one</a></nav><article><h2>Interlude</h2><p>First.</p><h2>Interlude</h2><p>Second.</p></article>',
+  )
+  const headings = [...markdown.matchAll(/^##\s+(.+?)\s*$/gm)].map((match) => match[1])
+
+  assert.deepEqual(headings, ['Interlude', 'Interlude'])
+  assert.match(markdown, /First./)
+  assert.match(markdown, /Second./)
+})
