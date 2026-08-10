@@ -203,6 +203,21 @@ test('login provider controls are accessible and fit a narrow viewport', async (
   const facebook = page.getByRole('button', { name: 'Continue with Facebook' })
   await expect(google).toBeVisible()
   await expect(facebook).toBeVisible()
+  await expect(
+    page.getByText('Panda Pages is a South Coast Apps product', {
+      exact: true,
+    }),
+  ).toBeVisible()
+  const southCoastApps = page.getByRole('link', {
+    name: 'South Coast Apps',
+    exact: true,
+  })
+  await expect(southCoastApps).toHaveAttribute(
+    'href',
+    'https://southcoastapps.co.uk',
+  )
+  await southCoastApps.focus()
+  await expect(southCoastApps).toBeFocused()
   for (const mark of [google.locator('img'), facebook.locator('img')]) {
     await expect(mark).toHaveAttribute('alt', '')
     await expect(mark).toHaveAttribute('aria-hidden', 'true')
