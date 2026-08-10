@@ -250,3 +250,50 @@ test('sensitive server error text is never projected into Story Studio', async (
     retryable: false,
   })
 })
+
+test('HTML import keeps an anchored body chapter without contents duplication', async () => {
+  const form = await loadForm()
+  const imported = form.convertImportedStoryFile({
+    filename: 'sample.html',
+    mediaType: 'text/html',
+    text: `
+      <header>*** START OF THE PROJECT GUTENBERG EBOOK SAMPLE ***</header>
+      <h1>Sample</h1>
+      <h3>Contents</h3>
+      <table><tr><td><a class="pginternal" href="#chap01">BOOK I.</a></td></tr></table>
+      <div class="chapter"><h2><a id="chap01"></a>BOOK I</h2><p>Body text.</p></div>
+      <footer>*** END OF THE PROJECT GUTENBERG EBOOK SAMPLE ***</footer>
+    `,
+  })
+  const h2 = [...imported.markdown.matchAll(/^##\s*(.*?)\s*$/gm)].map((match) => match[1])
+
+  assert.equal(h2.filter((heading) => heading === 'BOOK I').length, 1)
+  assert.equal(h2.filter((heading) => heading === '').length, 0)
+  assert.match(imported.markdown, /## BOOK I/)
+  assert.match(imported.markdown, /Body text\./)
+})
+
+test('HTML heading conversion preserves descendant text without empty headings', async () => {
+  const form = await loadForm()
+  for (const html of [
+    '<h2>BOOK I</h2>',
+    '<h2><a id="chap01"></a>BOOK I</h2>',
+    '<h2><a href="#chap01">BOOK I</a></h2>',
+    '<h2><em>BOOK</em> <strong>I</strong></h2>',
+  ]) {
+    assert.equal(form.htmlStoryToMarkdown(html), '## BOOK I')
+  }
+  assert.equal(form.htmlStoryToMarkdown('<h2><a id="chap01"></a></h2>'), '')
+})
+
+test('HTML import removes marked navigation while retaining repeated body headings', async () => {
+  const form = await loadForm()
+  const markdown = form.htmlStoryToMarkdown(
+    '<nav><a href="#chapter-one">Chapter one</a></nav><article><h2>Interlude</h2><p>First.</p><h2>Interlude</h2><p>Second.</p></article>',
+  )
+  const headings = [...markdown.matchAll(/^##\s+(.+?)\s*$/gm)].map((match) => match[1])
+
+  assert.deepEqual(headings, ['Interlude', 'Interlude'])
+  assert.match(markdown, /First./)
+  assert.match(markdown, /Second./)
+})

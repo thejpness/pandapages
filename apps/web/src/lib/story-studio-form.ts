@@ -301,12 +301,116 @@ function decodeHTMLText(value: string): string {
   )
 }
 
+function headingTextFromHTML(value: string): string {
+  return value
+    .replace(/<br\s*\/?>(?:\r?\n)?/giu, ' ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function markdownHeading(level: number, value: string): string {
+  const text = headingTextFromHTML(value)
+  return text ? `\n${'#'.repeat(level)} ${text}\n` : '\n'
+}
+function htmlAttributeValue(attributes: string, name: string): string | null {
+
+  for (const match of attributes.matchAll(/\b([a-z][\w:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>]+))/giu)) {
+    if (match[1].toLocaleLowerCase('en-GB') === name) {
+      return match[2] ?? match[3] ?? match[4] ?? null
+    }
+  }
+  return null
+}
+
+function navigationContainerEnd(html: string, start: number, tag: string): number | null {
+  const tags = /<\/?([a-z][\w:-]*)\b[^>]*>/giu
+  tags.lastIndex = start
+  let depth = 1
+  for (const match of html.matchAll(tags)) {
+    if (match[1].toLocaleLowerCase('en-GB') !== tag) continue
+    if (match[0].startsWith('</')) {
+      depth -= 1
+      if (depth === 0) return (match.index ?? 0) + match[0].length
+    } else if (!match[0].endsWith('/>')) {
+      depth += 1
+    }
+  }
+  return null
+}
+
+function isMarkedNavigationContainer(tag: string, attributes: string): boolean {
+  if (tag === 'nav') return true
+  const role = htmlAttributeValue(attributes, 'role')
+  if (role?.split(/\s+/).includes('navigation')) return true
+  const marker = /\b(?:toc|table[-_ ]of[-_ ]contents|navigation)\b/iu
+  return marker.test(htmlAttributeValue(attributes, 'class') ?? '') || marker.test(htmlAttributeValue(attributes, 'id') ?? '')
+}
+
+function stripMarkedNavigationContainers(html: string): string {
+  const openingTags = /<([a-z][\w:-]*)\b([^>]*)>/giu
+  let output = ''
+  let cursor = 0
+  for (const match of html.matchAll(openingTags)) {
+    const index = match.index ?? 0
+    if (index < cursor) continue
+    const tag = match[1].toLocaleLowerCase('en-GB')
+    if (!isMarkedNavigationContainer(tag, match[2])) continue
+    const end = navigationContainerEnd(html, index + match[0].length, tag)
+    if (end === null) continue
+    output += html.slice(cursor, index)
+    cursor = end
+  }
+  return output + html.slice(cursor)
+}
+
+function fragmentTargetIDs(html: string): Set<string> {
+  const ids = new Set<string>()
+  for (const match of html.matchAll(/\bid\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>]+))/giu)) {
+    const value = match[1] ?? match[2] ?? match[3]
+    if (value) ids.add(value)
+  }
+  return ids
+}
+
+function contentsNavigationLinks(value: string): string[] | null {
+  const links: string[] = []
+  for (const match of value.matchAll(/<a\b([^>]*)>[\s\S]*?<\/a>/giu)) {
+    const href = htmlAttributeValue(match[1], 'href')
+    if (!href || !/^#[^\s#]+$/u.test(href)) return null
+    links.push(href.slice(1))
+  }
+  const prose = value.replace(/<a\b[^>]*>[\s\S]*?<\/a>/giu, '').replace(/<[^>]+>/g, '').replace(/\s+/g, '')
+  return links.length > 0 && prose === '' ? links : null
+}
+
+function stripContentsNavigation(html: string): string {
+  const targets = fragmentTargetIDs(html)
+  return html.replace(
+    /<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>\s*<(table|ol|ul)\b[^>]*>([\s\S]*?)<\/\3>/giu,
+    (block: string, _level: string, heading: string, _container: string, content: string) => {
+      const label = decodeHTMLText(headingTextFromHTML(heading)).replace(/\s+/g, ' ').trim().toLocaleLowerCase('en-GB')
+      const links = contentsNavigationLinks(content)
+      if ((label !== 'contents' && label !== 'table of contents') || links === null || !links.every((target) => targets.has(target))) return block
+      return ''
+    },
+  )
+}
+
+function stripHTMLNavigation(html: string): string {
+  return stripContentsNavigation(stripMarkedNavigationContainers(html))
+}
+
 export function htmlStoryToMarkdown(html: string): string {
   return decodeHTMLText(
-    normaliseNewlines(html)
+    normaliseNewlines(stripHTMLNavigation(html))
       .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/giu, '')
-      .replace(/<h1\b[^>]*>([\s\S]*?)<\/h1>/giu, '\n# $1\n')
-      .replace(/<h[2-6]\b[^>]*>([\s\S]*?)<\/h[2-6]>/giu, '\n## $1\n')
+      .replace(/<h1\b[^>]*>([\s\S]*?)<\/h1>/giu, (_match, value: string) =>
+        markdownHeading(1, value),
+      )
+      .replace(/<h[2-6]\b[^>]*>([\s\S]*?)<\/h[2-6]>/giu, (_match, value: string) =>
+        markdownHeading(2, value),
+      )
       .replace(/<li\b[^>]*>/giu, '\n- ')
       .replace(/<br\s*\/?>/giu, '\n')
       .replace(/<\/(p|div|li|blockquote|section|article)>/giu, '\n\n')
