@@ -42,6 +42,26 @@ test.describe('Public information pages', () => {
       await expect(page.getByText(text, { exact: false }).first()).toBeVisible()
     }
     expect(apiRequests).toEqual([])
+    const privacyText = await page.getByRole('main').innerText()
+    for (const fact of [
+      'South Coast Apps Ltd',
+      'privacy@southcoastapps.co.uk',
+      '10 August 2026',
+      'Hetzner',
+      'Finland',
+      'Supabase',
+      'AWS EU-West',
+      'daily backups',
+      'Hetzner Object Storage',
+      'up to 30 days',
+      'up to 90 days',
+      '24 months of inactivity',
+      'last authenticated adult account activity',
+    ]) expect(privacyText).toContain(fact)
+    expect(privacyText).not.toMatch(/eu-west-[123]/i)
+    expect(privacyText).not.toMatch(/\[[A-Z /]+REQUIRED\]/)
+    await expect(page.getByRole('link', { name: 'privacy@southcoastapps.co.uk' }).first()).toHaveAttribute('href', 'mailto:privacy@southcoastapps.co.uk')
+
 
     const legalNavigation = page.getByRole('navigation', { name: 'Legal navigation' })
     const privacyLink = legalNavigation.getByRole('link', { name: 'Privacy', exact: true })
