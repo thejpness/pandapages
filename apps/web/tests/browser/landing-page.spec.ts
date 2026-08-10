@@ -192,7 +192,8 @@ test.describe('Public landing page', () => {
     )
     await southCoastApps.focus()
     await expect(southCoastApps).toBeFocused()
-
+    await expect(page.getByRole('link', { name: 'Privacy', exact: true })).toHaveAttribute('href', '/privacy')
+    await expect(page.getByRole('link', { name: 'Content & Copyright', exact: true })).toHaveAttribute('href', '/content-and-copyright')
     for (const name of [
       'Browse stories',
       'Start reading',

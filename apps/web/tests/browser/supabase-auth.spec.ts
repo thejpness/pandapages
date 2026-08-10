@@ -218,6 +218,13 @@ test('login provider controls are accessible and fit a narrow viewport', async (
   )
   await southCoastApps.focus()
   await expect(southCoastApps).toBeFocused()
+  const legalNavigation = page.getByRole('navigation', { name: 'Legal navigation' })
+  const privacy = legalNavigation.getByRole('link', { name: 'Privacy', exact: true })
+  const contentAndCopyright = legalNavigation.getByRole('link', { name: 'Content & Copyright', exact: true })
+  await expect(privacy).toHaveAttribute('href', '/privacy')
+  await expect(contentAndCopyright).toHaveAttribute('href', '/content-and-copyright')
+  await privacy.focus()
+  await expect(privacy).toBeFocused()
   for (const mark of [google.locator('img'), facebook.locator('img')]) {
     await expect(mark).toHaveAttribute('alt', '')
     await expect(mark).toHaveAttribute('aria-hidden', 'true')

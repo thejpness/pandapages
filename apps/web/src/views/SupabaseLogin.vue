@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import PandaAuthShell from '../components/app/PandaAuthShell.vue'
 import ProductAttribution from '../components/app/ProductAttribution.vue'
+import PublicTrustLinks from '../components/app/PublicTrustLinks.vue'
 import { startSupabaseLogin, type SupabaseOAuthProvider } from '../lib/supabase-auth'
 
 const activeProvider = ref<SupabaseOAuthProvider | null>(null)
@@ -51,6 +52,7 @@ async function signIn(provider: SupabaseOAuthProvider) {
     </div>
     <template #footer>
       <ProductAttribution />
+      <nav class="identity-legal-links" aria-label="Legal navigation"><PublicTrustLinks /></nav>
     </template>
   </PandaAuthShell>
 </template>
