@@ -50,12 +50,7 @@ type inspectedAdminStory struct {
 
 const adminPublicStoryVisibility = string(model.StoryVisibilityPublic)
 
-func (s *Store) AdminListStories(accountID string) (model.AdminStoriesListResponse, error) {
-	accountID = strings.TrimSpace(accountID)
-	if !accountIDRe.MatchString(accountID) {
-		return model.AdminStoriesListResponse{}, fmt.Errorf("account required")
-	}
-
+func (s *Store) AdminListStories() (model.AdminStoriesListResponse, error) {
 	ctx, cancel := s.ctx()
 	defer cancel()
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
@@ -104,10 +99,9 @@ func (s *Store) AdminListStories(accountID string) (model.AdminStoriesListRespon
 	return model.AdminStoriesListResponse{Items: items}, nil
 }
 
-func (s *Store) AdminGetStory(accountID, slug string) (model.AdminStoryDetailResponse, error) {
-	accountID = strings.TrimSpace(accountID)
+func (s *Store) AdminGetStory(slug string) (model.AdminStoryDetailResponse, error) {
 	slug = strings.TrimSpace(slug)
-	if !accountIDRe.MatchString(accountID) || storyingest.ValidateSlug(slug) != nil {
+	if storyingest.ValidateSlug(slug) != nil {
 		return model.AdminStoryDetailResponse{}, fmt.Errorf("%w", model.ErrAdminStoryNotFound)
 	}
 
@@ -134,14 +128,10 @@ func (s *Store) AdminGetStory(accountID, slug string) (model.AdminStoryDetailRes
 }
 
 func (s *Store) AdminGetVersionSource(
-	accountID string,
 	slug string,
 	versionID string,
 ) (model.AdminVersionSourceResponse, error) {
-	return s.AdminGetEditionVersionSource(
-		accountID,
-		slug,
-		model.AdminStoryEditionClassic,
+	return s.AdminGetEditionVersionSource(slug, model.AdminStoryEditionClassic,
 		versionID,
 	)
 }

@@ -2,7 +2,6 @@ package httpadmin
 
 import (
 	"bytes"
-	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -17,20 +16,20 @@ import (
 )
 
 type Store interface {
-	AdminDraftUpsert(accountID string, req model.AdminDraftUpsertRequest) (model.AdminDraftUpsertResponse, error)
-	AdminEditionBundleUpsert(accountID string, req model.AdminEditionBundleUpsertRequest) (model.AdminEditionBundleUpsertResponse, error)
-	AdminCreateRelease(accountID string, slug string, req model.AdminCreateReleaseRequest) (model.AdminCreateReleaseResponse, error)
-	AdminUnpublish(accountID string, slug string) (model.AdminStoryStatusResponse, error)
+	AdminDraftUpsert(req model.AdminDraftUpsertRequest) (model.AdminDraftUpsertResponse, error)
+	AdminEditionBundleUpsert(req model.AdminEditionBundleUpsertRequest) (model.AdminEditionBundleUpsertResponse, error)
+	AdminCreateRelease(slug string, req model.AdminCreateReleaseRequest) (model.AdminCreateReleaseResponse, error)
+	AdminUnpublish(slug string) (model.AdminStoryStatusResponse, error)
 	AdminPreview(req model.AdminPreviewRequest) (model.AdminPreviewResponse, error)
 
-	AdminListStories(accountID string) (model.AdminStoriesListResponse, error)
-	AdminGetStory(accountID string, slug string) (model.AdminStoryDetailResponse, error)
-	AdminGetVersionSource(accountID string, slug string, versionID string) (model.AdminVersionSourceResponse, error)
-	AdminGetEditionVersionSource(accountID string, slug string, editionKey model.AdminStoryEditionKey, versionID string) (model.AdminVersionSourceResponse, error)
+	AdminListStories() (model.AdminStoriesListResponse, error)
+	AdminGetStory(slug string) (model.AdminStoryDetailResponse, error)
+	AdminGetVersionSource(slug string, versionID string) (model.AdminVersionSourceResponse, error)
+	AdminGetEditionVersionSource(slug string, editionKey model.AdminStoryEditionKey, versionID string) (model.AdminVersionSourceResponse, error)
 
-	AdminSourceUpsert(accountID string, slug string, req model.AdminSourceUpsertRequest) (model.AdminSourceUpsertResponse, error)
-	AdminGetSource(accountID string, slug string) (model.AdminSourceDetailResponse, error)
-	AdminGetSourceVersion(accountID string, slug string, versionID string) (model.AdminSourceVersionResponse, error)
+	AdminSourceUpsert(slug string, req model.AdminSourceUpsertRequest) (model.AdminSourceUpsertResponse, error)
+	AdminGetSource(slug string) (model.AdminSourceDetailResponse, error)
+	AdminGetSourceVersion(slug string, versionID string) (model.AdminSourceVersionResponse, error)
 }
 
 const (
@@ -38,15 +37,6 @@ const (
 	// Keep public APIs small; only admin gets this.
 	maxJSONBodyBytes = 20 << 20 // 20MB
 )
-
-type ctxKey string
-
-const ctxAccountID ctxKey = "pp_account_id"
-
-func accountIDFromCtx(r *http.Request) string {
-	v, _ := r.Context().Value(ctxAccountID).(string)
-	return v
-}
 
 func New(cfg Config, store Store) http.Handler {
 	adminKey := strings.TrimSpace(cfg.AdminKey)
@@ -77,8 +67,7 @@ func New(cfg Config, store Store) http.Handler {
 				return
 			}
 
-			ctx := context.WithValue(r.Context(), ctxAccountID, account.AccountID)
-			next(w, r.WithContext(ctx))
+			next(w, r)
 		}
 	}
 
@@ -114,8 +103,7 @@ func New(cfg Config, store Store) http.Handler {
 			return
 		}
 
-		aid := accountIDFromCtx(r)
-		out, err := store.AdminDraftUpsert(aid, body)
+		out, err := store.AdminDraftUpsert(body)
 		if err != nil {
 			var validationErr *model.AdminValidationError
 			if errors.As(err, &validationErr) {
@@ -143,7 +131,7 @@ func New(cfg Config, store Store) http.Handler {
 			return
 		}
 
-		out, err := store.AdminEditionBundleUpsert(accountIDFromCtx(r), body)
+		out, err := store.AdminEditionBundleUpsert(body)
 		if err != nil {
 			var validationErr *model.AdminValidationError
 			switch {
@@ -163,9 +151,7 @@ func New(cfg Config, store Store) http.Handler {
 	}))
 
 	mux.HandleFunc("GET /api/v1/admin/stories", withAdmin(func(w http.ResponseWriter, r *http.Request) {
-		aid := accountIDFromCtx(r)
-
-		out, err := store.AdminListStories(aid)
+		out, err := store.AdminListStories()
 		if err != nil {
 			slog.Error("admin story catalogue failed")
 			writeErr(w, http.StatusInternalServerError, "list_failed", "story catalogue unavailable")
@@ -184,7 +170,7 @@ func New(cfg Config, store Store) http.Handler {
 			writeDecodeError(w, err)
 			return
 		}
-		out, err := store.AdminSourceUpsert(accountIDFromCtx(r), slug, body)
+		out, err := store.AdminSourceUpsert(slug, body)
 		if err != nil {
 			var validationErr *model.AdminValidationError
 			switch {
@@ -205,7 +191,7 @@ func New(cfg Config, store Store) http.Handler {
 	// GET /api/v1/admin/stories/{slug}/source
 	mux.HandleFunc("GET /api/v1/admin/stories/{slug}/source", withAdmin(func(w http.ResponseWriter, r *http.Request) {
 		slug := strings.TrimSpace(r.PathValue("slug"))
-		out, err := store.AdminGetSource(accountIDFromCtx(r), slug)
+		out, err := store.AdminGetSource(slug)
 		if err != nil {
 			if errors.Is(err, model.ErrAdminSourceNotFound) {
 				writeErr(w, http.StatusNotFound, "source_not_found", "canonical source was not found")
@@ -223,7 +209,7 @@ func New(cfg Config, store Store) http.Handler {
 	mux.HandleFunc("GET /api/v1/admin/stories/{slug}/source/versions/{versionId}", withAdmin(func(w http.ResponseWriter, r *http.Request) {
 		slug := strings.TrimSpace(r.PathValue("slug"))
 		versionID := strings.TrimSpace(r.PathValue("versionId"))
-		out, err := store.AdminGetSourceVersion(accountIDFromCtx(r), slug, versionID)
+		out, err := store.AdminGetSourceVersion(slug, versionID)
 		if err != nil {
 			switch {
 			case errors.Is(err, model.ErrAdminSourceNotFound):
@@ -243,7 +229,7 @@ func New(cfg Config, store Store) http.Handler {
 	// GET /api/v1/admin/stories/{slug}
 	mux.HandleFunc("GET /api/v1/admin/stories/{slug}", withAdmin(func(w http.ResponseWriter, r *http.Request) {
 		slug := strings.TrimSpace(r.PathValue("slug"))
-		out, err := store.AdminGetStory(accountIDFromCtx(r), slug)
+		out, err := store.AdminGetStory(slug)
 		if err != nil {
 			if errors.Is(err, model.ErrAdminStoryNotFound) {
 				writeErr(w, http.StatusNotFound, "story_not_found", "story was not found")
@@ -266,7 +252,7 @@ func New(cfg Config, store Store) http.Handler {
 			return
 		}
 		versionID := strings.TrimSpace(r.PathValue("versionId"))
-		out, err := store.AdminGetEditionVersionSource(accountIDFromCtx(r), slug, editionKey, versionID)
+		out, err := store.AdminGetEditionVersionSource(slug, editionKey, versionID)
 		if err != nil {
 			switch {
 			case errors.Is(err, model.ErrAdminStoryNotFound):
@@ -287,7 +273,7 @@ func New(cfg Config, store Store) http.Handler {
 	mux.HandleFunc("GET /api/v1/admin/stories/{slug}/versions/{versionId}", withAdmin(func(w http.ResponseWriter, r *http.Request) {
 		slug := strings.TrimSpace(r.PathValue("slug"))
 		versionID := strings.TrimSpace(r.PathValue("versionId"))
-		out, err := store.AdminGetVersionSource(accountIDFromCtx(r), slug, versionID)
+		out, err := store.AdminGetVersionSource(slug, versionID)
 		if err != nil {
 			switch {
 			case errors.Is(err, model.ErrAdminStoryNotFound):
@@ -313,7 +299,7 @@ func New(cfg Config, store Store) http.Handler {
 			return
 		}
 
-		out, err := store.AdminCreateRelease(accountIDFromCtx(r), slug, body)
+		out, err := store.AdminCreateRelease(slug, body)
 		if err != nil {
 			var validationErr *model.AdminValidationError
 			switch {
@@ -337,7 +323,7 @@ func New(cfg Config, store Store) http.Handler {
 	// POST /api/v1/admin/stories/{slug}/unpublish
 	mux.HandleFunc("POST /api/v1/admin/stories/{slug}/unpublish", withAdmin(func(w http.ResponseWriter, r *http.Request) {
 		slug := strings.TrimSpace(r.PathValue("slug"))
-		out, err := store.AdminUnpublish(accountIDFromCtx(r), slug)
+		out, err := store.AdminUnpublish(slug)
 		if err != nil {
 			if errors.Is(err, model.ErrAdminStoryNotFound) {
 				writeErr(w, http.StatusNotFound, "unpublish_not_found", "story was not found")

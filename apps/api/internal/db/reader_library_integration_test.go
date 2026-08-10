@@ -55,7 +55,7 @@ func TestReaderLibraryIntegration(t *testing.T) {
 	author := "Panda Pages Library Fixture"
 	language := "en-GB"
 	title := "TEST ONLY — Profile Library"
-	bundle, err := store.AdminEditionBundleUpsert(accountID, model.AdminEditionBundleUpsertRequest{
+	bundle, err := store.AdminEditionBundleUpsert(model.AdminEditionBundleUpsertRequest{
 		Slug:     slug,
 		Title:    title,
 		Author:   &author,
@@ -107,7 +107,7 @@ func TestReaderLibraryIntegration(t *testing.T) {
 				VersionID:  versionIDByKey[key],
 			})
 		}
-		if _, err := store.AdminCreateRelease(accountID, slug, model.AdminCreateReleaseRequest{
+		if _, err := store.AdminCreateRelease(slug, model.AdminCreateReleaseRequest{
 			Editions: editions,
 		}); err != nil {
 			t.Fatalf("create Reader Library release %v: %v", keys, err)
@@ -361,7 +361,7 @@ func TestReaderLibraryIntegration(t *testing.T) {
 	// inventing a representative edition. Quarantine that story instead.
 	const mismatchSlug = "reader-library-metadata-mismatch"
 	growingKey := model.AdminStoryEditionGrowingReaders
-	mismatchGrowing, err := store.AdminDraftUpsert(accountID, model.AdminDraftUpsertRequest{
+	mismatchGrowing, err := store.AdminDraftUpsert(model.AdminDraftUpsertRequest{
 		Slug:       mismatchSlug,
 		EditionKey: &growingKey,
 		Title:      "Mismatch title A",
@@ -373,7 +373,7 @@ func TestReaderLibraryIntegration(t *testing.T) {
 		t.Fatalf("create metadata-mismatch Growing edition: %v", err)
 	}
 	explorerKey := model.AdminStoryEditionStoryExplorers
-	mismatchExplorer, err := store.AdminDraftUpsert(accountID, model.AdminDraftUpsertRequest{
+	mismatchExplorer, err := store.AdminDraftUpsert(model.AdminDraftUpsertRequest{
 		Slug:       mismatchSlug,
 		EditionKey: &explorerKey,
 		Title:      "Mismatch title B",
@@ -384,7 +384,7 @@ func TestReaderLibraryIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create metadata-mismatch Explorer edition: %v", err)
 	}
-	if _, err := store.AdminCreateRelease(accountID, mismatchSlug, model.AdminCreateReleaseRequest{
+	if _, err := store.AdminCreateRelease(mismatchSlug, model.AdminCreateReleaseRequest{
 		Editions: []model.AdminReleaseEditionRequest{
 			{EditionKey: growingKey, VersionID: mismatchGrowing.VersionID},
 			{EditionKey: explorerKey, VersionID: mismatchExplorer.VersionID},

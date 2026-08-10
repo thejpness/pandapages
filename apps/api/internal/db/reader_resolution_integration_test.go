@@ -54,7 +54,7 @@ func TestReaderResolutionIntegration(t *testing.T) {
 	author := "Panda Pages Resolution Fixture"
 	language := "en-GB"
 	initialTitle := "TEST ONLY — Reader Release Resolution"
-	bundle, err := store.AdminEditionBundleUpsert(accountID, model.AdminEditionBundleUpsertRequest{
+	bundle, err := store.AdminEditionBundleUpsert(model.AdminEditionBundleUpsertRequest{
 		Slug:     slug,
 		Title:    initialTitle,
 		Author:   &author,
@@ -90,7 +90,7 @@ func TestReaderResolutionIntegration(t *testing.T) {
 				VersionID:  versionIDByKey[key],
 			})
 		}
-		if _, err := store.AdminCreateRelease(accountID, slug, model.AdminCreateReleaseRequest{
+		if _, err := store.AdminCreateRelease(slug, model.AdminCreateReleaseRequest{
 			Editions: editions,
 		}); err != nil {
 			t.Fatalf("create Reader resolution release %v: %v", keys, err)
@@ -200,7 +200,7 @@ func TestReaderResolutionIntegration(t *testing.T) {
 	// A newer draft may update mutable story metadata, but Reader resolution
 	// must continue to present the immutable selected release version metadata.
 	growing := model.AdminStoryEditionGrowingReaders
-	if _, err := store.AdminDraftUpsert(accountID, model.AdminDraftUpsertRequest{
+	if _, err := store.AdminDraftUpsert(model.AdminDraftUpsertRequest{
 		Slug:       slug,
 		EditionKey: &growing,
 		Title:      "DRAFT METADATA MUST NOT LEAK",

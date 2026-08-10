@@ -446,15 +446,10 @@ func inspectAdminStorySource(
 }
 
 func (s *Store) AdminSourceUpsert(
-	accountID string,
 	slug string,
 	req model.AdminSourceUpsertRequest,
 ) (model.AdminSourceUpsertResponse, error) {
-	accountID = strings.TrimSpace(accountID)
 	slug = strings.TrimSpace(slug)
-	if !accountIDRe.MatchString(accountID) {
-		return model.AdminSourceUpsertResponse{}, fmt.Errorf("account required")
-	}
 	if storyingest.ValidateSlug(slug) != nil {
 		return model.AdminSourceUpsertResponse{}, &model.AdminValidationError{Issues: []model.AdminValidationIssue{{
 			Field: "slug", Code: "invalid", Message: "Use lowercase letters, numbers, and hyphens",
@@ -677,12 +672,10 @@ func mustJSONMap(value map[string]any) []byte {
 }
 
 func (s *Store) AdminGetSource(
-	accountID string,
 	slug string,
 ) (model.AdminSourceDetailResponse, error) {
-	accountID = strings.TrimSpace(accountID)
 	slug = strings.TrimSpace(slug)
-	if !accountIDRe.MatchString(accountID) || storyingest.ValidateSlug(slug) != nil {
+	if storyingest.ValidateSlug(slug) != nil {
 		return model.AdminSourceDetailResponse{}, fmt.Errorf("%w", model.ErrAdminSourceNotFound)
 	}
 
@@ -722,15 +715,12 @@ func (s *Store) AdminGetSource(
 }
 
 func (s *Store) AdminGetSourceVersion(
-	accountID string,
 	slug string,
 	versionID string,
 ) (model.AdminSourceVersionResponse, error) {
-	accountID = strings.TrimSpace(accountID)
 	slug = strings.TrimSpace(slug)
 	versionID = strings.TrimSpace(versionID)
-	if !accountIDRe.MatchString(accountID) ||
-		storyingest.ValidateSlug(slug) != nil ||
+	if storyingest.ValidateSlug(slug) != nil ||
 		!accountIDRe.MatchString(versionID) {
 		return model.AdminSourceVersionResponse{}, fmt.Errorf("%w", model.ErrAdminSourceNotFound)
 	}

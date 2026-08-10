@@ -13,15 +13,13 @@ import (
 
 type recordingBundleStore struct {
 	*adminStore
-	accountID string
-	request   model.AdminEditionBundleUpsertRequest
-	calls     int
-	err       error
+	request model.AdminEditionBundleUpsertRequest
+	calls   int
+	err     error
 }
 
-func (s *recordingBundleStore) AdminEditionBundleUpsert(accountID string, req model.AdminEditionBundleUpsertRequest) (model.AdminEditionBundleUpsertResponse, error) {
+func (s *recordingBundleStore) AdminEditionBundleUpsert(req model.AdminEditionBundleUpsertRequest) (model.AdminEditionBundleUpsertResponse, error) {
 	s.calls++
-	s.accountID = accountID
 	s.request = req
 	if s.err != nil {
 		return model.AdminEditionBundleUpsertResponse{}, s.err
@@ -43,7 +41,7 @@ func bundleRequestBody() string {
 	return `{"slug":"five-edition-story","title":"Five Edition Story","author":null,"language":"en-GB","sourceUrl":null,"rights":{"label":"Public domain"},"editions":[{"editionKey":"classic","markdown":"# Five Edition Story\n\nClassic.\n"},{"editionKey":"confident-readers","markdown":"# Five Edition Story\n\nConfident.\n"},{"editionKey":"growing-readers","markdown":"# Five Edition Story\n\nGrowing.\n"},{"editionKey":"story-explorers","markdown":"# Five Edition Story\n\nExplorers.\n"},{"editionKey":"little-listeners","markdown":"# Five Edition Story\n\nListeners.\n"}]}`
 }
 
-func TestAdminEditionBundleRouteUsesSelectedOwnerAccount(t *testing.T) {
+func TestAdminEditionBundleRouteAuthorizesSelectedOwnerForGlobalCatalogue(t *testing.T) {
 	base := &adminStore{memberships: []appidentity.Membership{{AccountID: ownerAccount, Role: appidentity.RoleOwner}}}
 	store := &recordingBundleStore{adminStore: base}
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/admin/stories/editions/ingest", strings.NewReader(bundleRequestBody()))
@@ -52,8 +50,8 @@ func TestAdminEditionBundleRouteUsesSelectedOwnerAccount(t *testing.T) {
 	request.Header.Set("X-PP-Admin-Key", "admin-key")
 	response := httptest.NewRecorder()
 	bundleHandler(store).ServeHTTP(response, request)
-	if response.Code != http.StatusOK || store.calls != 1 || store.accountID != ownerAccount || store.request.Slug != "five-edition-story" || len(store.request.Editions) != 5 {
-		t.Fatalf("bundle status/calls/account/slug/editions = %d/%d/%q/%q/%d body=%s", response.Code, store.calls, store.accountID, store.request.Slug, len(store.request.Editions), response.Body.String())
+	if response.Code != http.StatusOK || store.calls != 1 || store.request.Slug != "five-edition-story" || len(store.request.Editions) != 5 {
+		t.Fatalf("bundle status/calls/slug/editions = %d/%d/%q/%d body=%s", response.Code, store.calls, store.request.Slug, len(store.request.Editions), response.Body.String())
 	}
 	if strings.Contains(response.Body.String(), "markdown") {
 		t.Fatalf("bundle response leaked submitted Markdown: %s", response.Body.String())
