@@ -176,7 +176,18 @@ test.describe('Public landing page', () => {
     ).toHaveAttribute('href', '#main-content')
     await expect(page.getByRole('banner')).toHaveCount(1)
     await expect(page.getByRole('main')).toHaveAttribute('id', 'main-content')
-    await expect(page.getByRole('contentinfo')).toHaveCount(1)
+    const footer = page.getByRole('contentinfo')
+    await expect(footer).toHaveCount(1)
+    await expect(footer.getByRole('link', { name: 'Panda Pages home' })).toBeVisible()
+    const exploreNavigation = footer.getByRole('navigation', { name: 'Explore' })
+    await expect(exploreNavigation.getByRole('link', { name: 'Stories', exact: true })).toHaveAttribute('href', '/library')
+    await expect(exploreNavigation.getByRole('link', { name: 'Why Panda Pages', exact: true })).toHaveAttribute('href', '#why')
+    const legalNavigation = footer.getByRole('navigation', { name: 'Legal' })
+    await expect(legalNavigation.getByRole('link', { name: 'Privacy', exact: true })).toHaveAttribute('href', '/privacy')
+    await expect(legalNavigation.getByRole('link', { name: 'Content & Copyright', exact: true })).toHaveAttribute('href', '/content-and-copyright')
+    await expect(legalNavigation.getByText('·', { exact: true })).toHaveCount(0)
+    await expect(footer.getByText('Install', { exact: true })).toBeVisible()
+    await expect(footer.getByRole('button', { name: 'Install app' })).toBeVisible()
     await expect(
       page.getByText('Panda Pages is a South Coast Apps product', {
         exact: true,

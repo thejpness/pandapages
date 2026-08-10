@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { RouterLink } from 'vue-router'
+const props = withDefaults(defineProps<{ layout?: 'inline' | 'stacked' }>(), { layout: 'inline' })
 </script>
 
 <template>
-  <span class="public-trust-links">
+  <span class="public-trust-links" :class="{ 'public-trust-links--stacked': props.layout === 'stacked' }">
     <RouterLink class="public-trust-links__link" to="/privacy">Privacy</RouterLink>
-    <span class="public-trust-links__separator" aria-hidden="true">·</span>
+    <span v-if="props.layout === 'inline'" class="public-trust-links__separator" aria-hidden="true">·</span>
     <RouterLink class="public-trust-links__link" to="/content-and-copyright">Content &amp; Copyright</RouterLink>
   </span>
 </template>
@@ -17,6 +18,12 @@ import { RouterLink } from 'vue-router'
   align-items: center;
   justify-content: center;
   gap: 0.35rem;
+}
+
+.public-trust-links--stacked {
+  display: grid;
+  justify-items: start;
+  gap: 0;
 }
 
 .public-trust-links__link {
