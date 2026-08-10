@@ -301,12 +301,28 @@ function decodeHTMLText(value: string): string {
   )
 }
 
+function headingTextFromHTML(value: string): string {
+  return value
+    .replace(/<br\s*\/?>(?:\r?\n)?/giu, ' ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function markdownHeading(level: number, value: string): string {
+  const text = headingTextFromHTML(value)
+  return text ? `\n${'#'.repeat(level)} ${text}\n` : '\n'
+}
 export function htmlStoryToMarkdown(html: string): string {
   return decodeHTMLText(
     normaliseNewlines(html)
       .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/giu, '')
-      .replace(/<h1\b[^>]*>([\s\S]*?)<\/h1>/giu, '\n# $1\n')
-      .replace(/<h[2-6]\b[^>]*>([\s\S]*?)<\/h[2-6]>/giu, '\n## $1\n')
+      .replace(/<h1\b[^>]*>([\s\S]*?)<\/h1>/giu, (_match, value: string) =>
+        markdownHeading(1, value),
+      )
+      .replace(/<h[2-6]\b[^>]*>([\s\S]*?)<\/h[2-6]>/giu, (_match, value: string) =>
+        markdownHeading(2, value),
+      )
       .replace(/<li\b[^>]*>/giu, '\n- ')
       .replace(/<br\s*\/?>/giu, '\n')
       .replace(/<\/(p|div|li|blockquote|section|article)>/giu, '\n\n')

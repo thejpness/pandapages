@@ -272,3 +272,16 @@ test('HTML import keeps an anchored body chapter without contents duplication', 
   assert.match(imported.markdown, /## BOOK I/)
   assert.match(imported.markdown, /Body text\./)
 })
+
+test('HTML heading conversion preserves descendant text without empty headings', async () => {
+  const form = await loadForm()
+  for (const html of [
+    '<h2>BOOK I</h2>',
+    '<h2><a id="chap01"></a>BOOK I</h2>',
+    '<h2><a href="#chap01">BOOK I</a></h2>',
+    '<h2><em>BOOK</em> <strong>I</strong></h2>',
+  ]) {
+    assert.equal(form.htmlStoryToMarkdown(html), '## BOOK I')
+  }
+  assert.equal(form.htmlStoryToMarkdown('<h2><a id="chap01"></a></h2>'), '')
+})
