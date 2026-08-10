@@ -481,20 +481,22 @@ func (s *Store) AdminSourceUpsert(
 	var storyID string
 	if err := tx.QueryRowContext(ctx, `
 		INSERT INTO stories (
-			account_id, slug, title, author, language, rights
+			visibility, owner_account_id, slug, title, author, language, rights
 		)
-		VALUES ($1,$2,$3,$4,$5,$6::jsonb)
-		ON CONFLICT (account_id, slug) DO UPDATE SET
+		VALUES ('public', NULL, $1,$2,$3,$4,$5::jsonb)
+		ON CONFLICT (slug) DO UPDATE SET
 			updated_at = stories.updated_at
+		WHERE stories.visibility = '`+adminPublicStoryVisibility+`'
 		RETURNING id
 	`,
-		accountID,
 		slug,
 		source.Title,
 		source.Author,
 		source.Language,
 		string(rightsJSON),
-	).Scan(&storyID); err != nil {
+	).Scan(&storyID); errors.Is(err, sql.ErrNoRows) {
+		return model.AdminSourceUpsertResponse{}, fmt.Errorf("%w", model.ErrAdminSourceNotFound)
+	} else if err != nil {
 		return model.AdminSourceUpsertResponse{}, err
 	}
 
@@ -692,7 +694,7 @@ func (s *Store) AdminGetSource(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	story, err := loadAdminStory(ctx, tx, accountID, slug, false)
+	story, err := loadAdminStory(ctx, tx, slug, false)
 	if errors.Is(err, model.ErrAdminStoryNotFound) {
 		return model.AdminSourceDetailResponse{}, fmt.Errorf("%w", model.ErrAdminSourceNotFound)
 	}
@@ -741,7 +743,7 @@ func (s *Store) AdminGetSourceVersion(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	story, err := loadAdminStory(ctx, tx, accountID, slug, false)
+	story, err := loadAdminStory(ctx, tx, slug, false)
 	if errors.Is(err, model.ErrAdminStoryNotFound) {
 		return model.AdminSourceVersionResponse{}, fmt.Errorf("%w", model.ErrAdminSourceNotFound)
 	}

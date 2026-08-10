@@ -150,8 +150,9 @@ CREATE INDEX account_memberships_account_idx
 -- Story identity. Live publication authority is the current immutable release.
 CREATE TABLE stories (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  account_id uuid NOT NULL,
   slug text NOT NULL,
+  visibility text NOT NULL,
+  owner_account_id uuid,
   title text NOT NULL,
   author text,
   cover_asset_id uuid,
@@ -161,19 +162,31 @@ CREATE TABLE stories (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
 
-  CONSTRAINT stories_account_id_fkey
-    FOREIGN KEY (account_id) REFERENCES accounts(id)
-    ON UPDATE NO ACTION ON DELETE RESTRICT,
+  CONSTRAINT stories_owner_account_id_fkey
+    FOREIGN KEY (owner_account_id) REFERENCES accounts(id)
+    ON UPDATE NO ACTION ON DELETE CASCADE,
 
-  CONSTRAINT stories_id_account_id_key
-    UNIQUE (id, account_id),
+  CONSTRAINT stories_visibility_check
+    CHECK (visibility IN ('public', 'private')),
 
-  CONSTRAINT stories_account_id_slug_key
-    UNIQUE (account_id, slug)
+  CONSTRAINT stories_visibility_owner_check
+    CHECK (
+      (visibility = 'public' AND owner_account_id IS NULL)
+      OR
+      (visibility = 'private' AND owner_account_id IS NOT NULL)
+    ),
+
+  CONSTRAINT stories_slug_key
+    UNIQUE (slug)
 );
 
-CREATE INDEX idx_stories_account
-  ON stories(account_id);
+CREATE INDEX stories_public_library_idx
+  ON stories(updated_at DESC, slug ASC)
+  WHERE visibility = 'public' AND current_release_id IS NOT NULL;
+
+CREATE INDEX stories_private_owner_library_idx
+  ON stories(owner_account_id, updated_at DESC, slug ASC)
+  WHERE visibility = 'private' AND current_release_id IS NOT NULL;
 
 CREATE TABLE contributors (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -372,9 +385,9 @@ CREATE TABLE reading_progress (
     REFERENCES profiles(id, account_id)
     ON DELETE CASCADE,
 
-  CONSTRAINT reading_progress_story_account_fkey
-    FOREIGN KEY (story_id, account_id)
-    REFERENCES stories(id, account_id)
+  CONSTRAINT reading_progress_story_fkey
+    FOREIGN KEY (story_id)
+    REFERENCES stories(id)
     ON DELETE CASCADE,
 
   CONSTRAINT reading_progress_story_version_story_fkey
@@ -441,9 +454,9 @@ CREATE TABLE reader_story_edition_overrides (
     REFERENCES profiles(id, account_id)
     ON DELETE CASCADE,
 
-  CONSTRAINT reader_story_edition_overrides_story_account_fkey
-    FOREIGN KEY (story_id, account_id)
-    REFERENCES stories(id, account_id)
+  CONSTRAINT reader_story_edition_overrides_story_fkey
+    FOREIGN KEY (story_id)
+    REFERENCES stories(id)
     ON DELETE CASCADE,
 
   CONSTRAINT reader_story_edition_overrides_edition_key_check

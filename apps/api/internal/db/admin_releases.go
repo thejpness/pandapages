@@ -264,7 +264,7 @@ func (s *Store) AdminCreateRelease(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	story, err := loadAdminStory(ctx, tx, accountID, slug, true)
+	story, err := loadAdminStory(ctx, tx, slug, true)
 	if errors.Is(err, model.ErrAdminStoryNotFound) {
 		return model.AdminCreateReleaseResponse{}, fmt.Errorf("%w", model.ErrAdminReleaseNotFound)
 	}

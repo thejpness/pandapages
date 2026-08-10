@@ -23,11 +23,11 @@ var (
 	// ErrAdminVersionRepairRequired marks a corrupt idempotency target that must
 	// not be reused or mutated as though it were a healthy immutable version.
 	ErrAdminVersionRepairRequired = errors.New("stored story version requires repair")
-	// ErrAdminStoryNotFound intentionally covers missing, cross-account, and
-	// cross-story admin targets so ownership boundaries are not disclosed.
+	// ErrAdminStoryNotFound covers missing or cross-story admin targets without
+	// disclosing which internal relationship failed.
 	ErrAdminStoryNotFound = errors.New("admin story resource was not found")
-	// ErrAdminSourceNotFound covers missing and out-of-account canonical-source
-	// targets without disclosing ownership boundaries.
+	// ErrAdminSourceNotFound covers missing canonical-source targets without
+	// disclosing which internal relationship failed.
 	ErrAdminSourceNotFound = errors.New("canonical story source was not found")
 	// ErrAdminSourceRepairRequired refuses to present or reuse a canonical source
 	// revision whose immutable snapshot no longer validates.

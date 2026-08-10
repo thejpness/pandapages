@@ -48,7 +48,7 @@ func TestReaderEditionOverrideIntegration(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		_, _ = adminDB.Exec(`DELETE FROM reader_story_edition_overrides WHERE account_id IN ($1, $2)`, accountID, foreignAccountID)
-		_, _ = adminDB.Exec(`DELETE FROM stories WHERE account_id IN ($1, $2)`, accountID, foreignAccountID)
+		_, _ = adminDB.Exec(`DELETE FROM stories WHERE slug = 'reader-edition-override-integration'`)
 		_, _ = adminDB.Exec(`DELETE FROM profiles WHERE account_id IN ($1, $2)`, accountID, foreignAccountID)
 		_, _ = adminDB.Exec(`DELETE FROM accounts WHERE id IN ($1, $2)`, accountID, foreignAccountID)
 	})
@@ -139,6 +139,25 @@ func TestReaderEditionOverrideIntegration(t *testing.T) {
 	if err := store.ReaderStoryEditionOverridePut(accountID, foreignProfileID, slug, model.ReaderEditionLittleListeners); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("cross-account override write error = %v, want sql.ErrNoRows", err)
 	}
+	if override, err := store.ReaderStoryEditionOverrideGet(foreignAccountID, foreignProfileID, slug); err != nil || override != nil {
+		t.Fatalf("public foreign-account override read = %#v / %v, want nil / nil", override, err)
+	}
+	if err := store.ReaderStoryEditionOverridePut(foreignAccountID, foreignProfileID, slug, model.ReaderEditionLittleListeners); err != nil {
+		t.Fatalf("public foreign-account override write: %v", err)
+	}
+	if override, err := store.ReaderStoryEditionOverrideGet(accountID, profileID, slug); err != nil || override == nil || *override != model.ReaderEditionLittleListeners {
+		t.Fatalf("owner public override changed after foreign write = %#v / %v", override, err)
+	}
+	if override, err := store.ReaderStoryEditionOverrideGet(foreignAccountID, foreignProfileID, slug); err != nil || override == nil || *override != model.ReaderEditionLittleListeners {
+		t.Fatalf("foreign public override = %#v / %v", override, err)
+	}
+	if removed, err := store.ReaderStoryEditionOverrideClear(foreignAccountID, foreignProfileID, slug); err != nil || !removed {
+		t.Fatalf("public foreign-account override clear = %v / %v, want true / nil", removed, err)
+	}
+	if _, err := adminDB.Exec(`UPDATE stories SET visibility = 'private', owner_account_id = $2 WHERE slug = $1`, slug, accountID); err != nil {
+		t.Fatalf("make override story private: %v", err)
+	}
+
 	if _, err := store.ReaderStoryEditionOverrideGet(foreignAccountID, foreignProfileID, slug); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("foreign-account override read error = %v, want sql.ErrNoRows", err)
 	}
@@ -162,7 +181,7 @@ func TestReaderEditionOverrideIntegration(t *testing.T) {
 	}
 
 	var storyID string
-	if err := adminDB.QueryRow(`SELECT id FROM stories WHERE account_id = $1 AND slug = $2`, accountID, slug).Scan(&storyID); err != nil {
+	if err := adminDB.QueryRow(`SELECT id FROM stories WHERE slug = $1`, slug).Scan(&storyID); err != nil {
 		t.Fatalf("read override story id: %v", err)
 	}
 	if _, err := adminDB.Exec(`

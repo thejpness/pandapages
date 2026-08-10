@@ -104,9 +104,8 @@ func TestProgressStoreIntegration(t *testing.T) {
 		t.Fatalf("insert progress profiles: %v", err)
 	}
 	if _, err := adminDB.Exec(
-		`INSERT INTO stories (id, account_id, slug, title) VALUES ($1, $2, $3, 'Account A Story')`,
+		`INSERT INTO stories (id, visibility, owner_account_id, slug, title) VALUES ($1, 'public', NULL, $2, 'Public Story')`,
 		storyA,
-		accountA,
 		slug,
 	); err != nil {
 		t.Fatalf("insert account A story: %v", err)
@@ -296,7 +295,7 @@ func TestProgressStoreIntegration(t *testing.T) {
 				if err != nil {
 					t.Fatalf("ProgressGet after mismatch: %v", err)
 				}
-				assertProgressState(t, got, 1, confirmed, 0.75)
+				assertProgressState(t, got, 1, progressLocator(progressKeyA, 1, 1, 0.2, false), 0.2)
 			})
 		}
 	})
@@ -315,141 +314,35 @@ func TestProgressStoreIntegration(t *testing.T) {
 		if err := store.ProgressPut(accountA, profileA, "missing-story", 1, locator, 0.1); !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("missing-story error = %v, want sql.ErrNoRows", err)
 		}
-		if err := store.ProgressPut(accountA, profileA, slug, 2, locator, 0.1); !errors.Is(err, sql.ErrNoRows) {
+		if err := store.ProgressPut(accountA, profileA, slug, 99, locator, 0.1); !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("missing-version error = %v, want sql.ErrNoRows", err)
 		}
 	})
 
-	t.Run("another account cannot access the first account story", func(t *testing.T) {
+	t.Run("public stories keep progress independent across accounts", func(t *testing.T) {
 		locator := progressLocator(progressKeyA, 1, 1, 0, false)
-		if _, err := store.ProgressGet(accountB, profileB, slug); !errors.Is(err, sql.ErrNoRows) {
-			t.Fatalf("cross-account ProgressGet error = %v, want sql.ErrNoRows", err)
+		if err := store.ProgressPut(accountB, profileB, slug, 1, locator, 0.2); err != nil {
+			t.Fatalf("public cross-account ProgressPut: %v", err)
 		}
-		if err := store.ProgressPut(accountB, profileB, slug, 1, locator, 0.2); !errors.Is(err, sql.ErrNoRows) {
-			t.Fatalf("cross-account ProgressPut error = %v, want sql.ErrNoRows", err)
+		got, err := store.ProgressGet(accountB, profileB, slug)
+		if err != nil {
+			t.Fatalf("public cross-account ProgressGet: %v", err)
 		}
+		assertProgressState(t, got, 1, locator, 0.2)
 		continueB, err := store.ContinueRecent(accountB, profileB, 3)
-		if err != nil || len(continueB) != 0 {
-			t.Fatalf("cross-account ContinueRecent = %#v / %v, want empty", continueB, err)
+		if err != nil || len(continueB) != 1 || continueB[0].Slug != slug {
+			t.Fatalf("public cross-account ContinueRecent = %#v / %v", continueB, err)
 		}
-
 	})
 
-	t.Run("identical slugs remain independent between accounts", func(t *testing.T) {
-		const (
-			storyB   = "bbbbbbbb-0000-4000-8000-000000000001"
-			editionB = "bbbbbbbb-2000-4000-8000-000000000001"
-			versionB = "bbbbbbbb-1000-4000-8000-000000000001"
-			releaseB = "bbbbbbbb-3000-4000-8000-000000000001"
-		)
+	t.Run("duplicate global story slugs are rejected", func(t *testing.T) {
 		if _, err := adminDB.Exec(
-			`INSERT INTO stories (id, account_id, slug, title) VALUES ($1, $2, $3, 'Account B Story')`,
-			storyB,
-			accountB,
+			`INSERT INTO stories (id, visibility, owner_account_id, slug, title) VALUES ($1, 'public', NULL, $2, 'Duplicate slug')`,
+			"bbbbbbbb-0000-4000-8000-000000000001",
 			slug,
-		); err != nil {
-			t.Fatalf("insert account B story: %v", err)
+		); err == nil {
+			t.Fatal("database accepted a duplicate global story slug")
 		}
-		if _, err := adminDB.Exec(
-			`INSERT INTO story_editions (id, story_id, edition_key) VALUES ($1, $2, 'classic')`,
-			editionB,
-			storyB,
-		); err != nil {
-			t.Fatalf("insert account B Classic edition: %v", err)
-		}
-		if _, err := adminDB.Exec(
-			`INSERT INTO story_versions (id, story_id, edition_id, version, rendered_html) VALUES ($1, $2, $3, 1, '<p>B</p>')`,
-			versionB,
-			storyB,
-			editionB,
-		); err != nil {
-			t.Fatalf("insert account B version: %v", err)
-		}
-		if _, err := adminDB.Exec(`
-			INSERT INTO story_segments (
-				story_version_id, ordinal, segment_kind, content_key,
-				content_occurrence, markdown, rendered_html, word_count
-			) VALUES ($1, 1, 'paragraph', $2, 1, 'Other', '<p>Other</p>', 1)
-		`, versionB, progressKeyB); err != nil {
-			t.Fatalf("insert account B segment: %v", err)
-		}
-		if _, err := adminDB.Exec(
-			`INSERT INTO story_releases (id, story_id, release_number) VALUES ($1, $2, 1)`,
-			releaseB,
-			storyB,
-		); err != nil {
-			t.Fatalf("insert account B release: %v", err)
-		}
-		if _, err := adminDB.Exec(
-			`INSERT INTO story_release_editions (release_id, story_id, edition_id, story_version_id) VALUES ($1, $2, $3, $4)`,
-			releaseB,
-			storyB,
-			editionB,
-			versionB,
-		); err != nil {
-			t.Fatalf("insert account B release member: %v", err)
-		}
-		if _, err := adminDB.Exec(`UPDATE stories SET current_release_id = $2 WHERE id = $1`, storyB, releaseB); err != nil {
-			t.Fatalf("make account B release current: %v", err)
-		}
-
-		locatorA := progressLocator(progressKeyA, 1, 1, 0.9, false)
-		locatorB := progressLocator(progressKeyB, 1, 1, 0.4, false)
-		if err := store.ProgressPut(accountA, profileA, slug, 1, locatorA, 0.91); err != nil {
-			t.Fatalf("ProgressPut account A independent: %v", err)
-		}
-		if err := store.ProgressPut(accountB, profileB, slug, 1, locatorB, 0.4); err != nil {
-			t.Fatalf("ProgressPut account B independent: %v", err)
-		}
-
-		gotA, err := store.ProgressGet(accountA, profileA, slug)
-		if err != nil {
-			t.Fatalf("ProgressGet account A independent: %v", err)
-		}
-		gotB, err := store.ProgressGet(accountB, profileB, slug)
-		if err != nil {
-			t.Fatalf("ProgressGet account B independent: %v", err)
-		}
-		assertProgressState(t, gotA, 1, locatorA, 0.91)
-		assertProgressState(t, gotB, 1, locatorB, 0.4)
-
-		if _, err := adminDB.Exec(`
-			INSERT INTO reading_progress (
-				account_id, profile_id, story_id, story_version_id, locator, percent
-			)
-			SELECT $1, $2, $3, $4, locator, percent
-			FROM reading_progress
-			WHERE account_id = $1 AND profile_id = $2 AND story_id = $5
-		`, accountA, profileA, storyB, versionB, storyA); err == nil {
-			t.Fatal("direct cross-account progress insert succeeded")
-		}
-		if _, err := adminDB.Exec(`
-			UPDATE reading_progress
-			SET story_id = $3, story_version_id = $4
-			WHERE account_id = $1 AND profile_id = $2 AND story_id = $5
-		`, accountA, profileA, storyB, versionB, storyA); err == nil {
-			t.Fatal("direct cross-account progress update succeeded")
-		}
-		if _, err := adminDB.Exec(`
-			UPDATE reading_progress
-			SET story_version_id = $3
-			WHERE account_id = $1 AND profile_id = $2 AND story_id = $4
-		`, accountA, profileA, versionB, storyA); err == nil {
-			t.Fatal("direct cross-story version update succeeded")
-		}
-		if _, err := adminDB.Exec(`
-			UPDATE reading_progress
-			SET account_id = $3
-			WHERE account_id = $1 AND profile_id = $2 AND story_id = $4
-		`, accountA, profileA, accountB, storyA); err == nil {
-			t.Fatal("direct progress ownership update succeeded")
-		}
-
-		gotA, err = store.ProgressGet(accountA, profileA, slug)
-		if err != nil {
-			t.Fatalf("ProgressGet account A after rejected ownership writes: %v", err)
-		}
-		assertProgressState(t, gotA, 1, locatorA, 0.91)
 	})
 
 	t.Run("reading level gates current release progress without deleting stale history", func(t *testing.T) {
@@ -551,6 +444,28 @@ func TestProgressStoreIntegration(t *testing.T) {
 		}
 		assertProgressState(t, got, 1, classicLocator, 0.72)
 	})
+
+	t.Run("private stories fail closed for another account", func(t *testing.T) {
+		if _, err := adminDB.Exec(`UPDATE stories SET visibility = 'private', owner_account_id = $2 WHERE id = $1`, storyA, accountA); err != nil {
+			t.Fatalf("make story private: %v", err)
+		}
+		if _, err := store.ProgressGet(accountA, profileA, slug); err != nil {
+			t.Fatalf("private owner ProgressGet: %v", err)
+		}
+		for _, candidateSlug := range []string{slug, "missing-private-story"} {
+			if _, err := store.ProgressGet(accountB, profileB, candidateSlug); !errors.Is(err, sql.ErrNoRows) {
+				t.Fatalf("foreign private ProgressGet(%q) error = %v, want sql.ErrNoRows", candidateSlug, err)
+			}
+		}
+		locator := progressLocator(progressKeyA, 1, 1, 0, false)
+		if err := store.ProgressPut(accountB, profileB, slug, 1, locator, 0.4); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("foreign private ProgressPut error = %v, want sql.ErrNoRows", err)
+		}
+		items, err := store.ContinueRecent(accountB, profileB, 3)
+		if err != nil || len(items) != 0 {
+			t.Fatalf("foreign private ContinueRecent = %#v / %v, want empty", items, err)
+		}
+	})
 }
 
 func newProgressIntegrationStore(t *testing.T, databaseURL string) *Store {
@@ -595,12 +510,12 @@ func setupProgressIntegrationSchema(t *testing.T, database *sql.DB) {
 		)`,
 		`CREATE TABLE stories (
 			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-			account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-			slug text NOT NULL,
+			slug text NOT NULL UNIQUE,
+			visibility text NOT NULL CHECK (visibility IN ('public', 'private')),
+			owner_account_id uuid REFERENCES accounts(id) ON DELETE CASCADE,
 			title text NOT NULL,
 			current_release_id uuid,
-			UNIQUE (account_id, slug),
-			UNIQUE (id, account_id)
+			CHECK ((visibility = 'public' AND owner_account_id IS NULL) OR (visibility = 'private' AND owner_account_id IS NOT NULL))
 		)`,
 		`CREATE TABLE story_editions (
 			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -674,8 +589,8 @@ func setupProgressIntegrationSchema(t *testing.T, database *sql.DB) {
 			PRIMARY KEY (account_id, profile_id, story_id),
 			FOREIGN KEY (profile_id, account_id)
 				REFERENCES profiles(id, account_id) ON DELETE CASCADE,
-			FOREIGN KEY (story_id, account_id)
-				REFERENCES stories(id, account_id) ON DELETE CASCADE,
+			FOREIGN KEY (story_id)
+				REFERENCES stories(id) ON DELETE CASCADE,
 			FOREIGN KEY (story_version_id, story_id)
 				REFERENCES story_versions(id, story_id)
 		)`,

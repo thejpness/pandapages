@@ -48,6 +48,8 @@ type inspectedAdminStory struct {
 	Releases []model.AdminReleaseSummary
 }
 
+const adminPublicStoryVisibility = string(model.StoryVisibilityPublic)
+
 func (s *Store) AdminListStories(accountID string) (model.AdminStoriesListResponse, error) {
 	accountID = strings.TrimSpace(accountID)
 	if !accountIDRe.MatchString(accountID) {
@@ -65,9 +67,9 @@ func (s *Store) AdminListStories(accountID string) (model.AdminStoriesListRespon
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, slug, created_at, updated_at, current_release_id
 		FROM stories
-		WHERE account_id = $1
+		WHERE visibility = '`+adminPublicStoryVisibility+`'
 		ORDER BY updated_at DESC, slug ASC
-	`, accountID)
+	`)
 	if err != nil {
 		return model.AdminStoriesListResponse{}, err
 	}
@@ -117,7 +119,7 @@ func (s *Store) AdminGetStory(accountID, slug string) (model.AdminStoryDetailRes
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	story, err := loadAdminStory(ctx, tx, accountID, slug, false)
+	story, err := loadAdminStory(ctx, tx, slug, false)
 	if err != nil {
 		return model.AdminStoryDetailResponse{}, err
 	}
@@ -166,7 +168,7 @@ func scanAdminStory(scanner adminStoryScanner) (adminStoryRow, error) {
 	return story, nil
 }
 
-func loadAdminStory(ctx context.Context, tx *sql.Tx, accountID, slug string, lock bool) (adminStoryRow, error) {
+func loadAdminStory(ctx context.Context, tx *sql.Tx, slug string, lock bool) (adminStoryRow, error) {
 	lockClause := ""
 	if lock {
 		lockClause = " FOR UPDATE"
@@ -174,9 +176,9 @@ func loadAdminStory(ctx context.Context, tx *sql.Tx, accountID, slug string, loc
 	story, err := scanAdminStory(tx.QueryRowContext(ctx, `
 		SELECT id, slug, created_at, updated_at, current_release_id
 		FROM stories
-		WHERE account_id = $1
-		  AND slug = $2
-	`+lockClause, accountID, slug))
+		WHERE slug = $1
+		  AND visibility = '`+adminPublicStoryVisibility+`'
+	`+lockClause, slug))
 	if errors.Is(err, sql.ErrNoRows) {
 		return adminStoryRow{}, fmt.Errorf("%w", model.ErrAdminStoryNotFound)
 	}

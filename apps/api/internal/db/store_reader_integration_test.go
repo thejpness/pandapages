@@ -78,6 +78,29 @@ func TestReaderStoreIntegration(t *testing.T) {
 		t.Fatalf("insert Reader profiles: %v", err)
 	}
 
+	t.Run("story visibility baseline constraints are enforced", func(t *testing.T) {
+		assertRejected := func(name, query string, args ...any) {
+			t.Helper()
+			if _, err := adminDB.Exec(query, args...); err == nil {
+				t.Fatalf("database accepted %s", name)
+			}
+		}
+		assertRejected("public story with owner", `INSERT INTO stories (slug, visibility, owner_account_id, title) VALUES ('visibility-public-owner', 'public', $1, 'Invalid')`, readerAccountA)
+		assertRejected("private story without owner", `INSERT INTO stories (slug, visibility, owner_account_id, title) VALUES ('visibility-private-no-owner', 'private', NULL, 'Invalid')`)
+		assertRejected("unknown story visibility", `INSERT INTO stories (slug, visibility, owner_account_id, title) VALUES ('visibility-unknown', 'shared', NULL, 'Invalid')`)
+		assertRejected("omitted story visibility", `INSERT INTO stories (slug, title) VALUES ('visibility-missing', 'Invalid')`)
+		if _, err := adminDB.Exec(`INSERT INTO stories (slug, visibility, owner_account_id, title) VALUES ('visibility-public-valid', 'public', NULL, 'Valid public')`); err != nil {
+			t.Fatalf("insert valid public story: %v", err)
+		}
+		if _, err := adminDB.Exec(`INSERT INTO stories (slug, visibility, owner_account_id, title) VALUES ('visibility-private-valid', 'private', $1, 'Valid private')`, readerAccountA); err != nil {
+			t.Fatalf("insert valid private story: %v", err)
+		}
+		assertRejected("duplicate global slug", `INSERT INTO stories (slug, visibility, owner_account_id, title) VALUES ('visibility-public-valid', 'public', NULL, 'Duplicate')`)
+		if _, err := adminDB.Exec(`DELETE FROM stories WHERE slug IN ('visibility-public-valid', 'visibility-private-valid')`); err != nil {
+			t.Fatalf("remove visibility fixtures: %v", err)
+		}
+	})
+
 	store := newReaderIntegrationStore(t, databaseURL)
 	resolveSelectedReaderStory := func(accountID, profileID, slug string) (model.ReaderStory, error) {
 		resolution, err := store.ReaderResolve(accountID, profileID, slug)
@@ -103,6 +126,11 @@ func TestReaderStoreIntegration(t *testing.T) {
 	}
 	if firstDraft.Version != 1 || firstDraft.SegmentsCount != 6 {
 		t.Fatalf("first draft = %#v, want version 1 with six segments", firstDraft)
+	}
+	var initialVisibility string
+	var initialOwner sql.NullString
+	if err := adminDB.QueryRow(`SELECT visibility, owner_account_id FROM stories WHERE id = $1`, firstDraft.StoryID).Scan(&initialVisibility, &initialOwner); err != nil || initialVisibility != string(model.StoryVisibilityPublic) || initialOwner.Valid {
+		t.Fatalf("Story Studio story visibility/owner = %q / %#v / %v", initialVisibility, initialOwner, err)
 	}
 	if err := store.AdminPublish(readerAccountA, readerSlug, firstDraft.StoryVersionID); err != nil {
 		t.Fatalf("publish first Reader version: %v", err)
@@ -371,6 +399,11 @@ func TestReaderStoreIntegration(t *testing.T) {
 			first.Version != 1 || first.VersionID == "" {
 			t.Fatalf("first canonical source = %#v", first)
 		}
+		var sourceVisibility string
+		var sourceOwner sql.NullString
+		if err := adminDB.QueryRow(`SELECT visibility, owner_account_id FROM stories WHERE slug = $1`, sourceSlug).Scan(&sourceVisibility, &sourceOwner); err != nil || sourceVisibility != string(model.StoryVisibilityPublic) || sourceOwner.Valid {
+			t.Fatalf("Story Studio source story visibility/owner = %q / %#v / %v", sourceVisibility, sourceOwner, err)
+		}
 
 		sourceOnlyStory, err := store.AdminGetStory(readerAccountA, sourceSlug)
 		if err != nil {
@@ -396,8 +429,8 @@ func TestReaderStoreIntegration(t *testing.T) {
 			SELECT count(*)
 			FROM story_editions AS edition
 			JOIN stories AS story ON story.id = edition.story_id
-			WHERE story.slug = $1 AND story.account_id = $2
-		`, sourceSlug, readerAccountA).Scan(&sourceEditionRows); err != nil {
+			WHERE story.slug = $1
+		`, sourceSlug).Scan(&sourceEditionRows); err != nil {
 			t.Fatalf("count source-only editions: %v", err)
 		}
 		if sourceEditionRows != 0 {
@@ -480,8 +513,8 @@ func TestReaderStoreIntegration(t *testing.T) {
 		if oldSnapshot.SourceText != originalBody || oldSnapshot.IsCurrent {
 			t.Fatalf("retained canonical source v1 = %#v", oldSnapshot)
 		}
-		if _, err := store.AdminGetSource(readerAccountB, sourceSlug); !errors.Is(err, model.ErrAdminSourceNotFound) {
-			t.Fatalf("cross-account source detail error = %v", err)
+		if _, err := store.AdminGetSource(readerAccountB, sourceSlug); err != nil {
+			t.Fatalf("global source detail error = %v", err)
 		}
 
 		classicDraft, err := store.AdminDraftUpsert(readerAccountA, model.AdminDraftUpsertRequest{
@@ -540,7 +573,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 	if err := store.AdminPublish(readerAccountB, readerAccountBSlug, accountBDraft.StoryVersionID); err != nil {
 		t.Fatalf("publish account B story: %v", err)
 	}
-	t.Run("Reader story access stays account scoped", func(t *testing.T) {
+	t.Run("public Reader story access is global", func(t *testing.T) {
 		contains := func(library model.ReaderLibraryReadModel, slug string) bool {
 			for _, item := range library.Items {
 				if item.Slug == slug {
@@ -551,11 +584,11 @@ func TestReaderStoreIntegration(t *testing.T) {
 		}
 
 		libraryA, err := store.ReaderLibrary(readerAccountA, readerProfileA)
-		if err != nil || !contains(libraryA, readerSlug) || contains(libraryA, readerAccountBSlug) {
+		if err != nil || !contains(libraryA, readerSlug) || !contains(libraryA, readerAccountBSlug) {
 			t.Fatalf("account A Library = %#v / %v", libraryA, err)
 		}
 		libraryB, err := store.ReaderLibrary(readerAccountB, readerProfileB)
-		if err != nil || !contains(libraryB, readerAccountBSlug) || contains(libraryB, readerSlug) {
+		if err != nil || !contains(libraryB, readerAccountBSlug) || !contains(libraryB, readerSlug) {
 			t.Fatalf("account B Library = %#v / %v", libraryB, err)
 		}
 
@@ -567,8 +600,8 @@ func TestReaderStoreIntegration(t *testing.T) {
 			{account: readerAccountA, profile: readerProfileA, slug: readerAccountBSlug},
 			{account: readerAccountB, profile: readerProfileB, slug: readerSlug},
 		} {
-			if _, err := store.ReaderResolve(test.account, test.profile, test.slug); !errors.Is(err, sql.ErrNoRows) {
-				t.Fatalf("cross-account ReaderResolve(%s, %s) error = %v, want sql.ErrNoRows", test.account, test.slug, err)
+			if _, err := store.ReaderResolve(test.account, test.profile, test.slug); err != nil {
+				t.Fatalf("public ReaderResolve(%s, %s) error = %v", test.account, test.slug, err)
 			}
 		}
 	})
@@ -588,12 +621,9 @@ func TestReaderStoreIntegration(t *testing.T) {
 			t.Fatalf("initial draft outcomes = %q / %q", firstDraft.Outcome, secondDraft.Outcome)
 		}
 
-		emptyCatalogue, err := store.AdminListStories(readerAccountC)
-		if err != nil {
-			t.Fatalf("list empty account catalogue: %v", err)
-		}
-		if emptyCatalogue.Items == nil || len(emptyCatalogue.Items) != 0 {
-			t.Fatalf("empty account catalogue = %#v", emptyCatalogue)
+		globalCatalogue, err := store.AdminListStories(readerAccountC)
+		if err != nil || len(globalCatalogue.Items) == 0 {
+			t.Fatalf("global catalogue from account C = %#v / %v", globalCatalogue, err)
 		}
 
 		catalogue, err := store.AdminListStories(readerAccountA)
@@ -603,6 +633,9 @@ func TestReaderStoreIntegration(t *testing.T) {
 		repeatedCatalogue, err := store.AdminListStories(readerAccountA)
 		if err != nil {
 			t.Fatalf("repeat account A catalogue: %v", err)
+		}
+		if !reflect.DeepEqual(globalCatalogue, catalogue) {
+			t.Fatalf("global catalogue differed by selected admin account:\nC: %#v\nA: %#v", globalCatalogue, catalogue)
 		}
 		if !reflect.DeepEqual(catalogue, repeatedCatalogue) {
 			t.Fatalf("catalogue ordering/content was nondeterministic:\nfirst: %#v\nsecond: %#v", catalogue, repeatedCatalogue)
@@ -627,10 +660,8 @@ func TestReaderStoreIntegration(t *testing.T) {
 			draftOnly.PublishedVersion != nil || draftOnly.DraftVersion == nil {
 			t.Fatalf("draft-only summary = %#v", draftOnly)
 		}
-		for _, item := range catalogue.Items {
-			if item.Title == "Account B isolated story" {
-				t.Fatalf("account B metadata leaked into account A catalogue: %#v", item)
-			}
+		if findStory(readerAccountBSlug) == nil {
+			t.Fatal("global catalogue omitted the story created through account B")
 		}
 		encodedCatalogue, err := json.Marshal(catalogue)
 		if err != nil {
@@ -684,8 +715,8 @@ func TestReaderStoreIntegration(t *testing.T) {
 		if _, err := store.AdminGetVersionSource(readerAccountA, readerSlug, unpublishedDetail.DraftVersion.VersionID); !errors.Is(err, model.ErrAdminStoryNotFound) {
 			t.Fatalf("cross-story version source error = %v", err)
 		}
-		if _, err := store.AdminGetStory(readerAccountC, readerSlug); !errors.Is(err, model.ErrAdminStoryNotFound) {
-			t.Fatalf("cross-account story detail error = %v", err)
+		if _, err := store.AdminGetStory(readerAccountC, readerSlug); err != nil {
+			t.Fatalf("global story detail error = %v", err)
 		}
 
 		var storiesBefore, versionsBefore int
@@ -793,8 +824,8 @@ func TestReaderStoreIntegration(t *testing.T) {
 				t.Fatalf("unpublished story remained in Library: %#v", item)
 			}
 		}
-		if _, err := store.AdminUnpublish(readerAccountB, unpublishSlug); !errors.Is(err, model.ErrAdminStoryNotFound) {
-			t.Fatalf("cross-account unpublish error = %v", err)
+		if _, err := store.AdminUnpublish(readerAccountB, "missing-unpublish-story"); !errors.Is(err, model.ErrAdminStoryNotFound) {
+			t.Fatalf("missing unpublish error = %v", err)
 		}
 
 		retained, err := store.AdminGetStory(readerAccountA, unpublishSlug)
@@ -900,15 +931,21 @@ func TestReaderStoreIntegration(t *testing.T) {
 		if !reflect.DeepEqual(catalogue, repeated) {
 			t.Fatalf("mixed-health catalogue was nondeterministic:\nfirst: %#v\nsecond: %#v", catalogue, repeated)
 		}
-		if len(catalogue.Items) != len(fixtureSlugs) {
-			t.Fatalf("mixed-health catalogue has %d stories, want %d: %#v", len(catalogue.Items), len(fixtureSlugs), catalogue)
+		fixtureItems := make(map[string]model.AdminStorySummary, len(fixtureSlugs))
+		for _, item := range catalogue.Items {
+			for _, fixtureSlug := range fixtureSlugs {
+				if item.Slug == fixtureSlug {
+					fixtureItems[item.Slug] = item
+				}
+			}
+		}
+		if len(fixtureItems) != len(fixtureSlugs) {
+			t.Fatalf("mixed-health global catalogue fixture subset = %#v", fixtureItems)
 		}
 		validCount := 0
 		corruptCount := 0
-		for index, item := range catalogue.Items {
-			if item.Slug != fixtureSlugs[index] {
-				t.Fatalf("catalogue order[%d] = %q, want %q", index, item.Slug, fixtureSlugs[index])
-			}
+		for _, fixtureSlug := range fixtureSlugs {
+			item := fixtureItems[fixtureSlug]
 			if item.Slug == corruptSlug {
 				corruptCount++
 				if item.Status != model.AdminStoryStatusRepairRequired || item.Title != "Story requires repair" ||
@@ -949,13 +986,16 @@ func TestReaderStoreIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("list profile Library with malformed immutable frontmatter: %v", err)
 		}
-		if len(library.Items) != 5 || library.UnavailableItemCount != 1 {
-			t.Fatalf("mixed-health Library = %#v, want five visible and one unavailable", library)
+		visible := make(map[string]bool, len(library.Items))
+		for _, item := range library.Items {
+			visible[item.Slug] = true
 		}
-		for index, item := range library.Items {
-			wantSlug := fixtureSlugs[index+1]
-			if item.Slug != wantSlug {
-				t.Fatalf("mixed-health Library order[%d] = %q, want %q", index, item.Slug, wantSlug)
+		if library.UnavailableItemCount < 1 || visible[corruptSlug] {
+			t.Fatalf("mixed-health global Library = %#v", library)
+		}
+		for _, fixtureSlug := range fixtureSlugs[1:] {
+			if !visible[fixtureSlug] {
+				t.Fatalf("mixed-health global Library omitted %q: %#v", fixtureSlug, library)
 			}
 		}
 	})
@@ -2153,25 +2193,72 @@ func TestReaderStoreIntegration(t *testing.T) {
 		}
 	})
 
-	t.Run("account and publication boundaries return not found", func(t *testing.T) {
+	t.Run("private story access remains account scoped", func(t *testing.T) {
+		if _, err := adminDB.Exec(`UPDATE stories SET visibility = 'private', owner_account_id = $2 WHERE slug = $1`, readerAccountBSlug, readerAccountB); err != nil {
+			t.Fatalf("make account B story private: %v", err)
+		}
 		accountBStory, err := resolveSelectedReaderStory(readerAccountB, readerProfileB, readerAccountBSlug)
-		if err != nil {
-			t.Fatalf("ReaderStory account B: %v", err)
+		if err != nil || accountBStory.Title != "Account B isolated story" {
+			t.Fatalf("private owner ReaderStory = %#v / %v", accountBStory, err)
 		}
-		if accountBStory.Title != "Account B isolated story" || len(accountBStory.Segments) != 2 {
-			t.Fatalf("account B ReaderStory = %#v", accountBStory)
-		}
-		for _, test := range []struct {
-			account string
-			profile string
-			slug    string
-		}{
-			{account: readerAccountC, profile: readerProfileC, slug: readerSlug},
-			{account: readerAccountA, profile: readerProfileA, slug: "unpublished-reader-story"},
-			{account: readerAccountA, profile: readerProfileA, slug: "missing-reader-story"},
+		for _, test := range []struct{ account, profile, slug string }{
+			{readerAccountA, readerProfileA, readerAccountBSlug},
+			{readerAccountC, readerProfileC, readerAccountBSlug},
+			{readerAccountA, readerProfileA, "unpublished-reader-story"},
+			{readerAccountA, readerProfileA, "missing-reader-story"},
 		} {
 			if _, err := resolveSelectedReaderStory(test.account, test.profile, test.slug); !errors.Is(err, sql.ErrNoRows) {
 				t.Fatalf("ReaderResolve(%s, %s) error = %v, want sql.ErrNoRows", test.account, test.slug, err)
+			}
+		}
+		if _, err := resolveSelectedReaderStory(readerAccountC, readerProfileC, readerSlug); err != nil {
+			t.Fatalf("public ReaderResolve from account C: %v", err)
+		}
+		if _, err := store.AdminGetStory(readerAccountB, readerAccountBSlug); !errors.Is(err, model.ErrAdminStoryNotFound) {
+			t.Fatalf("private story appeared in global Story Studio detail: %v", err)
+		}
+		adminCatalogue, err := store.AdminListStories(readerAccountB)
+		if err != nil {
+			t.Fatalf("list public Story Studio catalogue: %v", err)
+		}
+		for _, item := range adminCatalogue.Items {
+			if item.Slug == readerAccountBSlug {
+				t.Fatalf("private story appeared in global Story Studio catalogue: %#v", item)
+			}
+		}
+		privateLocator := locatorForReaderSegment(accountBStory.Segments[0], 0.3)
+		if err := store.ProgressPut(readerAccountB, readerProfileB, readerAccountBSlug, accountBStory.Version, privateLocator, 0.3); err != nil {
+			t.Fatalf("private owner ProgressPut: %v", err)
+		}
+		if _, err := store.ProgressGet(readerAccountA, readerProfileA, readerAccountBSlug); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("foreign private ProgressGet error = %v, want sql.ErrNoRows", err)
+		}
+		if err := store.ProgressPut(readerAccountA, readerProfileA, readerAccountBSlug, accountBStory.Version, privateLocator, 0.3); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("foreign private ProgressPut error = %v, want sql.ErrNoRows", err)
+		}
+		if err := store.ReaderStoryEditionOverridePut(readerAccountB, readerProfileB, readerAccountBSlug, model.ReaderEditionClassic); err != nil {
+			t.Fatalf("private owner override: %v", err)
+		}
+		if _, err := store.ReaderStoryEditionOverrideGet(readerAccountA, readerProfileA, readerAccountBSlug); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("foreign private override get error = %v, want sql.ErrNoRows", err)
+		}
+		if err := store.ReaderStoryEditionOverridePut(readerAccountA, readerProfileA, readerAccountBSlug, model.ReaderEditionClassic); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("foreign private override put error = %v, want sql.ErrNoRows", err)
+		}
+		if removed, err := store.ReaderStoryEditionOverrideClear(readerAccountA, readerProfileA, readerAccountBSlug); err != nil || removed {
+			t.Fatalf("foreign private override clear = %v / %v, want false / nil", removed, err)
+		}
+		ownerContinue, err := store.ContinueRecent(readerAccountB, readerProfileB, 3)
+		if err != nil || len(ownerContinue) == 0 || ownerContinue[0].Slug != readerAccountBSlug {
+			t.Fatalf("private owner ContinueRecent = %#v / %v", ownerContinue, err)
+		}
+		foreignContinue, err := store.ContinueRecent(readerAccountA, readerProfileA, 3)
+		if err != nil {
+			t.Fatalf("foreign private ContinueRecent: %v", err)
+		}
+		for _, item := range foreignContinue {
+			if item.Slug == readerAccountBSlug {
+				t.Fatalf("foreign ContinueRecent leaked private story: %#v", item)
 			}
 		}
 	})
@@ -2217,8 +2304,8 @@ func TestReaderStoreIntegration(t *testing.T) {
 		if err := store.ProgressPut(readerAccountA, readerProfileA, readerSlug, 99, locator, 0.2); !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("wrong version error = %v, want sql.ErrNoRows", err)
 		}
-		if err := store.ProgressPut(readerAccountC, readerProfileC, readerSlug, story.Version, locator, 0.2); !errors.Is(err, sql.ErrNoRows) {
-			t.Fatalf("cross-account error = %v, want sql.ErrNoRows", err)
+		if err := store.ProgressPut(readerAccountC, readerProfileC, readerSlug, story.Version, locator, 0.2); err != nil {
+			t.Fatalf("public cross-account progress error = %v", err)
 		}
 	})
 
