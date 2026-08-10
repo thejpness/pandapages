@@ -51,6 +51,7 @@ func New(cfg Config, store Store) http.Handler {
 	}
 
 	discovery := cfg.SourceDiscovery
+	acquisition := cfg.SourceAcquisition
 	mux := http.NewServeMux()
 
 	withAdmin := func(next http.HandlerFunc) http.HandlerFunc {
@@ -179,6 +180,20 @@ func New(cfg Config, store Store) http.Handler {
 			return
 		}
 		out, err := discovery.GetWork(r.Context(), sourceprovider.ID(strings.TrimSpace(r.PathValue("provider"))), strings.TrimSpace(r.PathValue("externalID")))
+		if err != nil {
+			writeSourceProviderError(w, err, true)
+			return
+		}
+		noStore(w)
+		writeJSON(w, http.StatusOK, out)
+	}))
+
+	mux.HandleFunc("POST /api/v1/admin/source-providers/{provider}/works/{externalID}/candidate", withAdmin(func(w http.ResponseWriter, r *http.Request) {
+		if acquisition == nil {
+			writeErr(w, http.StatusServiceUnavailable, "source_provider_unavailable", "source provider is unavailable")
+			return
+		}
+		out, err := acquisition.Acquire(r.Context(), sourceprovider.ID(strings.TrimSpace(r.PathValue("provider"))), strings.TrimSpace(r.PathValue("externalID")))
 		if err != nil {
 			writeSourceProviderError(w, err, true)
 			return
@@ -424,6 +439,15 @@ func writeSourceProviderError(w http.ResponseWriter, err error, isWork bool) {
 	case errors.Is(err, sourceprovider.ErrResponseInvalid):
 		slog.Error("source provider response was invalid")
 		writeErr(w, http.StatusBadGateway, "source_provider_response_invalid", "source provider returned an invalid response")
+	case errors.Is(err, sourceprovider.ErrRepresentationUnavailable):
+		writeErr(w, http.StatusUnprocessableEntity, "source_provider_representation_unavailable", "source provider has no supported plain-text representation")
+	case errors.Is(err, sourceprovider.ErrContentTooLarge):
+		writeErr(w, http.StatusRequestEntityTooLarge, "source_provider_content_too_large", "source provider content is too large")
+	case errors.Is(err, sourceprovider.ErrContentInvalid):
+		slog.Error("source provider content was invalid")
+		writeErr(w, http.StatusBadGateway, "source_provider_content_invalid", "source provider content is invalid")
+	case errors.Is(err, sourceprovider.ErrNormalisationFailed):
+		writeErr(w, http.StatusUnprocessableEntity, "source_provider_normalisation_failed", "source provider content could not be normalised")
 	default:
 		slog.Error("source provider request failed")
 		writeErr(w, http.StatusBadGateway, "source_provider_unavailable", "source provider is unavailable")
