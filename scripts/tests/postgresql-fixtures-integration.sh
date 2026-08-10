@@ -138,6 +138,7 @@ PP_TEST_SEED_CONTAINER="$postgres_container" \
 [[ $(query "SELECT count(*) FROM profiles WHERE id='f17e0000-0000-4000-8000-000000000002' AND reading_level='classic';") == 1 ]]
 [[ $(query "SELECT count(*) FROM stories WHERE id='f17e0000-0000-4000-8000-000000000010';") == 1 ]]
 [[ $(query "SELECT count(*) FROM story_releases WHERE story_id='f17e0000-0000-4000-8000-000000000010' AND release_number=1;") == 1 ]]
+[[ $(query "SELECT count(*) FROM stories WHERE id='f17e0000-0000-4000-8000-000000000010' AND visibility='public' AND owner_account_id IS NULL;") == 1 ]]
 [[ $(query "SELECT count(*) FROM reading_progress WHERE story_id='f17e0000-0000-4000-8000-000000000010';") == 0 ]]
 
 # Explicit fixture installation remains idempotent.

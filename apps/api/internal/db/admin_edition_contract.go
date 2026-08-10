@@ -451,7 +451,7 @@ func (s *Store) AdminGetEditionVersionSource(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	story, err := loadAdminStory(ctx, tx, accountID, slug, false)
+	story, err := loadAdminStory(ctx, tx, slug, false)
 	if err != nil {
 		return model.AdminVersionSourceResponse{}, err
 	}

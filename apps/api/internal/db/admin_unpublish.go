@@ -25,7 +25,7 @@ func (s *Store) AdminUnpublish(accountID, slug string) (model.AdminStoryStatusRe
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	story, err := loadAdminStory(ctx, tx, accountID, slug, true)
+	story, err := loadAdminStory(ctx, tx, slug, true)
 	if err != nil {
 		return model.AdminStoryStatusResponse{}, err
 	}

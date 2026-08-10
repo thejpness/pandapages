@@ -42,7 +42,7 @@ func TestAdminReleaseIntegration(t *testing.T) {
 		t.Fatalf("insert release profile: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = adminDB.Exec(`DELETE FROM stories WHERE account_id = $1 AND slug = $2`, accountID, slug)
+		_, _ = adminDB.Exec(`DELETE FROM stories WHERE slug = $1`, slug)
 		_, _ = adminDB.Exec(`DELETE FROM profiles WHERE id = $1 AND account_id = $2`, profileID, accountID)
 		_, _ = adminDB.Exec(`DELETE FROM accounts WHERE id = $1`, accountID)
 	})
@@ -98,8 +98,8 @@ func TestAdminReleaseIntegration(t *testing.T) {
 	if err := adminDB.QueryRow(`
 		SELECT id, current_release_id
 		FROM stories
-		WHERE account_id = $1 AND slug = $2
-	`, accountID, slug).Scan(&storyID, &currentReleaseID); err != nil {
+		WHERE slug = $1
+	`, slug).Scan(&storyID, &currentReleaseID); err != nil {
 		t.Fatalf("read first release state: %v", err)
 	}
 	if currentReleaseID == "" {

@@ -37,7 +37,7 @@ func TestAdminEditionBundleIntegration(t *testing.T) {
 		t.Fatalf("insert bundle account: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = adminDB.Exec(`DELETE FROM stories WHERE account_id = $1 AND slug = $2`, accountID, slug)
+		_, _ = adminDB.Exec(`DELETE FROM stories WHERE slug = $1`, slug)
 		_, _ = adminDB.Exec(`DELETE FROM accounts WHERE id = $1`, accountID)
 	})
 
@@ -73,7 +73,7 @@ func TestAdminEditionBundleIntegration(t *testing.T) {
 	var storyID, classicDraftID string
 	var currentReleaseID sql.NullString
 	var editionCount, versionCount int
-	if err := adminDB.QueryRow(`SELECT id, current_release_id FROM stories WHERE account_id = $1 AND slug = $2`, accountID, slug).Scan(&storyID, &currentReleaseID); err != nil {
+	if err := adminDB.QueryRow(`SELECT id, current_release_id FROM stories WHERE slug = $1`, slug).Scan(&storyID, &currentReleaseID); err != nil {
 		t.Fatalf("read bundle story: %v", err)
 	}
 	if err := adminDB.QueryRow(`

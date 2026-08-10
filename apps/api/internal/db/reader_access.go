@@ -15,11 +15,15 @@ type readerProfileStoryAccess struct {
 	CurrentReleaseID string
 }
 
-// readerStoryAccessPredicate is the one current Reader story-scope rule. Every
+// readerStoryAccessPredicate is the one Reader story-scope rule. Every
 // Reader-facing story query binds the selected account as $1 before applying
-// release, edition, progress, or override logic. The later visibility change
-// deliberately has one predicate to replace.
-const readerStoryAccessPredicate = `story.account_id = $1`
+// release, edition, progress, or override logic. A story is accessible when it
+// belongs to the public library or is private to that selected adult account.
+const readerStoryAccessPredicate = `(
+	story.visibility = '` + string(model.StoryVisibilityPublic) + `'
+	OR (story.visibility = '` + string(model.StoryVisibilityPrivate) + `'
+		AND story.owner_account_id = $1)
+)`
 
 // lockReaderProfileStoryAccess takes the mutable profile and story rows
 // separately. This keeps Reading Level and current-release selection stable

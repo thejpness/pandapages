@@ -680,7 +680,7 @@ func touchStoryAfterDraft(
 	return err
 }
 
-// AdminDraftUpsert is account-scoped. Body hashes retain their historical role
+// AdminDraftUpsert creates or updates a global public-library story. Body hashes retain their historical role
 // as idempotency candidate keys, but reuse succeeds only when the complete
 // locked immutable version still matches the canonical incoming story.
 func (s *Store) AdminDraftUpsert(accountID string, req model.AdminDraftUpsertRequest) (model.AdminDraftUpsertResponse, error) {
@@ -722,7 +722,7 @@ func adminDraftUpsertTx(ctx context.Context, tx *sql.Tx, accountID string, req m
 		return model.AdminDraftUpsertResponse{}, err
 	}
 
-	// story upsert (account-scoped)
+	// Story Studio upsert: visibility is explicit and never caller-controlled.
 	rightsJSON, _ := json.Marshal(ing.Rights)
 
 	var (
@@ -730,16 +730,20 @@ func adminDraftUpsertTx(ctx context.Context, tx *sql.Tx, accountID string, req m
 		storyCreated bool
 	)
 	err = tx.QueryRowContext(ctx, `
-		INSERT INTO stories (account_id, slug, title, author, language, rights, updated_at)
-		VALUES ($1,$2,$3,NULLIF(BTRIM($4),''),$5,$6::jsonb, now())
-		ON CONFLICT (account_id, slug) DO UPDATE SET
+		INSERT INTO stories (visibility, owner_account_id, slug, title, author, language, rights, updated_at)
+		VALUES ('public', NULL, $1,$2,NULLIF(BTRIM($3),''),$4,$5::jsonb, now())
+		ON CONFLICT (slug) DO UPDATE SET
 			title=EXCLUDED.title,
 			author=EXCLUDED.author,
 			language=EXCLUDED.language,
 			rights=EXCLUDED.rights,
 			updated_at=now()
+		WHERE stories.visibility = '`+adminPublicStoryVisibility+`'
 		RETURNING id, (xmax = 0)
-	`, accountID, ing.Slug, ing.Title, ing.Author, ing.Language, string(rightsJSON)).Scan(&storyID, &storyCreated)
+	`, ing.Slug, ing.Title, ing.Author, ing.Language, string(rightsJSON)).Scan(&storyID, &storyCreated)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.AdminDraftUpsertResponse{}, fmt.Errorf("%w", model.ErrAdminStoryNotFound)
+	}
 	if err != nil {
 		return model.AdminDraftUpsertResponse{}, err
 	}

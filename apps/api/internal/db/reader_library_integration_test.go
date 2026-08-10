@@ -46,7 +46,7 @@ func TestReaderLibraryIntegration(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		_, _ = adminDB.Exec(`DELETE FROM reader_story_edition_overrides WHERE account_id = $1`, accountID)
-		_, _ = adminDB.Exec(`DELETE FROM stories WHERE account_id = $1`, accountID)
+		_, _ = adminDB.Exec(`DELETE FROM stories WHERE slug = 'reader-library-integration'`)
 		_, _ = adminDB.Exec(`DELETE FROM profiles WHERE account_id = $1`, accountID)
 		_, _ = adminDB.Exec(`DELETE FROM accounts WHERE id = $1`, accountID)
 	})
@@ -124,8 +124,7 @@ func TestReaderLibraryIntegration(t *testing.T) {
 
 	var storyID string
 	if err := adminDB.QueryRow(
-		`SELECT id FROM stories WHERE account_id = $1 AND slug = $2`,
-		accountID,
+		`SELECT id FROM stories WHERE slug = $1`,
 		slug,
 	).Scan(&storyID); err != nil {
 		t.Fatalf("read Reader Library story id: %v", err)

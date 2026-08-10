@@ -43,7 +43,8 @@ BEGIN
     SELECT 1 FROM stories
     WHERE id = 'f17e0000-0000-4000-8000-000000000010'
       AND (
-        account_id IS DISTINCT FROM 'f17e0000-0000-4000-8000-000000000001'
+        visibility IS DISTINCT FROM 'public'
+        OR owner_account_id IS NOT NULL
         OR slug IS DISTINCT FROM 'test-only-moonlit-cafe'
         OR title IS DISTINCT FROM 'TEST ONLY — Moonlit Café'
         OR author IS DISTINCT FROM 'Panda Pages Test Fixture'
@@ -92,11 +93,12 @@ ON CONFLICT (id) DO UPDATE SET
   sort_name = EXCLUDED.sort_name;
 
 INSERT INTO stories (
-  id, account_id, slug, title, author, language, rights
+  id, visibility, owner_account_id, slug, title, author, language, rights
 )
 VALUES (
   'f17e0000-0000-4000-8000-000000000010',
-  'f17e0000-0000-4000-8000-000000000001',
+  'public',
+  NULL,
   'test-only-moonlit-cafe',
   'TEST ONLY — Moonlit Café',
   'Panda Pages Test Fixture',
@@ -104,7 +106,8 @@ VALUES (
   '{"license":"test-only","test_fixture":true}'::jsonb
 )
 ON CONFLICT (id) DO UPDATE SET
-  account_id = EXCLUDED.account_id,
+  visibility = EXCLUDED.visibility,
+  owner_account_id = EXCLUDED.owner_account_id,
   slug = EXCLUDED.slug,
   title = EXCLUDED.title,
   author = EXCLUDED.author,
