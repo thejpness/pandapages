@@ -42,6 +42,8 @@ test.describe('Reader edition resolution', () => {
     await storyEdition.click()
     await expect(storyEdition).toHaveAttribute('aria-expanded', 'true')
     await expect(settings.getByRole('region', { name: 'Story edition' })).toBeVisible()
+    await expect(settings.getByText('Approx. ages 11+ · Fullest reading experience', { exact: true })).toBeVisible()
+    await expect(settings.getByText('Approx. ages 3–5 · Read together', { exact: true })).toBeVisible()
     await settings.getByRole('button', { name: /Little Listeners/ }).click()
     await expect(page.getByRole('heading', { level: 1, name: listeners.title })).toBeVisible()
     const editionWrite = api.requests.find(

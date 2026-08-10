@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 import ReaderDialogShell from './ReaderDialogShell.vue'
 import {
-  readerEditionDescription,
+  readerEditionAgeStage,
   readerEditionLabel,
 } from '../../lib/reader-editions'
 import type { ReaderEditionKey } from '../../lib/api'
@@ -122,7 +122,7 @@ function setFont(fontFamily: ReaderFontFamily) {
               >
                 <span>
                   <strong>{{ readerEditionLabel(editionKey) }}</strong>
-                  <small>{{ readerEditionDescription(editionKey) }}</small>
+                  <small>{{ readerEditionAgeStage(editionKey) }}</small>
                 </span>
                 <span v-if="currentEdition === editionKey" class="reader-edition-settings__current">
                   Current
