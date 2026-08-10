@@ -69,6 +69,47 @@ test.describe('Public information pages', () => {
     await expect(privacyLink).toBeFocused()
   })
 
+  test('Content & Copyright is directly reachable while signed out and explains provenance boundaries', async ({ page }) => {
+    const apiRequests: string[] = []
+    page.on('request', (request) => {
+      if (new URL(request.url()).pathname.startsWith('/api/')) apiRequests.push(request.url())
+    })
+
+    await page.goto('/content-and-copyright')
+
+    await expect(page).toHaveURL(/\/content-and-copyright$/)
+    await expect(page).toHaveTitle('Content & Copyright | Panda Pages')
+    await expect(page.getByRole('main')).toHaveCount(1)
+    await expect(page.getByRole('heading', { level: 1, name: 'Content & Copyright' })).toBeVisible()
+    for (const heading of [
+      'Public-domain source works',
+      'Panda Pages adaptations',
+      'Story Studio supplied material',
+      'Source and provenance information',
+      'Copyright and attribution concerns',
+      'Other content concerns',
+    ]) await expect(page.getByRole('heading', { level: 2, name: heading })).toBeVisible()
+
+    const contentText = await page.getByRole('main').innerText()
+    for (const text of ['public-domain literature', 'verbatim public-domain text', 'Story Studio', 'rights metadata', 'source versions', 'suspected copyright infringement', 'formatting or import problems']) expect(contentText).toContain(text)
+    expect(contentText).not.toContain('All Panda Pages stories are public domain')
+    expect(contentText).not.toContain('support@southcoastapps.co.uk')
+    expect(apiRequests).toEqual([])
+
+    const privacyLink = page.getByRole('link', { name: 'Panda Pages Privacy Policy' })
+    await privacyLink.focus()
+    await expect(privacyLink).toBeFocused()
+    await page.reload()
+    await expect(page.getByRole('heading', { level: 1, name: 'Content & Copyright' })).toBeVisible()
+  })
+
+  test('Content & Copyright remains accessible and readable at a narrow width', async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 568 })
+    await page.goto('/content-and-copyright')
+
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
+    await expectNoSeriousOrCriticalViolations(page)
+  })
   test('Privacy Policy remains accessible and readable at a narrow width', async ({ page }) => {
     await page.setViewportSize({ width: 320, height: 568 })
     await page.goto('/privacy')
