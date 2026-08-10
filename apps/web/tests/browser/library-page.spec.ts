@@ -638,6 +638,27 @@ test.describe('Library 2 bookshelf', () => {
   })
 
 
+  test("story covers share the Read action target and remain keyboard reachable", async ({ page }) => {
+    await page.goto("/library")
+
+    const card = storyCard(page, CURRENT_STORY.title)
+    const cover = card.getByRole("link", {
+      name: "Open story: Moonlit Café",
+      exact: true,
+    })
+    const read = card.getByRole("link", {
+      name: "Continue at 42%: Moonlit Café",
+      exact: true,
+    })
+
+    await expect(cover).toHaveAttribute("href", "/read/moonlit-cafe")
+    await expect(read).toHaveAttribute("href", "/read/moonlit-cafe")
+    await cover.focus()
+    await expect(cover).toBeFocused()
+    await page.keyboard.press("Enter")
+    await expect(page).toHaveURL("/read/moonlit-cafe")
+  })
+
   test("selecting a Library story enters Reader without an edition chooser", async ({ page }) => {
     await page.goto("/library")
 

@@ -187,10 +187,14 @@ test.describe('reader profile lifecycle', () => {
     await page.goto('/profiles/manage')
     const returnToChooser = page.getByRole('button', { name: 'Who’s reading?' })
     await expect(returnToChooser).toBeVisible()
+    await expect(returnToChooser).toHaveAttribute('type', 'button')
+    await expect(returnToChooser).toHaveClass(/profile-manage__back/)
+
     await returnToChooser.click()
 
     await expect(page).toHaveURL('http://127.0.0.1:4173/profiles')
     await expect(page.getByRole('heading', { name: 'Who’s reading?' })).toBeVisible()
+
     await expect.poll(() => page.evaluate(() => window.localStorage.getItem('pandapages.selected-account-id'))).toBe(fixtureAccountID)
   })
 

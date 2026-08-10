@@ -25,6 +25,10 @@ defineProps<{
           aria-labelledby="panda-auth-title"
           :aria-describedby="description ? 'panda-auth-description' : undefined"
         >
+          <div v-if="$slots.navigation" class="panda-auth-shell__navigation">
+            <slot name="navigation" />
+          </div>
+
           <p v-if="eyebrow" class="panda-auth-shell__eyebrow">{{ eyebrow }}</p>
           <h1 id="panda-auth-title">{{ title }}</h1>
           <p v-if="description" id="panda-auth-description" class="panda-auth-shell__description">
@@ -166,6 +170,10 @@ defineProps<{
   left: 0;
   height: 0.28rem;
   background: var(--panda-ink);
+}
+
+.panda-auth-shell__navigation {
+  margin-bottom: 1rem;
 }
 
 .panda-auth-shell__eyebrow {
