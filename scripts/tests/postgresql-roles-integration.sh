@@ -185,10 +185,11 @@ psql_as "$application_role" --command="
     'Runtime reader',
     'story-explorers'
   );
-  INSERT INTO stories (id, account_id, slug, title)
+  INSERT INTO stories (id, visibility, owner_account_id, slug, title)
   VALUES (
     'a1500000-0000-4000-8000-000000000021',
-    'a1500000-0000-4000-8000-000000000001',
+    'public',
+    NULL,
     'runtime-story',
     'Runtime Story'
   );

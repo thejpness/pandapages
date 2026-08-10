@@ -15,8 +15,9 @@ WHERE story_id = 'f17e0000-0000-4000-8000-000000000010';
 
 DELETE FROM stories
 WHERE id = 'f17e0000-0000-4000-8000-000000000010'
-  AND account_id = 'f17e0000-0000-4000-8000-000000000001'
   AND slug = 'test-only-moonlit-cafe'
+  AND visibility = 'public'
+  AND owner_account_id IS NULL
   AND title = 'TEST ONLY — Moonlit Café'
   AND author = 'Panda Pages Test Fixture'
   AND language = 'en-GB'
@@ -53,9 +54,6 @@ WHERE account.id = 'f17e0000-0000-4000-8000-000000000001'
   )
   AND NOT EXISTS (
     SELECT 1 FROM account_memberships WHERE account_id = account.id
-  )
-  AND NOT EXISTS (
-    SELECT 1 FROM stories WHERE account_id = account.id
   )
   AND NOT EXISTS (
     SELECT 1 FROM reading_progress WHERE account_id = account.id

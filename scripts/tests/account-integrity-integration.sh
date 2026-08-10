@@ -120,9 +120,9 @@ INSERT INTO profiles (id, account_id, name, reading_level) VALUES
   ('aaaaaaaa-1000-4000-8000-000000000001', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'Reader A', 'growing-readers'),
   ('bbbbbbbb-1000-4000-8000-000000000001', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'Reader B', 'little-listeners');
 
-INSERT INTO stories (id, account_id, slug, title) VALUES
-  ('aaaaaaaa-2000-4000-8000-000000000001', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'story-a', 'Story A'),
-  ('bbbbbbbb-2000-4000-8000-000000000001', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'story-b', 'Story B');
+INSERT INTO stories (id, visibility, owner_account_id, slug, title) VALUES
+  ('aaaaaaaa-2000-4000-8000-000000000001', 'public', NULL, 'story-a', 'Story A'),
+  ('bbbbbbbb-2000-4000-8000-000000000001', 'public', NULL, 'story-b', 'Story B');
 
 INSERT INTO story_editions (id, story_id, edition_key) VALUES
   ('aaaaaaaa-3000-4000-8000-000000000001', 'aaaaaaaa-2000-4000-8000-000000000001', 'classic'),
@@ -182,7 +182,7 @@ expect_rejected \
   "UPDATE reading_progress SET story_version_id='bbbbbbbb-4000-4000-8000-000000000001' WHERE account_id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';"
 
 expect_rejected \
-  'deleting an account that still owns profiles and stories' \
+  'deleting an account that still owns profiles' \
   'profiles_account_id_fkey' \
   "DELETE FROM accounts WHERE id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';"
 
