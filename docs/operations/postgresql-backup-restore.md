@@ -12,7 +12,7 @@ Read the measured storage evidence and migration decision in
 The proposed scheduled, encrypted, off-host implementation is documented in
 [postgresql-automated-backups.md](postgresql-automated-backups.md). The
 least-privilege source and recovery role model is in
-[postgresql-least-privilege-roles.md](postgresql-least-privilege-roles.md). The backup
+the reviewed SQL under `deploy/postgresql-roles/`. The backup
 recovery targets do not become established until deployment and verification.
 
 ## Current recovery posture

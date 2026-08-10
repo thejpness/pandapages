@@ -156,7 +156,7 @@ repository update and a successful generated-data backup/restore test.
 ## Dedicated database role
 
 Both dumps use `pandapages_backup`, the dedicated role defined in
-[postgresql-least-privilege-roles.md](postgresql-least-privilege-roles.md).
+the reviewed SQL under `deploy/postgresql-roles/`.
 It is a non-superuser login with no memberships, database or schema ownership,
 write privileges, routine execution, or schema creation. It receives direct
 `SELECT` on public tables and sequences, `CONNECT` to `pandapages`, `USAGE` on

@@ -74,19 +74,7 @@ reading are profile-scoped: `GET` and `PUT /api/v1/progress/{slug}` and
 does not change adult authorization or account settings. Catalogue responses
 do not infer a profile to embed progress.
 
-Migration 00018 makes `reading_progress` keyed by
-`(account_id, profile_id, story_id)` and enforces the profile/account tuple
-with a composite foreign key. Account-scoped beta progress from migration
-00017 has no truthful reader owner, so migration 00018 explicitly discards
-only those progress rows. It does not create or select a profile, and it does
-not alter accounts, profiles, stories, memberships, or settings. Its Down
-migration fails explicitly because multiple profile rows cannot truthfully be
-collapsed back to account scope.
-
-Migration 00019 adds optional profile-local PIN hash and throttling state. It
-does not affect progress, settings, accounts, profiles, or memberships beyond
-the new security columns. Its Down migration fails explicitly because silently
-removing configured reader gates would not be a truthful rollback.
+Historical migration note: the baseline includes the current profile-progress ownership and profile-local PIN schema. The numbered migrations that introduced them are not part of the active chain; new environments apply `00001_baseline.sql`.
 
 Admin routes require all of: a valid bearer, an explicit member account, an
 `owner` membership role, and the ingress-provided `X-PP-Admin-Key`.
