@@ -43,12 +43,12 @@ func TestLibraryEndpointReturnsProfileScopedResolutionReadModel(t *testing.T) {
 					Slug:     "the-snow-queen",
 					Title:    "The Snow Queen",
 					Language: "en-GB",
-					State:    model.ReaderResolutionChooser,
+					State:    model.ReaderResolutionSelected,
 					EligibleEditions: []model.ReaderLibraryEditionSummary{
 						{EditionKey: model.ReaderEditionGrowingReaders, Version: 3, WordCount: 2450, ChapterCount: 7},
 						{EditionKey: model.ReaderEditionStoryExplorers, Version: 5, WordCount: 1700, ChapterCount: 5},
 					},
-					SelectedEdition: nil,
+					SelectedEdition: &selected,
 					Progress: &model.ReaderLibraryProgressSummary{
 						Version:           1,
 						Percent:           0.6,
@@ -110,13 +110,14 @@ func TestLibraryEndpointReturnsProfileScopedResolutionReadModel(t *testing.T) {
 		t.Fatalf("selected progress = %#v", current["progress"])
 	}
 
-	chooser := payload.Items[1]
-	if chooser["state"] != string(model.ReaderResolutionChooser) || chooser["selectedEdition"] != nil {
-		t.Fatalf("chooser item = %#v", chooser)
+	profileDefault := payload.Items[1]
+	if profileDefault["state"] != string(model.ReaderResolutionSelected) ||
+		profileDefault["selectedEdition"] != string(model.ReaderEditionGrowingReaders) {
+		t.Fatalf("profile-default item = %#v", profileDefault)
 	}
-	chooserProgress, ok := chooser["progress"].(map[string]any)
-	if !ok || chooserProgress["isResolvedVersion"] != false {
-		t.Fatalf("chooser progress = %#v", chooser["progress"])
+	profileDefaultProgress, ok := profileDefault["progress"].(map[string]any)
+	if !ok || profileDefaultProgress["isResolvedVersion"] != false {
+		t.Fatalf("profile-default progress = %#v", profileDefault["progress"])
 	}
 
 	body := response.Body.String()

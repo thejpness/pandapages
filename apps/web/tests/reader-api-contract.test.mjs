@@ -94,7 +94,7 @@ test('Reader payload boundary rejects unsafe rendered HTML envelopes', async () 
   assert.deepEqual(api.parseReaderStoryPayload(safe), safe)
 })
 
-test('Reader resolution boundary accepts selected and chooser states', async () => {
+test('Reader resolution boundary accepts only authoritative selected state', async () => {
   const api = await apiModule()
   const selected = {
     state: 'selected',
@@ -102,19 +102,12 @@ test('Reader resolution boundary accepts selected and chooser states', async () 
     story: { ...validStory(), editionKey: 'classic' },
   }
   assert.deepEqual(api.parseReaderResolutionPayload(selected), selected)
-  const chooser = {
-    state: 'chooser',
-    eligibleEditions: ['growing-readers', 'little-listeners'],
-    story: null,
-  }
-  assert.deepEqual(api.parseReaderResolutionPayload(chooser), chooser)
 
   for (const invalid of [
     { ...selected, state: 'unknown' },
+    { ...selected, state: 'chooser', story: null },
     { ...selected, eligibleEditions: ['little-listeners', 'classic'] },
     { ...selected, story: { ...selected.story, editionKey: 'confident-readers' } },
-    { ...chooser, eligibleEditions: ['classic'] },
-    { ...chooser, story: selected.story },
   ]) {
     assert.throws(() => api.parseReaderResolutionPayload(invalid), /Reader/)
   }

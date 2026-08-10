@@ -28,9 +28,9 @@ type LibraryStoryFixture = {
   title: string
   author: string | null
   language: string
-  state: 'selected' | 'chooser'
+  state: 'selected'
   eligibleEditions: LibraryEditionFixture[]
-  selectedEdition: ReaderEditionKeyFixture | null
+  selectedEdition: ReaderEditionKeyFixture
   progress: LibraryProgressFixture | null
 }
 
@@ -144,25 +144,6 @@ const UNAVAILABLE_PROGRESS_STORY: Omit<LibraryStoryFixture, 'progress'> = {
   state: 'selected',
   eligibleEditions: [edition('growing-readers', 1, 650, 2)],
   selectedEdition: 'growing-readers',
-}
-
-const CHOOSER_STORY: LibraryStoryFixture = {
-  slug: 'choose-the-moon',
-  title: 'Choose the Moon',
-  author: 'Panda Pages',
-  language: 'en-GB',
-  state: 'chooser',
-  eligibleEditions: [
-    edition('growing-readers', 3, 900, 3),
-    edition('little-listeners', 5, 350, 0),
-  ],
-  selectedEdition: null,
-  progress: {
-    version: 1,
-    percent: 0.55,
-    updatedAt: '2026-07-20T10:00:00Z',
-    isResolvedVersion: false,
-  },
 }
 
 const READY_STORIES: LibraryStoryFixture[] = [
@@ -656,29 +637,17 @@ test.describe('Library 2 bookshelf', () => {
     expect(api.count('GET', '/api/v1/continue')).toBe(0)
   })
 
-  test('chooser stories show edition ranges and never imply an automatic selection', async ({
-    page,
-    api,
-  }) => {
-    api.items = [CHOOSER_STORY]
-    await page.goto('/library')
 
-    const card = storyCard(page, CHOOSER_STORY.title)
-    await expect(card).toContainText('350–900 words')
-    await expect(card).toContainText('0–3 chapters')
-    await expect(card).toContainText('Story updated since you last read')
-    await expect(
-      card.getByRole('link', {
-        name: `Choose edition: ${CHOOSER_STORY.title}`,
-        exact: true,
-      }),
-    ).toBeVisible()
+  test("selecting a Library story enters Reader without an edition chooser", async ({ page }) => {
+    await page.goto("/library")
 
-    const hero = page.locator('.continue-card')
-    await expect(hero).toHaveAttribute(
-      'aria-label',
-      `Choose edition: ${CHOOSER_STORY.title}`,
-    )
+    await storyCard(page, CURRENT_STORY.title).getByRole("link", {
+      name: "Continue at 42%: Moonlit Café",
+      exact: true,
+    }).click()
+
+    await expect(page).toHaveURL("/read/moonlit-cafe")
+    await expect(page.getByRole("dialog", { name: "Choose a story edition" })).toHaveCount(0)
   })
 
   test('missing or stale selected profiles return to explicit profile selection without a Library fallback', async ({

@@ -113,7 +113,7 @@ func TestResolveUsesOverrideThenProgressThenOnlyEligible(t *testing.T) {
 	}
 }
 
-func TestResolveNeverInventsAutomaticEditionChoice(t *testing.T) {
+func TestResolveUsesProfileDefaultForMultipleEligibleEditions(t *testing.T) {
 	release := []ReleaseEdition{
 		{EditionKey: model.ReaderEditionClassic, VersionID: "classic-version"},
 		{EditionKey: model.ReaderEditionGrowingReaders, VersionID: "growing-version"},
@@ -125,10 +125,12 @@ func TestResolveNeverInventsAutomaticEditionChoice(t *testing.T) {
 		ReleaseEditions: release,
 	})
 	if err != nil {
-		t.Fatalf("Resolve chooser: %v", err)
+		t.Fatalf("Resolve profile default: %v", err)
 	}
-	if decision.Kind != DecisionChooser || decision.Selected != nil || decision.Source != "" {
-		t.Fatalf("multi-edition decision = %#v, want chooser without selection", decision)
+	if decision.Kind != DecisionSelected || decision.Selected == nil ||
+		decision.Selected.EditionKey != model.ReaderEditionClassic ||
+		decision.Source != SelectionProfileDefault {
+		t.Fatalf("multi-edition decision = %#v, want classic profile default", decision)
 	}
 	want := []ReleaseEdition{
 		{EditionKey: model.ReaderEditionClassic, VersionID: "classic-version"},
@@ -169,8 +171,10 @@ func TestResolveIgnoresStaleSignalsButRejectsMalformedState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve stale signals: %v", err)
 	}
-	if decision.Kind != DecisionChooser {
-		t.Fatalf("stale-signal decision = %#v, want chooser", decision)
+	if decision.Kind != DecisionSelected || decision.Selected == nil ||
+		decision.Selected.EditionKey != model.ReaderEditionGrowingReaders ||
+		decision.Source != SelectionProfileDefault {
+		t.Fatalf("stale-signal decision = %#v, want growing-readers profile default", decision)
 	}
 
 	badOverride := model.ReaderEditionKey("unknown")

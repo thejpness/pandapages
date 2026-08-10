@@ -41,16 +41,13 @@ function progressTime(story: LibraryStory): number {
 }
 
 function wordCountBounds(story: LibraryStory): { min: number; max: number } {
-  if (story.state === 'selected' && story.selectedEdition !== null) {
-    const selected = story.eligibleEditions.find(
-      (edition) => edition.editionKey === story.selectedEdition,
-    )
-    if (selected !== undefined) {
-      return { min: selected.wordCount, max: selected.wordCount }
-    }
+  const selected = story.eligibleEditions.find(
+    (edition) => edition.editionKey === story.selectedEdition,
+  )
+  if (selected !== undefined) {
+    return { min: selected.wordCount, max: selected.wordCount }
   }
-  const values = story.eligibleEditions.map((edition) => edition.wordCount)
-  return { min: Math.min(...values), max: Math.max(...values) }
+  return { min: 0, max: 0 }
 }
 
 function defaultStorage(): LibrarySortStorage | null {

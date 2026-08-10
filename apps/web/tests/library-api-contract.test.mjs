@@ -49,34 +49,19 @@ function story(overrides = {}) {
   }
 }
 
-function chooser(overrides = {}) {
-  return story({
-    slug: 'choose-an-edition',
-    title: 'Choose an Edition',
-    state: 'chooser',
-    eligibleEditions: [
-      edition(),
-      edition({ editionKey: 'little-listeners', version: 4, wordCount: 500, chapterCount: 1 }),
-    ],
-    selectedEdition: null,
-    progress: progress({ version: 1, isResolvedVersion: false }),
-    ...overrides,
-  })
-}
-
 function without(record, key) {
   const result = { ...record }
   delete result[key]
   return result
 }
 
-test('strict Library boundary accepts selected, chooser, stale-progress, empty-progress, and missing-author stories', async () => {
+test('strict Library boundary accepts selected, stale-progress, empty-progress, and missing-author stories', async () => {
   const { module: api } = await apiModule()
   const missingAuthor = without(
     story({ slug: 'author-unknown', title: 'Author Unknown', progress: null }),
     'author',
   )
-  const value = { items: [story(), chooser(), missingAuthor] }
+  const value = { items: [story(), missingAuthor] }
 
   const parsed = api.parseLibraryResponse(value)
   assert.equal(parsed.unavailableItemCount, 0)
@@ -85,10 +70,6 @@ test('strict Library boundary accepts selected, chooser, stale-progress, empty-p
     progressAvailability: 'available',
   })
   assert.deepEqual(parsed.items[1], {
-    ...value.items[1],
-    progressAvailability: 'available',
-  })
-  assert.deepEqual(parsed.items[2], {
     ...missingAuthor,
     author: null,
     progressAvailability: 'available',
@@ -112,7 +93,6 @@ test('strict Library boundary preserves stories when progress metadata is unavai
     story({ progress: progress({ updatedAt: '2026-07-19T25:00:00Z' }) }),
     story({ progress: progress({ isResolvedVersion: 'yes' }) }),
     story({ progress: progress({ version: 3, isResolvedVersion: true }) }),
-    chooser({ progress: progress({ isResolvedVersion: true }) }),
   ]
 
   for (const unavailable of unavailableProgressStories) {
@@ -139,8 +119,7 @@ test('strict Library boundary rejects malformed resolution fields and internal k
     story({ author: '   ' }),
     story({ language: '' }),
     story({ state: 'automatic' }),
-    chooser({ eligibleEditions: [edition()] }),
-    chooser({ selectedEdition: 'growing-readers' }),
+    story({ state: 'chooser' }),
     story({ selectedEdition: null }),
     story({ selectedEdition: 'classic' }),
     story({ eligibleEditions: [] }),

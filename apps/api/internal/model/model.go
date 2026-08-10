@@ -63,8 +63,8 @@ type ReaderLibraryProgressSummary struct {
 	IsResolvedVersion bool      `json:"isResolvedVersion"`
 }
 
-// ReaderLibraryItem is profile-scoped. A chooser has no selected edition;
-// selected items identify the exact edition chosen by the canonical resolver.
+// ReaderLibraryItem is profile-scoped and identifies the exact edition selected
+// by the canonical Reader resolver.
 type ReaderLibraryItem struct {
 	Slug             string                        `json:"slug"`
 	Title            string                        `json:"title"`
@@ -102,7 +102,6 @@ type ReaderResolutionState string
 
 const (
 	ReaderResolutionSelected ReaderResolutionState = "selected"
-	ReaderResolutionChooser  ReaderResolutionState = "chooser"
 )
 
 type ReaderResolution struct {

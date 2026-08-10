@@ -41,7 +41,7 @@ func profileReaderRequest(method, path, body string) *http.Request {
 	return request
 }
 
-func TestReaderResolutionEndpointReturnsSelectedAndChooserStates(t *testing.T) {
+func TestReaderResolutionEndpointReturnsAuthoritativeSelectedState(t *testing.T) {
 	author := "Panda Pages Test Fixture"
 	level := 2
 	chapterKey := strings.Repeat("c", 64)
@@ -116,39 +116,6 @@ func TestReaderResolutionEndpointReturnsSelectedAndChooserStates(t *testing.T) {
 		t.Fatal("selected Reader resolution is cacheable")
 	}
 
-	chooserStore := &authTestStore{
-		readerResolutionResponse: model.ReaderResolution{
-			State: model.ReaderResolutionChooser,
-			EligibleEditions: []model.ReaderEditionKey{
-				model.ReaderEditionGrowingReaders,
-				model.ReaderEditionStoryExplorers,
-			},
-			Story: nil,
-		},
-	}
-	chooser := httptest.NewRecorder()
-	testHandler(t, chooserStore).ServeHTTP(
-		chooser,
-		profileReaderRequest(http.MethodGet, "/api/v1/reader-resolution/moonlit-cafe", ""),
-	)
-	if chooser.Code != http.StatusOK {
-		t.Fatalf("chooser status = %d; body = %s", chooser.Code, chooser.Body.String())
-	}
-	var chooserPayload map[string]any
-	if err := json.Unmarshal(chooser.Body.Bytes(), &chooserPayload); err != nil {
-		t.Fatalf("decode chooser response: %v", err)
-	}
-	if chooserPayload["state"] != string(model.ReaderResolutionChooser) ||
-		chooserPayload["story"] != nil {
-		t.Fatalf("chooser payload = %#v", chooserPayload)
-	}
-	eligible, ok := chooserPayload["eligibleEditions"].([]any)
-	if !ok ||
-		len(eligible) != 2 ||
-		eligible[0] != string(model.ReaderEditionGrowingReaders) ||
-		eligible[1] != string(model.ReaderEditionStoryExplorers) {
-		t.Fatalf("chooser eligible editions = %#v", chooserPayload["eligibleEditions"])
-	}
 }
 
 func TestReaderResolutionEndpointFailureContracts(t *testing.T) {

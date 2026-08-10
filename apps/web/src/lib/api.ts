@@ -347,9 +347,9 @@ export type LibraryStory = {
   title: string;
   author: string | null;
   language: string;
-  state: "selected" | "chooser";
+  state: "selected";
   eligibleEditions: LibraryEditionSummary[];
-  selectedEdition: ReaderEditionKey | null;
+  selectedEdition: ReaderEditionKey;
   progress: LibraryProgress | null;
   progressAvailability: LibraryProgressAvailability;
 };
@@ -544,8 +544,7 @@ function parseLibraryEditionSummaries(value: unknown): LibraryEditionSummary[] {
 
 function parseLibraryProgress(
   value: unknown,
-  state: LibraryStory["state"],
-  selectedEdition: ReaderEditionKey | null,
+  selectedEdition: ReaderEditionKey,
   eligibleEditions: readonly LibraryEditionSummary[],
 ): Pick<LibraryStory, "progress" | "progressAvailability"> {
   if (value === null) {
@@ -569,9 +568,6 @@ function parseLibraryProgress(
   }
 
   if (value.isResolvedVersion) {
-    if (state !== "selected" || selectedEdition === null) {
-      return { progress: null, progressAvailability: "unavailable" };
-    }
     const selected = eligibleEditions.find(
       (edition) => edition.editionKey === selectedEdition,
     );
@@ -601,7 +597,7 @@ function parseLibraryStory(value: unknown): LibraryStory {
     value.title.trim().length === 0 ||
     typeof value.language !== "string" ||
     value.language.trim().length === 0 ||
-    (value.state !== "selected" && value.state !== "chooser") ||
+    value.state !== "selected" ||
     Object.hasOwn(value, "wordCount") ||
     Object.hasOwn(value, "chapterCount")
   ) {
@@ -617,27 +613,19 @@ function parseLibraryStory(value: unknown): LibraryStory {
   }
 
   const eligibleEditions = parseLibraryEditionSummaries(value.eligibleEditions);
-  let selectedEdition: ReaderEditionKey | null = null;
-  if (value.state === "chooser") {
-    if (value.selectedEdition !== null || eligibleEditions.length < 2) {
-      return invalidLibraryResponse();
-    }
-  } else {
-    if (
-      !isReaderEditionKey(value.selectedEdition) ||
-      !eligibleEditions.some(
-        (edition) => edition.editionKey === value.selectedEdition,
-      )
-    ) {
-      return invalidLibraryResponse();
-    }
-    selectedEdition = value.selectedEdition;
+  if (
+    !isReaderEditionKey(value.selectedEdition) ||
+    !eligibleEditions.some(
+      (edition) => edition.editionKey === value.selectedEdition,
+    )
+  ) {
+    return invalidLibraryResponse();
   }
+  const selectedEdition = value.selectedEdition;
 
   const parsedProgress = Object.hasOwn(value, "progress")
     ? parseLibraryProgress(
         value.progress,
-        value.state,
         selectedEdition,
         eligibleEditions,
       )
@@ -648,7 +636,7 @@ function parseLibraryStory(value: unknown): LibraryStory {
     title: value.title,
     author,
     language: value.language,
-    state: value.state,
+    state: "selected",
     eligibleEditions,
     selectedEdition,
     ...parsedProgress,
@@ -701,17 +689,11 @@ export type ReaderResolvedStoryPayload = ReaderStoryPayload & {
   editionKey: ReaderEditionKey;
 };
 
-export type ReaderResolutionPayload =
-  | {
-      state: "selected";
-      eligibleEditions: ReaderEditionKey[];
-      story: ReaderResolvedStoryPayload;
-    }
-  | {
-      state: "chooser";
-      eligibleEditions: ReaderEditionKey[];
-      story: null;
-    };
+export type ReaderResolutionPayload = {
+  state: "selected";
+  eligibleEditions: ReaderEditionKey[];
+  story: ReaderResolvedStoryPayload;
+};
 
 function hasExactKeys(
   record: Record<string, unknown>,
@@ -887,13 +869,6 @@ export function parseReaderResolutionPayload(
   }
 
   const eligibleEditions = parseReaderEditionSubset(value.eligibleEditions);
-  if (value.state === "chooser") {
-    if (value.story !== null || eligibleEditions.length < 2) {
-      throw new Error("Invalid Reader chooser response");
-    }
-    return { state: "chooser", eligibleEditions, story: null };
-  }
-
   if (value.state !== "selected") {
     throw new Error("Invalid Reader resolution state");
   }
