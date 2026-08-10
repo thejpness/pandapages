@@ -301,25 +301,34 @@
     </main>
 
     <footer class="site-footer section-shell">
-      <a class="brand brand--footer" href="/" aria-label="Panda Pages home">
-        <img
-          class="brand-logo brand-logo--footer"
-          src="/logo.png"
-          alt=""
-          aria-hidden="true"
-        />
-        <span class="brand-name">Panda Pages</span>
-      </a>
-      <div class="site-footer__copy">
+      <div class="site-footer__primary">
+        <a class="brand brand--footer" href="/" aria-label="Panda Pages home">
+          <img
+            class="brand-logo brand-logo--footer"
+            src="/logo.png"
+            alt=""
+            aria-hidden="true"
+          />
+          <span class="brand-name">Panda Pages</span>
+        </a>
+        <nav class="site-footer__group" aria-label="Explore">
+          <p class="site-footer__group-title">Explore</p>
+          <a :href="storiesHref">Stories</a>
+          <a href="#why">Why Panda Pages</a>
+        </nav>
+        <nav class="site-footer__group" aria-label="Legal">
+          <p class="site-footer__group-title">Legal</p>
+          <PublicTrustLinks layout="stacked" />
+        </nav>
+        <div class="site-footer__group">
+          <p class="site-footer__group-title">Install</p>
+          <button type="button" @click="handleInstall">Install app</button>
+        </div>
+      </div>
+      <div class="site-footer__meta">
         <p>Classic stories. Quiet reading. Happy imaginations.</p>
         <ProductAttribution />
       </div>
-      <nav aria-label="Footer links">
-        <a :href="storiesHref">Stories</a>
-        <a href="#why">Why Panda Pages</a>
-        <PublicTrustLinks />
-        <button type="button" @click="handleInstall">Install app</button>
-      </nav>
     </footer>
 
     <DialogRoot v-model:open="showInstallHelp">
@@ -627,7 +636,6 @@ onBeforeUnmount(() => {
 .trust-list,
 .story-chip,
 .story-card__link,
-.site-footer nav,
 .button {
   display: flex;
   align-items: center;
@@ -1991,42 +1999,66 @@ onBeforeUnmount(() => {
 }
 
 .site-footer {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  align-items: center;
-  min-height: 124px;
-  gap: 28px;
+  padding-block: 3.25rem max(1.75rem, env(safe-area-inset-bottom));
 }
 
-.site-footer p {
-  margin: 0;
+.site-footer__primary {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1.4fr) repeat(3, minmax(0, 0.72fr));
+  align-items: start;
+  gap: clamp(1.5rem, 4vw, 4rem);
+}
+
+.site-footer__group {
+  display: grid;
+  align-content: start;
+  justify-items: start;
+  gap: 0;
+}
+
+.site-footer__group-title {
+  margin: 0 0 0.5rem;
   color: var(--soft-ink);
-  font-family: var(--serif);
-  font-size: 0.84rem;
-  text-align: center;
+  font-size: 0.7rem;
+  font-weight: 850;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
 }
 
-.site-footer__copy {
-  display: grid;
-  justify-items: center;
-  gap: 0.15rem;
-}
-
-.site-footer nav {
-  justify-content: flex-end;
-  gap: 20px;
-}
-
-.site-footer nav a,
-.site-footer nav button {
+.site-footer__group a,
+.site-footer__group button {
   display: inline-flex;
   min-height: 44px;
   align-items: center;
   border: 0;
+  padding: 0;
   background: none;
+  color: inherit;
   cursor: pointer;
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 750;
+  text-align: left;
+}
+
+.site-footer__meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 2.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--line);
+}
+
+.site-footer__meta > p {
+  margin: 0;
+  color: var(--soft-ink);
+  font-family: var(--serif);
+  font-size: 0.84rem;
+}
+
+.site-footer__meta :deep(.product-attribution) {
+  text-align: right;
 }
 
 .dialog-backdrop {
@@ -2200,13 +2232,22 @@ onBeforeUnmount(() => {
   }
 
   .site-footer {
-    grid-template-columns: 1fr;
-    justify-items: center;
-    padding-block: 40px;
+    padding-block: 2.5rem max(1.5rem, env(safe-area-inset-bottom));
   }
 
-  .site-footer nav {
-    justify-content: center;
+  .site-footer__primary {
+    grid-template-columns: 1fr;
+    gap: 2rem;
+  }
+
+  .site-footer__meta {
+    align-items: start;
+    flex-direction: column;
+    margin-top: 2rem;
+  }
+
+  .site-footer__meta :deep(.product-attribution) {
+    text-align: left;
   }
 }
 
