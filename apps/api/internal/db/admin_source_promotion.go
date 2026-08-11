@@ -38,13 +38,11 @@ func (s *Store) AdminPromoteSourceAcquisition(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var lockedID string
-	if err := tx.QueryRowContext(ctx, `SELECT id FROM source_acquisitions WHERE id = $1 FOR UPDATE`, id).Scan(&lockedID); errors.Is(err, sql.ErrNoRows) {
-		return model.AdminSourceAcquisitionPromotionResponse{}, model.ErrAdminSourceAcquisitionNotFound
-	} else if err != nil {
+	qualityStatus, err := lockSourceAcquisitionQualityReview(ctx, tx, id)
+	if err != nil {
 		return model.AdminSourceAcquisitionPromotionResponse{}, err
 	}
-	stored, err := loadAdminSourceAcquisitionDetail(ctx, tx, lockedID)
+	stored, err := loadAdminSourceAcquisitionDetail(ctx, tx, id)
 	if err != nil {
 		return model.AdminSourceAcquisitionPromotionResponse{}, err
 	}
@@ -52,20 +50,12 @@ func (s *Store) AdminPromoteSourceAcquisition(
 	if err != nil {
 		return model.AdminSourceAcquisitionPromotionResponse{}, err
 	}
+	if qualityStatus != model.AdminSourceQualityApproved {
+		return model.AdminSourceAcquisitionPromotionResponse{}, model.ErrAdminSourceAcquisitionNotReady
+	}
 	assessment, err := loadCurrentEligibleSourceAssessment(ctx, tx, acquisition)
 	if err != nil {
 		return model.AdminSourceAcquisitionPromotionResponse{}, err
-	}
-	var qualityStatus string
-	if err := tx.QueryRowContext(ctx, `
-		SELECT status FROM source_acquisition_quality_reviews
-		WHERE acquisition_id = $1
-		FOR UPDATE
-	`, acquisition.ID).Scan(&qualityStatus); err != nil {
-		return model.AdminSourceAcquisitionPromotionResponse{}, err
-	}
-	if model.AdminSourceQualityStatus(qualityStatus) != model.AdminSourceQualityApproved {
-		return model.AdminSourceAcquisitionPromotionResponse{}, model.ErrAdminSourceAcquisitionNotReady
 	}
 
 	if existing, err := loadExistingSourcePromotion(ctx, tx, acquisition.ID); err == nil {

@@ -384,13 +384,10 @@ func (s *Store) AdminUpdateSourceAcquisitionSourceQualityReview(id string, req m
 		return model.AdminSourceAcquisitionSummary{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	var promoted bool
-	var lockedAcquisitionID string
-	if err := tx.QueryRowContext(ctx, `SELECT id FROM source_acquisitions WHERE id = $1 FOR UPDATE`, id).Scan(&lockedAcquisitionID); errors.Is(err, sql.ErrNoRows) {
-		return model.AdminSourceAcquisitionSummary{}, model.ErrAdminSourceAcquisitionNotFound
-	} else if err != nil {
+	if _, err := lockSourceAcquisitionQualityReview(ctx, tx, id); err != nil {
 		return model.AdminSourceAcquisitionSummary{}, err
 	}
+	var promoted bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM story_source_versions WHERE source_acquisition_id = $1)`, id).Scan(&promoted); err != nil {
 		return model.AdminSourceAcquisitionSummary{}, err
 	}
@@ -416,6 +413,25 @@ func (s *Store) AdminUpdateSourceAcquisitionSourceQualityReview(id string, req m
 		return model.AdminSourceAcquisitionSummary{}, err
 	}
 	return summary, nil
+}
+
+// lockSourceAcquisitionQualityReview serializes the two lifecycle mutations
+// that may change the ready state: a source-quality decision and promotion.
+// The acquisition is immutable evidence and must never be locked FOR UPDATE by
+// the runtime role.
+func lockSourceAcquisitionQualityReview(ctx context.Context, tx *sql.Tx, acquisitionID string) (model.AdminSourceQualityStatus, error) {
+	var status string
+	if err := tx.QueryRowContext(ctx, `
+		SELECT status
+		FROM source_acquisition_quality_reviews
+		WHERE acquisition_id = $1
+		FOR UPDATE
+	`, acquisitionID).Scan(&status); errors.Is(err, sql.ErrNoRows) {
+		return "", model.ErrAdminSourceAcquisitionNotFound
+	} else if err != nil {
+		return "", err
+	}
+	return model.AdminSourceQualityStatus(status), nil
 }
 
 func canonicalSourceAcquisitionID(raw string) (string, bool) {
