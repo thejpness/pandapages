@@ -78,13 +78,13 @@ test.describe('Reader content boundaries', () => {
     const dialog = page.getByRole('dialog', { name: 'Chapters' })
     await expect(
       dialog.getByRole('button', {
-        name: 'Chapter One — Lanterns, 1 of 2',
+        name: 'Chapter One - Lanterns, 1 of 2',
         exact: true,
       }),
     ).toBeVisible()
     await expect(
       dialog.getByRole('button', {
-        name: 'Chapter One — Lanterns, 2 of 2',
+        name: 'Chapter One - Lanterns, 2 of 2',
         exact: true,
       }),
     ).toBeVisible()

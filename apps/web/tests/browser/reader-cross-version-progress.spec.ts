@@ -556,7 +556,7 @@ test.describe('Reader cross-version progress decisions', () => {
     const storyA = highConfidenceStories('updated-story-a')
     const storyB = makeReaderStory({
       slug: 'updated-story-b',
-      title: 'TEST ONLY — Replacement story',
+      title: 'TEST ONLY - Replacement story',
       version: 1,
     })
     api.setStory(storyA.currentStory)
@@ -660,7 +660,7 @@ test.describe('Reader cross-version progress decisions', () => {
 
     const offlineStory = makeReaderStory({
       slug: 'offline-progress-story',
-      title: 'TEST ONLY — Offline progress',
+      title: 'TEST ONLY - Offline progress',
     })
     api.setStory(offlineStory)
     api.enqueueProgressGet(offlineStory.slug, { abort: 'failed' })

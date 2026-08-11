@@ -15,7 +15,7 @@ BEGIN
       AND visibility = 'public'
       AND owner_account_id IS NULL
       AND slug = 'test-only-moonlit-cafe'
-      AND title = 'TEST ONLY — Moonlit Café'
+      AND title = 'TEST ONLY - Moonlit Café'
       AND author = 'Panda Pages Test Fixture'
       AND language = 'en-GB'
       AND rights = '{"license":"test-only","test_fixture":true}'::jsonb
@@ -43,7 +43,7 @@ JOIN story_versions AS version
 JOIN profiles AS profile
   ON profile.id = 'f17e0000-0000-4000-8000-000000000002'
  AND profile.account_id = 'f17e0000-0000-4000-8000-000000000001'
- AND profile.name = 'TEST ONLY — Reader'
+ AND profile.name = 'TEST ONLY - Reader'
 WHERE story.id = 'f17e0000-0000-4000-8000-000000000010'
 ON CONFLICT (account_id, profile_id, story_id) DO UPDATE SET
   account_id = EXCLUDED.account_id,

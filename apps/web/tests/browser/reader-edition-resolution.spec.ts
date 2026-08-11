@@ -15,7 +15,7 @@ test.describe('Reader edition resolution', () => {
     const classic = makeReaderStory({ version: 1 })
     const listeners = makeReaderStory({
       version: 2,
-      title: 'TEST ONLY — Moonlit Café for Little Listeners',
+      title: 'TEST ONLY - Moonlit Café for Little Listeners',
     })
     api.setEditionStory('classic', classic)
     api.setEditionStory('little-listeners', listeners)
@@ -70,7 +70,7 @@ test.describe('Reader edition resolution', () => {
     const classic = makeReaderStory({ version: 1 })
     const listeners = makeReaderStory({
       version: 2,
-      title: 'TEST ONLY — Moonlit Café for Little Listeners',
+      title: 'TEST ONLY - Moonlit Café for Little Listeners',
     })
     api.setEditionStory('classic', classic)
     api.setEditionStory('little-listeners', listeners)

@@ -1181,11 +1181,11 @@ test.describe('Reader paged reading', () => {
     await seedReaderPreferences(page)
     const storyA = makePagedReaderStory({
       slug: 'paged-story-a',
-      title: 'TEST ONLY — Paged Story A',
+      title: 'TEST ONLY - Paged Story A',
     })
     const storyB = makePagedReaderStory({
       slug: 'paged-story-b',
-      title: 'TEST ONLY — Paged Story B',
+      title: 'TEST ONLY - Paged Story B',
     })
     api.setStory(storyA)
     api.setStory(storyB)

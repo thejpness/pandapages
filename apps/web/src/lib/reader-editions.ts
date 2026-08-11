@@ -3,7 +3,7 @@ import { readerEditionKeys, type ReaderEditionKey } from './api'
 export const readerEditionOrder = readerEditionKeys
 
 export const readerEditionAgeGuideNote =
-  'Ages are only a guide — choose the reading level that feels right.'
+  'Ages are only a guide - choose the reading level that feels right.'
 
 type ReaderEditionPresentation = {
   label: string
@@ -59,5 +59,5 @@ export function readerEditionAgeStage(key: ReaderEditionKey): string {
 }
 
 export function readerEditionOptionLabel(key: ReaderEditionKey): string {
-  return `${readerEditionLabel(key)} — ${readerEditionAgeStage(key)}`
+  return `${readerEditionLabel(key)} - ${readerEditionAgeStage(key)}`
 }

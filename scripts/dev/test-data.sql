@@ -11,7 +11,7 @@ BEGIN
   IF EXISTS (
     SELECT 1 FROM accounts
     WHERE id = 'f17e0000-0000-4000-8000-000000000001'
-      AND name IS DISTINCT FROM 'TEST ONLY — Reader Fixture Account'
+      AND name IS DISTINCT FROM 'TEST ONLY - Reader Fixture Account'
   ) THEN
     RAISE EXCEPTION 'fixed account fixture ID is already in unrelated use';
   END IF;
@@ -21,7 +21,7 @@ BEGIN
     WHERE id = 'f17e0000-0000-4000-8000-000000000002'
       AND (
         account_id IS DISTINCT FROM 'f17e0000-0000-4000-8000-000000000001'
-        OR name IS DISTINCT FROM 'TEST ONLY — Reader'
+        OR name IS DISTINCT FROM 'TEST ONLY - Reader'
         OR reading_level IS DISTINCT FROM 'classic'
         OR pin_hash IS NOT NULL
         OR pin_failed_attempts <> 0
@@ -46,7 +46,7 @@ BEGIN
         visibility IS DISTINCT FROM 'public'
         OR owner_account_id IS NOT NULL
         OR slug IS DISTINCT FROM 'test-only-moonlit-cafe'
-        OR title IS DISTINCT FROM 'TEST ONLY — Moonlit Café'
+        OR title IS DISTINCT FROM 'TEST ONLY - Moonlit Café'
         OR author IS DISTINCT FROM 'Panda Pages Test Fixture'
         OR language IS DISTINCT FROM 'en-GB'
         OR rights IS DISTINCT FROM '{"license":"test-only","test_fixture":true}'::jsonb
@@ -69,7 +69,7 @@ $$;
 INSERT INTO accounts (id, name)
 VALUES (
   'f17e0000-0000-4000-8000-000000000001',
-  'TEST ONLY — Reader Fixture Account'
+  'TEST ONLY - Reader Fixture Account'
 )
 ON CONFLICT (id) DO NOTHING;
 
@@ -77,7 +77,7 @@ INSERT INTO profiles (id, account_id, name, reading_level)
 VALUES (
   'f17e0000-0000-4000-8000-000000000002',
   'f17e0000-0000-4000-8000-000000000001',
-  'TEST ONLY — Reader',
+  'TEST ONLY - Reader',
   'classic'
 )
 ON CONFLICT (id) DO NOTHING;
@@ -100,7 +100,7 @@ VALUES (
   'public',
   NULL,
   'test-only-moonlit-cafe',
-  'TEST ONLY — Moonlit Café',
+  'TEST ONLY - Moonlit Café',
   'Panda Pages Test Fixture',
   'en-GB',
   '{"license":"test-only","test_fixture":true}'::jsonb
@@ -143,11 +143,11 @@ VALUES (
       AND edition_key = 'classic'
   ),
   1,
-  '{"author":"Panda Pages Test Fixture","language":"en-GB","rights":{"license":"test-only","test_fixture":true},"tags":["test-only","reader","utf-8"],"test_fixture":true,"title":"TEST ONLY — Moonlit Café"}'::jsonb,
-  E'# TEST ONLY — Moonlit Café\n\nPöndá carried a lantern past the café window.\n\n## Chapter One — Lanterns\n\n“Ready?” asked Pöndá. The moon replied, “Oui — allons-y!”\n\n## Chapter Two — 世界\n\n星の光 shimmered over the quiet water. 🐼\n',
-  E'<h1 id="test-only--moonlit-caf">TEST ONLY — Moonlit Café</h1>\n<p>Pöndá carried a lantern past the café window.</p>\n<h2 id="chapter-one--lanterns">Chapter One — Lanterns</h2>\n<p>“Ready?” asked Pöndá. The moon replied, “Oui — allons-y!”</p>\n<h2 id="chapter-two--">Chapter Two — 世界</h2>\n<p>星の光 shimmered over the quiet water. 🐼</p>\n',
+  '{"author":"Panda Pages Test Fixture","language":"en-GB","rights":{"license":"test-only","test_fixture":true},"tags":["test-only","reader","utf-8"],"test_fixture":true,"title":"TEST ONLY - Moonlit Café"}'::jsonb,
+  E'# TEST ONLY - Moonlit Café\n\nPöndá carried a lantern past the café window.\n\n## Chapter One - Lanterns\n\n“Ready?” asked Pöndá. The moon replied, “Oui - allons-y!”\n\n## Chapter Two - 世界\n\n星の光 shimmered over the quiet water. 🐼\n',
+  E'<h1 id="test-only--moonlit-caf">TEST ONLY - Moonlit Café</h1>\n<p>Pöndá carried a lantern past the café window.</p>\n<h2 id="chapter-one--lanterns">Chapter One - Lanterns</h2>\n<p>“Ready?” asked Pöndá. The moon replied, “Oui - allons-y!”</p>\n<h2 id="chapter-two--">Chapter Two - 世界</h2>\n<p>星の光 shimmered over the quiet water. 🐼</p>\n',
   encode(digest(
-    E'# TEST ONLY — Moonlit Café\n\nPöndá carried a lantern past the café window.\n\n## Chapter One — Lanterns\n\n“Ready?” asked Pöndá. The moon replied, “Oui — allons-y!”\n\n## Chapter Two — 世界\n\n星の光 shimmered over the quiet water. 🐼\n',
+    E'# TEST ONLY - Moonlit Café\n\nPöndá carried a lantern past the café window.\n\n## Chapter One - Lanterns\n\n“Ready?” asked Pöndá. The moon replied, “Oui - allons-y!”\n\n## Chapter Two - 世界\n\n星の光 shimmered over the quiet water. 🐼\n',
     'sha256'
   ), 'hex')
 )
@@ -172,14 +172,14 @@ VALUES
     'f17e0000-0000-4000-8000-000000000020',
     'f17e0000-0000-4000-8000-000000000011',
     'chapter',
-    'Chapter One — Lanterns',
+    'Chapter One - Lanterns',
     1
   ),
   (
     'f17e0000-0000-4000-8000-000000000021',
     'f17e0000-0000-4000-8000-000000000011',
     'chapter',
-    'Chapter Two — 世界',
+    'Chapter Two - 世界',
     2
   );
 
@@ -198,8 +198,8 @@ VALUES
     'heading', 1,
     'd31878cf2371f991a595a486444819b429166c113ee33c598822396243a5c3bc', 1,
     NULL, NULL,
-    '# TEST ONLY — Moonlit Café',
-    E'<h1 id="test-only--moonlit-caf">TEST ONLY — Moonlit Café</h1>\n',
+    '# TEST ONLY - Moonlit Café',
+    E'<h1 id="test-only--moonlit-caf">TEST ONLY - Moonlit Café</h1>\n',
     5
   ),
   (
@@ -222,8 +222,8 @@ VALUES
     'heading', 2,
     '6f744b440fbf4fa52da46bebf4fd3e5f2de7a1c2fb11f7e9ac2794ccd1956c4e', 1,
     '6f744b440fbf4fa52da46bebf4fd3e5f2de7a1c2fb11f7e9ac2794ccd1956c4e', 1,
-    '## Chapter One — Lanterns',
-    E'<h2 id="chapter-one--lanterns">Chapter One — Lanterns</h2>\n',
+    '## Chapter One - Lanterns',
+    E'<h2 id="chapter-one--lanterns">Chapter One - Lanterns</h2>\n',
     4
   ),
   (
@@ -234,8 +234,8 @@ VALUES
     'paragraph', NULL,
     'aae1f4bebb97b03ea9d0cfd5431675a250ab6a14be567445b1bb250874574e19', 1,
     '6f744b440fbf4fa52da46bebf4fd3e5f2de7a1c2fb11f7e9ac2794ccd1956c4e', 1,
-    '“Ready?” asked Pöndá. The moon replied, “Oui — allons-y!”',
-    E'<p>“Ready?” asked Pöndá. The moon replied, “Oui — allons-y!”</p>\n',
+    '“Ready?” asked Pöndá. The moon replied, “Oui - allons-y!”',
+    E'<p>“Ready?” asked Pöndá. The moon replied, “Oui - allons-y!”</p>\n',
     9
   ),
   (
@@ -246,8 +246,8 @@ VALUES
     'heading', 2,
     '3749b6630ab08c6998fd65117d5265c7e7514e35f02022a4005505d0aba52a73', 1,
     '3749b6630ab08c6998fd65117d5265c7e7514e35f02022a4005505d0aba52a73', 1,
-    '## Chapter Two — 世界',
-    E'<h2 id="chapter-two--">Chapter Two — 世界</h2>\n',
+    '## Chapter Two - 世界',
+    E'<h2 id="chapter-two--">Chapter Two - 世界</h2>\n',
     4
   ),
   (

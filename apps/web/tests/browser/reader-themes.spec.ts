@@ -249,7 +249,7 @@ test.describe('Reader colour themes', () => {
     await expect(
       disclosure.locator('.reader-settings-disclosure__indicator'),
     ).toBeVisible()
-    await expect(disclosure).not.toContainText('—')
+    await expect(disclosure).not.toContainText('-')
     await expect(dialog.getByRole('group', { name: 'Page style' })).toBeHidden()
     const pageStyle = await expandPageStyle(dialog, 'Paper')
     await expect(pageStyle.getByRole('radio')).toHaveCount(5)

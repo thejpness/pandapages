@@ -54,7 +54,7 @@ func TestReaderLibraryIntegration(t *testing.T) {
 	store := newReaderIntegrationStore(t, databaseURL)
 	author := "Panda Pages Library Fixture"
 	language := "en-GB"
-	title := "TEST ONLY — Profile Library"
+	title := "TEST ONLY - Profile Library"
 	bundle, err := store.AdminEditionBundleUpsert(model.AdminEditionBundleUpsertRequest{
 		Slug:     slug,
 		Title:    title,

@@ -171,7 +171,7 @@ watch(
       Number.isSafeInteger(reused) &&
       reused >= 0 &&
       created + reused === 5
-    ) actionMessage.value = `Five reading editions ingested as drafts — ${created} created, ${reused} reused. Nothing was published.`
+    ) actionMessage.value = `Five reading editions ingested as drafts - ${created} created, ${reused} reused. Nothing was published.`
     void loadStory()
   },
   { immediate: true },

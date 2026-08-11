@@ -18,7 +18,7 @@ WHERE id = 'f17e0000-0000-4000-8000-000000000010'
   AND slug = 'test-only-moonlit-cafe'
   AND visibility = 'public'
   AND owner_account_id IS NULL
-  AND title = 'TEST ONLY — Moonlit Café'
+  AND title = 'TEST ONLY - Moonlit Café'
   AND author = 'Panda Pages Test Fixture'
   AND language = 'en-GB'
   AND rights = '{"license":"test-only","test_fixture":true}'::jsonb;
@@ -35,7 +35,7 @@ WHERE contributor.id = 'f17e0000-0000-4000-8000-000000000004'
 DELETE FROM profiles AS profile
 WHERE profile.id = 'f17e0000-0000-4000-8000-000000000002'
   AND profile.account_id = 'f17e0000-0000-4000-8000-000000000001'
-  AND profile.name = 'TEST ONLY — Reader'
+  AND profile.name = 'TEST ONLY - Reader'
   AND profile.reading_level = 'classic'
   AND profile.pin_hash IS NULL
   AND profile.pin_failed_attempts = 0
@@ -48,7 +48,7 @@ WHERE profile.id = 'f17e0000-0000-4000-8000-000000000002'
 
 DELETE FROM accounts AS account
 WHERE account.id = 'f17e0000-0000-4000-8000-000000000001'
-  AND account.name = 'TEST ONLY — Reader Fixture Account'
+  AND account.name = 'TEST ONLY - Reader Fixture Account'
   AND NOT EXISTS (
     SELECT 1 FROM profiles WHERE account_id = account.id
   )

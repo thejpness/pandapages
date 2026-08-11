@@ -30,7 +30,7 @@ test.describe('Reader content and route states', () => {
       ),
     ).toEqual([1, 2, 3, 4, 5, 6])
     await expect(page.getByText(/Pöndá carried a lantern/).first()).toBeVisible()
-    await expect(page.getByRole('heading', { name: 'Chapter Two — 世界' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Chapter Two - 世界' })).toBeVisible()
     await expect(page.getByText(/星の光 shimmered/).first()).toBeVisible()
     await expect(page.getByRole('heading', { level: 1, name: story?.title })).toHaveCount(1)
 
@@ -116,8 +116,8 @@ test.describe('Reader content and route states', () => {
     page,
     api,
   }) => {
-    const storyA = makeReaderStory({ slug: 'story-a', title: 'TEST ONLY — Story A' })
-    const storyB = makeReaderStory({ slug: 'story-b', title: 'TEST ONLY — Story B' })
+    const storyA = makeReaderStory({ slug: 'story-a', title: 'TEST ONLY - Story A' })
+    const storyB = makeReaderStory({ slug: 'story-b', title: 'TEST ONLY - Story B' })
     api.setStory(storyA)
     api.setStory(storyB)
     api.libraryItems = [

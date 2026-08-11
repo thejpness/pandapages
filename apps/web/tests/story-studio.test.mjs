@@ -131,7 +131,7 @@ test('plain-text chapter headings are promoted deterministically', async () => {
   const form = await loadForm()
   assert.equal(
     form.promoteStoryChapters('CHAPTER iv. A New Friend\nText.\nPART 2\nMore.'),
-    '## CHAPTER IV — A New Friend\n\nText.\n## PART 2\n\nMore.',
+    '## CHAPTER IV - A New Friend\n\nText.\n## PART 2\n\nMore.',
   )
 })
 

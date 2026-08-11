@@ -265,7 +265,7 @@ export function promoteStoryChapters(text: string): string {
     }
     const suffix = match[3]?.trim()
     output.push(
-      `## ${match[1].toUpperCase()} ${match[2].toUpperCase()}${suffix ? ` — ${suffix}` : ''}`,
+      `## ${match[1].toUpperCase()} ${match[2].toUpperCase()}${suffix ? ` - ${suffix}` : ''}`,
       '',
     )
   }

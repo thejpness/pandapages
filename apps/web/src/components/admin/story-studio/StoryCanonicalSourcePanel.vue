@@ -8,7 +8,7 @@ const emit = defineEmits<{ edit: [] }>()
   <section class="source-panel studio-panel" aria-labelledby="canonical-source-title">
     <div class="source-panel__heading"><div><p class="studio-page-heading__eyebrow">Canonical original</p><h2 id="canonical-source-title">Source material</h2></div><StoryStatusBadge :source-status="source.status" /></div>
     <p>The canonical source is separate from every Panda Pages reading edition. It is never treated as Classic and never appears directly in Reader.</p>
-    <dl><div><dt>Current revision</dt><dd>{{ source.currentVersion ? `r${source.currentVersion.version}` : '—' }}</dd></div><div><dt>Source history</dt><dd>{{ source.versionCount }}</dd></div></dl>
+    <dl><div><dt>Current revision</dt><dd>{{ source.currentVersion ? `r${source.currentVersion.version}` : '-' }}</dd></div><div><dt>Source history</dt><dd>{{ source.versionCount }}</dd></div></dl>
     <button type="button" class="studio-button studio-button--quiet" :disabled="source.status === 'repair_required'" @click="emit('edit')">{{ source.status === 'missing' ? 'Add canonical source' : 'Edit canonical source' }}</button>
     <p v-if="source.status === 'repair_required'" class="source-panel__warning">Stored source provenance needs repair before it can be edited safely.</p>
   </section>

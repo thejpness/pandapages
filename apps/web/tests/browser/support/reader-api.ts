@@ -126,12 +126,12 @@ function repeated(value: string, count = 18): string {
 export function makeReaderStory(
   overrides: Partial<Pick<ReaderStoryFixture, 'slug' | 'title' | 'author' | 'language' | 'version'>> = {},
 ): ReaderStoryFixture {
-  const title = overrides.title ?? 'TEST ONLY — Moonlit Café'
+  const title = overrides.title ?? 'TEST ONLY - Moonlit Café'
   const opening = repeated(
     'Pöndá carried a lantern past the café window while the quiet harbour waited.',
   )
   const firstChapter = repeated(
-    '“Ready?” asked Pöndá. The moon replied, “Oui — allons-y!” and the lantern glowed.',
+    '“Ready?” asked Pöndá. The moon replied, “Oui - allons-y!” and the lantern glowed.',
   )
   const secondChapter = repeated(
     '星の光 shimmered over the quiet water while a sleepy panda watched. 🐼',
@@ -176,7 +176,7 @@ export function makeReaderStory(
         contentOccurrence: 1,
         chapterKey: chapterOneKey,
         chapterOccurrence: 1,
-        renderedHtml: '<h2>Chapter One — Lanterns</h2>',
+        renderedHtml: '<h2>Chapter One - Lanterns</h2>',
         wordCount: 4,
       },
       {
@@ -199,7 +199,7 @@ export function makeReaderStory(
         contentOccurrence: 1,
         chapterKey: chapterTwoKey,
         chapterOccurrence: 1,
-        renderedHtml: '<h2>Chapter Two — 世界</h2>',
+        renderedHtml: '<h2>Chapter Two - 世界</h2>',
         wordCount: 4,
       },
       {
@@ -798,7 +798,7 @@ function fixtureKey(seed: number): string {
 export function makePagedReaderStory(
   overrides: Partial<Pick<ReaderStoryFixture, 'slug' | 'title' | 'author' | 'language' | 'version'>> = {},
 ): ReaderStoryFixture {
-  const title = overrides.title ?? 'TEST ONLY — Paged Moonlight'
+  const title = overrides.title ?? 'TEST ONLY - Paged Moonlight'
   const repeatedChapterKey = fixtureKey(900)
   const finalChapterKey = fixtureKey(901)
   const paragraph = repeated(
@@ -930,7 +930,7 @@ export function makePagedReaderStory(
 export function makeLongUnbrokenReaderStory(
   overrides: Partial<Pick<ReaderStoryFixture, 'slug' | 'title' | 'author' | 'language' | 'version'>> = {},
 ): ReaderStoryFixture {
-  const title = overrides.title ?? 'TEST ONLY — Long Unbroken Page'
+  const title = overrides.title ?? 'TEST ONLY - Long Unbroken Page'
   const ascii = 'PandaPagesReadingToken'.repeat(220)
   const cjk = '月夜熊猫物語'.repeat(360)
 
@@ -992,7 +992,7 @@ export function makeLongUnbrokenReaderStory(
 export function makeMeasuredOverflowReaderStory(
   overrides: Partial<Pick<ReaderStoryFixture, 'slug' | 'title' | 'author' | 'language' | 'version'>> = {},
 ): ReaderStoryFixture {
-  const title = overrides.title ?? 'TEST ONLY — Measured Overflow'
+  const title = overrides.title ?? 'TEST ONLY - Measured Overflow'
   const sparseCode = Array.from({ length: 90 }, (_, index) =>
     index % 15 === 0 ? 'panda' : '',
   ).join('\n')
@@ -1044,7 +1044,7 @@ export function makeMeasuredOverflowReaderStory(
 export function makeOversizedReaderStory(
   overrides: Partial<Pick<ReaderStoryFixture, 'slug' | 'title' | 'author' | 'language' | 'version'>> = {},
 ): ReaderStoryFixture {
-  const title = overrides.title ?? 'TEST ONLY — Oversized Page'
+  const title = overrides.title ?? 'TEST ONLY - Oversized Page'
   const chapterKey = fixtureKey(950)
   const longParagraph = repeated(
     'A very long moonlit paragraph remains readable without clipping or splitting.',

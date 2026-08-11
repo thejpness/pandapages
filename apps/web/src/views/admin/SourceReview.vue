@@ -192,7 +192,7 @@ function providerContributorText(contributor: {
     contributor.birthYear || contributor.deathYear
       ? ` (${contributor.birthYear ?? "?"}–${contributor.deathYear ?? "?"})`
       : "";
-  return `${contributor.name} — ${contributor.role}${years}`;
+  return `${contributor.name} - ${contributor.role}${years}`;
 }
 
 function statusLabel(status: string) {

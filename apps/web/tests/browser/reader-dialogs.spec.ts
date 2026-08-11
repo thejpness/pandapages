@@ -120,8 +120,8 @@ test.describe('Reader settings and chapters', () => {
     await trigger.click()
     const dialog = page.getByRole('dialog', { name: 'Chapters' })
     await expect(dialog.getByRole('navigation', { name: 'Story chapters' })).toBeVisible()
-    await expect(dialog.getByRole('button', { name: /Chapter One — Lanterns/ })).toBeVisible()
-    await expect(dialog.getByRole('button', { name: /Chapter Two — 世界/ })).toBeVisible()
+    await expect(dialog.getByRole('button', { name: /Chapter One - Lanterns/ })).toBeVisible()
+    await expect(dialog.getByRole('button', { name: /Chapter Two - 世界/ })).toBeVisible()
     await expectFocusTrapped(page, 'Chapters')
 
     await page.keyboard.press('Escape')
@@ -138,12 +138,12 @@ test.describe('Reader settings and chapters', () => {
     const trigger = page.getByRole('button', { name: 'Chapters' })
     await trigger.click()
     await page.getByRole('dialog', { name: 'Chapters' })
-      .getByRole('button', { name: /Chapter Two — 世界/ })
+      .getByRole('button', { name: /Chapter Two - 世界/ })
       .click()
 
     await expect(page.getByRole('dialog', { name: 'Chapters' })).toBeHidden()
     await expect(trigger).toBeFocused()
-    await expect(page.locator('.reader-sr-only[role="status"]')).toContainText('Moved to Chapter Two — 世界.')
+    await expect(page.locator('.reader-sr-only[role="status"]')).toContainText('Moved to Chapter Two - 世界.')
     await expectSegmentAtReadingLine(page, 5, 0)
     const request = await put.started
     expectLocatorV2Request(request, { ordinal: 5 })

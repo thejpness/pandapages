@@ -15,8 +15,8 @@ const emit = defineEmits<{ select: [key: AdminStoryEditionKey]; edit: [key: Admi
           <StoryStatusBadge :edition-status="edition.status" />
         </button>
         <dl>
-          <div><dt>Draft</dt><dd>{{ edition.draftVersion ? `v${edition.draftVersion.version}` : '—' }}</dd></div>
-          <div><dt>Published</dt><dd>{{ edition.publishedVersion ? `v${edition.publishedVersion.version}` : '—' }}</dd></div>
+          <div><dt>Draft</dt><dd>{{ edition.draftVersion ? `v${edition.draftVersion.version}` : '-' }}</dd></div>
+          <div><dt>Published</dt><dd>{{ edition.publishedVersion ? `v${edition.publishedVersion.version}` : '-' }}</dd></div>
           <div><dt>History</dt><dd>{{ edition.versionCount }}</dd></div>
         </dl>
         <button type="button" class="studio-button studio-button--quiet edition-card__edit" @click="emit('edit', edition.editionKey)">{{ edition.status === 'empty' ? 'Create edition' : 'Edit edition' }}</button>

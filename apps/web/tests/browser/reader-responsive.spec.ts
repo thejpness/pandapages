@@ -80,7 +80,7 @@ test.describe('Reader responsive smoke contracts', () => {
   }) => {
     await page.setViewportSize({ width: 640, height: 450 })
     const title =
-      'TEST ONLY — The Moonlit Harbour and the Very Long Journey Home Together'
+      'TEST ONLY - The Moonlit Harbour and the Very Long Journey Home Together'
     api.setStory(makeReaderStory({ title }))
     await gotoReader(page, api, READER_SLUG)
 
@@ -100,7 +100,7 @@ test.describe('Reader responsive smoke contracts', () => {
     })
 
     const title =
-      'TEST ONLY — The Moonlit Harbour and the Exceptionally Long Journey Home Together'
+      'TEST ONLY - The Moonlit Harbour and the Exceptionally Long Journey Home Together'
     const story = makePagedReaderStory({ title })
     const opening = story.segments[0]
     if (!opening) {
@@ -149,7 +149,7 @@ test.describe('Reader responsive smoke contracts', () => {
       })
 
       const title =
-        'TEST ONLY — The Moonlit Harbour and the Exceptionally Long Journey Home Together'
+        'TEST ONLY - The Moonlit Harbour and the Exceptionally Long Journey Home Together'
       const story = makePagedReaderStory({ title })
       const opening = story.segments[0]
       if (!opening) {

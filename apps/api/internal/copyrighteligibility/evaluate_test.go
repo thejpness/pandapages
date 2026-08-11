@@ -213,7 +213,7 @@ func TestEvaluateUKKnownExceptionsBlockSupportedPath(t *testing.T) {
 		author string
 		reason ReasonCode
 	}{
-		{"Peter Pan uses normalized title and Barrie identity", "PETER—PAN", "Barrie, J. M. (James Matthew), 1860-1937", ReasonUKKnownExceptionPeterPan},
+		{"Peter Pan uses normalized title and Barrie identity", "PETER-PAN", "Barrie, J. M. (James Matthew), 1860-1937", ReasonUKKnownExceptionPeterPan},
 		{"King James Bible title alias", "The King James Bible", "", ReasonUKKnownExceptionKingJamesBible},
 		{"Authorized Version title alias", "AUTHORIZED VERSION", "", ReasonUKKnownExceptionKingJamesBible},
 		{"Book of Common Prayer title alias", "The Book of Common Prayer", "", ReasonUKKnownExceptionBookOfCommonPrayer},

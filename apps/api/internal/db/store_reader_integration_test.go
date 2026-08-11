@@ -116,10 +116,10 @@ func TestReaderStoreIntegration(t *testing.T) {
 	language := "en-GB"
 	firstDraft, err := store.AdminDraftUpsert(model.AdminDraftUpsertRequest{
 		Slug:     readerSlug,
-		Title:    "TEST ONLY — Coherent Reader",
+		Title:    "TEST ONLY - Coherent Reader",
 		Author:   &author,
 		Language: &language,
-		Markdown: "# TEST ONLY — Coherent Reader\n\nOpening café 世界.\n\n## Chapter One\n\nRepeated paragraph.\n\n## Chapter Two\n\nRepeated paragraph.\n",
+		Markdown: "# TEST ONLY - Coherent Reader\n\nOpening café 世界.\n\n## Chapter One\n\nRepeated paragraph.\n\n## Chapter Two\n\nRepeated paragraph.\n",
 	})
 	if err != nil {
 		t.Fatalf("insert first Reader draft: %v", err)
@@ -138,7 +138,7 @@ func TestReaderStoreIntegration(t *testing.T) {
 
 	secondDraft, err := store.AdminDraftUpsert(model.AdminDraftUpsertRequest{
 		Slug:     readerSlug,
-		Title:    "TEST ONLY — Coherent Reader",
+		Title:    "TEST ONLY - Coherent Reader",
 		Author:   &author,
 		Language: &language,
 		Markdown: "# Updated Reader\n\nNewest paragraph.\n",

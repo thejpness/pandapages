@@ -248,14 +248,14 @@ test.describe('reader profile lifecycle', () => {
     const newProfileLevel = page.getByLabel("Reading level")
     await expect(newProfileLevel).toBeVisible()
     await expect(newProfileLevel.locator("option")).toHaveText([
-      "Classic — Approx. ages 11+ · Fullest reading experience",
-      "Confident Readers — Approx. ages 9–11 · Fluent readers",
-      "Growing Readers — Approx. ages 7–9 · Independent reading",
-      "Story Explorers — Approx. ages 5–7 · Early readers",
-      "Little Listeners — Approx. ages 3–5 · Read together",
+      "Classic - Approx. ages 11+ · Fullest reading experience",
+      "Confident Readers - Approx. ages 9–11 · Fluent readers",
+      "Growing Readers - Approx. ages 7–9 · Independent reading",
+      "Story Explorers - Approx. ages 5–7 · Early readers",
+      "Little Listeners - Approx. ages 3–5 · Read together",
     ])
     await expect(page.getByText("Approx. ages 11+ · Fullest reading experience", { exact: true })).toBeVisible()
-    await expect(page.getByText("Ages are only a guide — choose the reading level that feels right.", { exact: true })).toBeVisible()
+    await expect(page.getByText("Ages are only a guide - choose the reading level that feels right.", { exact: true })).toBeVisible()
     await newProfileLevel.selectOption("little-listeners")
     await expect(page.getByText("Approx. ages 3–5 · Read together", { exact: true })).toBeVisible()
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
@@ -264,7 +264,7 @@ test.describe('reader profile lifecycle', () => {
     await expect(page.getByRole("heading", { level: 1, name: "Edit Mina" })).toBeVisible()
     await expect(page.getByLabel("Reading level")).toHaveValue("little-listeners")
     await expect(page.getByText("Approx. ages 3–5 · Read together", { exact: true })).toBeVisible()
-    await expect(page.getByText("Ages are only a guide — choose the reading level that feels right.", { exact: true })).toBeVisible()
+    await expect(page.getByText("Ages are only a guide - choose the reading level that feels right.", { exact: true })).toBeVisible()
     await expect(page.getByRole("heading", { level: 2, name: "PIN and access" })).toBeVisible()
     await expect(page.getByRole("heading", { level: 2, name: "Delete profile" })).toBeVisible()
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)

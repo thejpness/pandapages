@@ -53,7 +53,7 @@ func TestReaderResolutionIntegration(t *testing.T) {
 	store := newReaderIntegrationStore(t, databaseURL)
 	author := "Panda Pages Resolution Fixture"
 	language := "en-GB"
-	initialTitle := "TEST ONLY — Reader Release Resolution"
+	initialTitle := "TEST ONLY - Reader Release Resolution"
 	bundle, err := store.AdminEditionBundleUpsert(model.AdminEditionBundleUpsertRequest{
 		Slug:     slug,
 		Title:    initialTitle,
