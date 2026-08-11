@@ -29,7 +29,7 @@ const (
 // RDFEvidence retrieves and extracts bounded official Project Gutenberg RDF
 // evidence for a validated work ID. It does not persist evidence or evaluate
 // copyright eligibility.
-func (a *Adapter) RDFEvidence(ctx context.Context, externalID string) (copyrighteligibility.ProviderEvidence, error) {
+func (a *Adapter) CopyrightEvidence(ctx context.Context, externalID string) (copyrighteligibility.ProviderEvidence, error) {
 	if !validExternalID(externalID) {
 		return copyrighteligibility.ProviderEvidence{}, sourceprovider.ErrWorkIDInvalid
 	}
@@ -410,3 +410,5 @@ func classifySourceHeaderRights(content []byte) copyrighteligibility.SourceHeade
 		return copyrighteligibility.SourceHeaderRightsNoClassification
 	}
 }
+
+var _ sourceprovider.CopyrightEvidenceReader = (*Adapter)(nil)

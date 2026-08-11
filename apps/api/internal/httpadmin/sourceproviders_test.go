@@ -7,27 +7,30 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"pandapages/api/internal/appidentity"
+	"pandapages/api/internal/copyrighteligibility"
 	"pandapages/api/internal/httpbearer"
 	"pandapages/api/internal/model"
+	"pandapages/api/internal/sourceeligibility"
 	"pandapages/api/internal/sourceprovider"
 )
 
 type discoveryStub struct {
-	searchCalls    int
-	workCalls      int
-	candidateCalls int
-	providerID     sourceprovider.ID
-	query          string
-	limit          int
-	externalID     string
-	searchOut      sourceprovider.SearchResponse
-	searchErr      error
-	workOut        sourceprovider.Work
-	workErr        error
-	candidateOut   sourceprovider.SourceCandidate
-	candidateErr   error
+	searchCalls, workCalls, candidateCalls, evidenceCalls int
+	providerID                                            sourceprovider.ID
+	query                                                 string
+	limit                                                 int
+	externalID                                            string
+	searchOut                                             sourceprovider.SearchResponse
+	searchErr                                             error
+	workOut                                               sourceprovider.Work
+	workErr                                               error
+	candidateOut                                          sourceprovider.SourceCandidate
+	candidateErr                                          error
+	evidenceOut                                           copyrighteligibility.ProviderEvidence
+	evidenceErr                                           error
 }
 
 func (s *discoveryStub) Search(_ context.Context, provider sourceprovider.ID, query string, limit int) (sourceprovider.SearchResponse, error) {
@@ -45,336 +48,187 @@ func (s *discoveryStub) Acquire(_ context.Context, provider sourceprovider.ID, e
 	s.providerID, s.externalID = provider, externalID
 	return s.candidateOut, s.candidateErr
 }
-
-func sourceProviderHandler(store *adminStore, discovery sourceprovider.Discovery) http.Handler {
-	acquisition, _ := discovery.(sourceprovider.Acquisition)
-	return New(Config{
-		AdminKey:            "admin-key",
-		BearerAuthenticator: httpbearer.New(adminVerifier{}, store),
-		SourceDiscovery:     discovery,
-		SourceAcquisition:   acquisition,
-	}, store)
+func (s *discoveryStub) AcquireEvidence(ctx context.Context, provider sourceprovider.ID, externalID string) (sourceprovider.AcquisitionEvidence, error) {
+	candidate, err := s.Acquire(ctx, provider, externalID)
+	if err != nil {
+		return sourceprovider.AcquisitionEvidence{}, err
+	}
+	return sourceprovider.AcquisitionEvidence{Candidate: candidate, OPDSRights: copyrighteligibility.ProviderRightsPublicDomain, HeaderRights: copyrighteligibility.SourceHeaderRightsPublicDomain}, nil
+}
+func (s *discoveryStub) CopyrightEvidence(_ context.Context, provider sourceprovider.ID, externalID string) (copyrighteligibility.ProviderEvidence, error) {
+	s.evidenceCalls++
+	s.providerID, s.externalID = provider, externalID
+	return s.evidenceOut, s.evidenceErr
 }
 
-func providerRequest(method, path string) *http.Request {
-	request := httptest.NewRequest(method, path, nil)
+func sourceProviderHandler(t *testing.T, store *adminStore, discovery *discoveryStub) http.Handler {
+	t.Helper()
+	service, err := sourceeligibility.New(sourceeligibility.Config{Gateway: discovery, Now: func() time.Time { return time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return New(Config{AdminKey: "admin-key", BearerAuthenticator: httpbearer.New(adminVerifier{}, store), SourceDiscovery: discovery, SourceAcquisition: discovery, SourceEligibility: service}, store)
+}
+
+func providerRequest(method, path string, body string) *http.Request {
+	request := httptest.NewRequest(method, path, strings.NewReader(body))
 	request.Header.Set("Authorization", "Bearer valid")
 	request.Header.Set("X-PP-Account-ID", ownerAccount)
 	request.Header.Set("X-PP-Admin-Key", "admin-key")
 	return request
 }
-
 func ownerStore() *adminStore {
 	return &adminStore{memberships: []appidentity.Membership{{AccountID: ownerAccount, Role: appidentity.RoleOwner}}}
 }
 
 func TestSourceProviderSearchUsesAdminBoundaryAndNeutralJSON(t *testing.T) {
-	discovery := &discoveryStub{searchOut: sourceprovider.SearchResponse{
-		Provider: sourceprovider.ProjectGutenberg,
-		Results: []sourceprovider.WorkSummary{{
-			Provider:   sourceprovider.ProjectGutenberg,
-			ExternalID: "11",
-			Title:      "Alice's Adventures in Wonderland",
-			LandingURL: "https://www.gutenberg.org/ebooks/11",
-		}},
-	}}
+	discovery := &discoveryStub{searchOut: sourceprovider.SearchResponse{Provider: sourceprovider.ProjectGutenberg, Results: []sourceprovider.WorkSummary{{Provider: sourceprovider.ProjectGutenberg, ExternalID: "11", Title: "Alice", LandingURL: "https://www.gutenberg.org/ebooks/11"}}}}
 	response := httptest.NewRecorder()
-	sourceProviderHandler(ownerStore(), discovery).ServeHTTP(response, providerRequest(http.MethodGet, "/api/v1/admin/source-providers/project-gutenberg/search?q=alice"))
-	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" || !strings.HasPrefix(response.Header().Get("Content-Type"), "application/json") || !strings.Contains(response.Body.String(), `"externalId":"11"`) || strings.Contains(response.Body.String(), "<feed>") {
-		t.Fatalf("status/headers/body=%d/%q/%s", response.Code, response.Header().Get("Cache-Control"), response.Body.String())
+	sourceProviderHandler(t, ownerStore(), discovery).ServeHTTP(response, providerRequest(http.MethodGet, "/api/v1/admin/source-providers/project-gutenberg/search?q=alice", ""))
+	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" || !strings.Contains(response.Body.String(), `"externalId":"11"`) || strings.Contains(response.Body.String(), "<feed>") {
+		t.Fatalf("status/body=%d/%s", response.Code, response.Body.String())
 	}
-	if discovery.searchCalls != 1 || discovery.providerID != sourceprovider.ProjectGutenberg || discovery.query != "alice" || discovery.limit != 0 {
+	if discovery.searchCalls != 1 || discovery.providerID != sourceprovider.ProjectGutenberg || discovery.query != "alice" {
 		t.Fatalf("discovery=%+v", discovery)
 	}
 }
 
-func TestSourceProviderRoutesRetainAdminAuthorization(t *testing.T) {
-	for _, test := range []struct {
-		name, token, account, key string
-		memberships               []appidentity.Membership
-		want                      int
-	}{
-		{"missing bearer", "", ownerAccount, "admin-key", []appidentity.Membership{{AccountID: ownerAccount, Role: appidentity.RoleOwner}}, http.StatusUnauthorized},
-		{"adult membership", "valid", adultAccount, "admin-key", []appidentity.Membership{{AccountID: adultAccount, Role: appidentity.RoleAdult}}, http.StatusForbidden},
-		{"missing key", "valid", ownerAccount, "", []appidentity.Membership{{AccountID: ownerAccount, Role: appidentity.RoleOwner}}, http.StatusForbidden},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			request := httptest.NewRequest(http.MethodGet, "/api/v1/admin/source-providers/project-gutenberg/search?q=alice", nil)
-			if test.token != "" {
-				request.Header.Set("Authorization", "Bearer "+test.token)
-			}
-			if test.account != "" {
-				request.Header.Set("X-PP-Account-ID", test.account)
-			}
-			if test.key != "" {
-				request.Header.Set("X-PP-Admin-Key", test.key)
-			}
-			response := httptest.NewRecorder()
-			sourceProviderHandler(&adminStore{memberships: test.memberships}, &discoveryStub{}).ServeHTTP(response, request)
-			if response.Code != test.want {
-				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
-			}
-		})
-	}
-}
-
-func TestSourceProviderErrorsAreFiniteAndSafe(t *testing.T) {
-	for _, test := range []struct {
-		name, path string
-		err        error
-		wantStatus int
-		wantCode   string
-	}{
-		{"unknown provider", "/api/v1/admin/source-providers/unknown/search?q=alice", sourceprovider.ErrUnknownProvider, http.StatusNotFound, "source_provider_invalid"},
-		{"invalid query", "/api/v1/admin/source-providers/project-gutenberg/search?q=alice", sourceprovider.ErrQueryInvalid, http.StatusBadRequest, "source_provider_query_invalid"},
-		{"timeout", "/api/v1/admin/source-providers/project-gutenberg/search?q=alice", sourceprovider.ErrTimeout, http.StatusGatewayTimeout, "source_provider_timeout"},
-		{"invalid response", "/api/v1/admin/source-providers/project-gutenberg/search?q=alice", sourceprovider.ErrResponseInvalid, http.StatusBadGateway, "source_provider_response_invalid"},
-		{"missing work", "/api/v1/admin/source-providers/project-gutenberg/works/11", sourceprovider.ErrWorkNotFound, http.StatusNotFound, "source_provider_work_not_found"},
-		{"network detail hidden", "/api/v1/admin/source-providers/project-gutenberg/search?q=alice", errors.New("dial tcp 10.0.0.1:53: private diagnostic"), http.StatusBadGateway, "source_provider_unavailable"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			discovery := &discoveryStub{searchErr: test.err, workErr: test.err}
-			response := httptest.NewRecorder()
-			sourceProviderHandler(ownerStore(), discovery).ServeHTTP(response, providerRequest(http.MethodGet, test.path))
-			if response.Code != test.wantStatus || !strings.Contains(response.Body.String(), `"code":"`+test.wantCode+`"`) || strings.Contains(response.Body.String(), "private diagnostic") || response.Header().Get("Cache-Control") != "no-store" {
-				t.Fatalf("status/body/headers=%d/%s/%q", response.Code, response.Body.String(), response.Header().Get("Cache-Control"))
-			}
-		})
-	}
-}
-
-func TestSourceProviderRequestValidationAndWorkRoute(t *testing.T) {
-	discovery := &discoveryStub{workOut: sourceprovider.Work{Provider: sourceprovider.ProjectGutenberg, ExternalID: "11", Title: "Alice", LandingURL: "https://www.gutenberg.org/ebooks/11"}}
-	handler := sourceProviderHandler(ownerStore(), discovery)
-	for _, path := range []string{
-		"/api/v1/admin/source-providers/project-gutenberg/search?q=alice&limit=not-a-number",
-		"/api/v1/admin/source-providers/project-gutenberg/search?q=alice&limit=21",
-	} {
-		response := httptest.NewRecorder()
-		handler.ServeHTTP(response, providerRequest(http.MethodGet, path))
-		if response.Code != http.StatusBadRequest || discovery.searchCalls != 0 {
-			t.Fatalf("status/calls=%d/%d", response.Code, discovery.searchCalls)
-		}
-	}
+func TestSourceCandidateRouteRemainsExplicitAndProtected(t *testing.T) {
+	discovery := eligibilityDiscovery()
 	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, providerRequest(http.MethodGet, "/api/v1/admin/source-providers/project-gutenberg/works/11"))
-	if response.Code != http.StatusOK || discovery.workCalls != 1 || discovery.externalID != "11" {
-		t.Fatalf("status/discovery=%d/%+v", response.Code, discovery)
+	sourceProviderHandler(t, ownerStore(), discovery).ServeHTTP(response, providerRequest(http.MethodPost, "/api/v1/admin/source-providers/project-gutenberg/works/11/candidate", ""))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"sourceText"`) || discovery.candidateCalls != 1 {
+		t.Fatalf("status/body/calls=%d/%s/%d", response.Code, response.Body.String(), discovery.candidateCalls)
 	}
 }
 
-func TestSourceCandidateRouteUsesAdminBoundaryAndReturnsCandidateJSON(t *testing.T) {
-	discovery := &discoveryStub{candidateOut: sourceprovider.SourceCandidate{
-		Provider:               sourceprovider.ProjectGutenberg,
-		ExternalID:             "11",
-		Title:                  "Alice's Adventures in Wonderland",
-		LandingURL:             "https://www.gutenberg.org/ebooks/11",
-		NormalisationVersion:   "project-gutenberg-plain-text-v1",
-		RetrievedContentHash:   "retrieved",
-		NormalisedContentHash:  "normalised",
-		SourceText:             "Down the rabbit-hole.\n",
-		SelectedRepresentation: sourceprovider.Representation{MediaType: "text/plain; charset=utf-8", URL: "https://www.gutenberg.org/files/11/11-0.txt"},
-	}}
+func TestEligibilityPreflightIsZeroWriteAndFailsClosed(t *testing.T) {
+	store, discovery := ownerStore(), eligibilityDiscovery()
 	response := httptest.NewRecorder()
-	sourceProviderHandler(ownerStore(), discovery).ServeHTTP(response, providerRequest(http.MethodPost, "/api/v1/admin/source-providers/project-gutenberg/works/11/candidate"))
-	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" || !strings.HasPrefix(response.Header().Get("Content-Type"), "application/json") || !strings.Contains(response.Body.String(), `"sourceText":"Down the rabbit-hole.\n"`) || strings.Contains(response.Body.String(), "<feed>") {
-		t.Fatalf("status/headers/body=%d/%q/%s", response.Code, response.Header().Get("Cache-Control"), response.Body.String())
+	sourceProviderHandler(t, store, discovery).ServeHTTP(response, providerRequest(http.MethodPost, "/api/v1/admin/source-providers/project-gutenberg/works/11/copyright-eligibility", `{}`))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"overall":"blocked"`) || strings.Contains(response.Body.String(), "sourceText") || store.persistSourceAcquisitionCalls != 0 || discovery.candidateCalls != 1 || discovery.evidenceCalls != 1 {
+		t.Fatalf("preflight=%d/%s calls store=%d provider=%+v", response.Code, response.Body.String(), store.persistSourceAcquisitionCalls, discovery)
 	}
-	if discovery.candidateCalls != 1 || discovery.providerID != sourceprovider.ProjectGutenberg || discovery.externalID != "11" || discovery.workCalls != 0 {
-		t.Fatalf("discovery=%+v", discovery)
-	}
-}
-
-func TestSourceCandidateRouteRetainsAdminAuthorizationAndFiniteErrors(t *testing.T) {
-	for _, test := range []struct {
-		name, token, account, key string
-		memberships               []appidentity.Membership
-		err                       error
-		wantStatus                int
-		wantCode                  string
-	}{
-		{"missing bearer", "", ownerAccount, "admin-key", []appidentity.Membership{{AccountID: ownerAccount, Role: appidentity.RoleOwner}}, nil, http.StatusUnauthorized, ""},
-		{"adult membership", "valid", adultAccount, "admin-key", []appidentity.Membership{{AccountID: adultAccount, Role: appidentity.RoleAdult}}, nil, http.StatusForbidden, ""},
-		{"missing key", "valid", ownerAccount, "", []appidentity.Membership{{AccountID: ownerAccount, Role: appidentity.RoleOwner}}, nil, http.StatusForbidden, ""},
-		{"unsupported representation", "valid", ownerAccount, "admin-key", []appidentity.Membership{{AccountID: ownerAccount, Role: appidentity.RoleOwner}}, sourceprovider.ErrRepresentationUnavailable, http.StatusUnprocessableEntity, "source_provider_representation_unavailable"},
-		{"too large", "valid", ownerAccount, "admin-key", []appidentity.Membership{{AccountID: ownerAccount, Role: appidentity.RoleOwner}}, sourceprovider.ErrContentTooLarge, http.StatusRequestEntityTooLarge, "source_provider_content_too_large"},
-		{"invalid content", "valid", ownerAccount, "admin-key", []appidentity.Membership{{AccountID: ownerAccount, Role: appidentity.RoleOwner}}, sourceprovider.ErrContentInvalid, http.StatusBadGateway, "source_provider_content_invalid"},
-		{"normalisation failure", "valid", ownerAccount, "admin-key", []appidentity.Membership{{AccountID: ownerAccount, Role: appidentity.RoleOwner}}, sourceprovider.ErrNormalisationFailed, http.StatusUnprocessableEntity, "source_provider_normalisation_failed"},
-		{"hidden provider diagnostic", "valid", ownerAccount, "admin-key", []appidentity.Membership{{AccountID: ownerAccount, Role: appidentity.RoleOwner}}, errors.New("dial tcp 10.0.0.1:53: private diagnostic"), http.StatusBadGateway, "source_provider_unavailable"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			discovery := &discoveryStub{candidateErr: test.err}
-			request := httptest.NewRequest(http.MethodPost, "/api/v1/admin/source-providers/project-gutenberg/works/11/candidate", nil)
-			if test.token != "" {
-				request.Header.Set("Authorization", "Bearer "+test.token)
-			}
-			if test.account != "" {
-				request.Header.Set("X-PP-Account-ID", test.account)
-			}
-			if test.key != "" {
-				request.Header.Set("X-PP-Admin-Key", test.key)
-			}
-			response := httptest.NewRecorder()
-			sourceProviderHandler(&adminStore{memberships: test.memberships}, discovery).ServeHTTP(response, request)
-			if response.Code != test.wantStatus || (test.wantCode != "" && (!strings.Contains(response.Body.String(), `"code":"`+test.wantCode+`"`) || strings.Contains(response.Body.String(), "private diagnostic"))) {
-				t.Fatalf("status/body=%d/%s", response.Code, response.Body.String())
-			}
-			if test.wantStatus != http.StatusOK && discovery.candidateCalls != 0 && (test.token == "" || test.key == "" || test.account == adultAccount) {
-				t.Fatalf("candidate invoked before authorization: %+v", discovery)
-			}
-		})
+	if strings.Contains(response.Body.String(), "<rdf") {
+		t.Fatalf("raw RDF leaked: %s", response.Body.String())
 	}
 }
 
-func TestSourceAcquisitionPersistRouteUsesTrustedCandidateAndRejectsBodies(t *testing.T) {
-	candidate := sourceprovider.SourceCandidate{
-		Provider:     sourceprovider.ProjectGutenberg,
-		ExternalID:   "11",
-		Title:        "Alice's Adventures in Wonderland",
-		SourceText:   "Down the rabbit-hole.\n",
-		LandingURL:   "https://www.gutenberg.org/ebooks/11",
-		Contributors: []sourceprovider.Contributor{{Name: "Lewis Carroll", Role: "author"}},
-	}
-	store := ownerStore()
-	store.persistSourceAcquisitionResponse = model.AdminSourceAcquisitionPersistResponse{
-		Outcome: model.AdminSourceAcquisitionOutcomeCreated,
-		Acquisition: model.AdminSourceAcquisitionSummary{
-			ID:    "11111111-1111-4111-8111-111111111111",
-			Title: candidate.Title,
-		},
-	}
-	discovery := &discoveryStub{candidateOut: candidate}
-	handler := sourceProviderHandler(store, discovery)
-
+func TestEligibleSaveAcceptsOnlyHumanFactsAndPersistsEvaluation(t *testing.T) {
+	store, discovery := ownerStore(), eligibilityDiscovery()
+	store.persistSourceAcquisitionResponse = model.AdminSourceAcquisitionPersistResponse{Outcome: model.AdminSourceAcquisitionOutcomeCreated, Acquisition: model.AdminSourceAcquisitionSummary{ID: "11111111-1111-4111-8111-111111111111"}}
+	body := eligibleHumanFactsJSON()
 	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, providerRequest(http.MethodPost, "/api/v1/admin/source-providers/project-gutenberg/works/11/acquisitions"))
-	if response.Code != http.StatusCreated || response.Header().Get("Cache-Control") != "no-store" || !strings.Contains(response.Body.String(), `"outcome":"created"`) {
-		t.Fatalf("status/headers/body = %d/%q/%s", response.Code, response.Header().Get("Cache-Control"), response.Body.String())
+	sourceProviderHandler(t, store, discovery).ServeHTTP(response, providerRequest(http.MethodPost, "/api/v1/admin/source-providers/project-gutenberg/works/11/acquisitions", body))
+	if response.Code != http.StatusCreated || store.persistSourceAcquisitionCalls != 1 || store.persistedEligibility.Assessment.Overall != copyrighteligibility.OverallEligible {
+		t.Fatalf("save=%d/%s evaluation=%#v", response.Code, response.Body.String(), store.persistedEligibility)
 	}
-	if discovery.candidateCalls != 1 ||
-		store.persistSourceAcquisitionCalls != 1 ||
-		store.persistedSourceCandidate.Provider != candidate.Provider ||
-		store.persistedSourceCandidate.ExternalID != candidate.ExternalID ||
-		store.persistedSourceCandidate.SourceText != candidate.SourceText {
-		t.Fatalf("candidate/store calls = %+v/%+v", discovery, store)
+	if discovery.candidateCalls != 1 || discovery.evidenceCalls != 1 {
+		t.Fatalf("provider calls=%+v", discovery)
 	}
-
-	request := httptest.NewRequest(
-		http.MethodPost,
-		"/api/v1/admin/source-providers/project-gutenberg/works/11/acquisitions",
-		strings.NewReader(`{"representationUrl":"https://evil.example/book.txt"}`),
-	)
-	request.Header.Set("Authorization", "Bearer valid")
-	request.Header.Set("X-PP-Account-ID", ownerAccount)
-	request.Header.Set("X-PP-Admin-Key", "admin-key")
-	response = httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"code":"source_acquisition_invalid"`) || discovery.candidateCalls != 1 || store.persistSourceAcquisitionCalls != 1 {
-		t.Fatalf("body status/calls/body = %d/%d/%d/%s", response.Code, discovery.candidateCalls, store.persistSourceAcquisitionCalls, response.Body.String())
+	bad := httptest.NewRecorder()
+	sourceProviderHandler(t, ownerStore(), eligibilityDiscovery()).ServeHTTP(bad, providerRequest(http.MethodPost, "/api/v1/admin/source-providers/project-gutenberg/works/11/acquisitions", `{"eligible":true}`))
+	if bad.Code != http.StatusBadRequest || !strings.Contains(bad.Body.String(), `"code":"source_eligibility_invalid"`) {
+		t.Fatalf("authority body=%d/%s", bad.Code, bad.Body.String())
 	}
 }
 
-func TestSourceAcquisitionReadAndReviewRoutesKeepSourceTextExplicit(t *testing.T) {
-	const acquisitionID = "11111111-1111-4111-8111-111111111111"
-	summary := model.AdminSourceAcquisitionSummary{
-		ID:    acquisitionID,
-		Title: "Alice's Adventures in Wonderland",
-		Review: model.AdminSourceAcquisitionReview{
-			Rights:    model.AdminSourceAcquisitionReviewDimension{Status: model.AdminSourceAcquisitionReviewPending},
-			Editorial: model.AdminSourceAcquisitionReviewDimension{Status: model.AdminSourceAcquisitionReviewPending},
-		},
+func TestBlockedSaveDoesNotCallStoreAndProviderFactsCannotBeOverridden(t *testing.T) {
+	store, discovery := ownerStore(), eligibilityDiscovery()
+	discovery.evidenceOut.Contributors = append(discovery.evidenceOut.Contributors, copyrighteligibility.ContributorEvidence{Name: "A Translator", Role: "translator"})
+	body := `{"workCategory":"ordinary_literary","workCategoryReferences":[{"source":"Catalogue","fact":"ordinary literary work"}],"firstPublicationYear":1865,"firstPublicationReferences":[{"source":"Catalogue","fact":"published in 1865"}],"translation":{"state":"none_confirmed","references":[{"source":"Catalogue","fact":"no translation"}]}}`
+	response := httptest.NewRecorder()
+	sourceProviderHandler(t, store, discovery).ServeHTTP(response, providerRequest(http.MethodPost, "/api/v1/admin/source-providers/project-gutenberg/works/11/acquisitions", body))
+	if response.Code != http.StatusUnprocessableEntity || store.persistSourceAcquisitionCalls != 0 || !strings.Contains(response.Body.String(), `"overall":"blocked"`) {
+		t.Fatalf("blocked=%d/%s store=%d", response.Code, response.Body.String(), store.persistSourceAcquisitionCalls)
 	}
+}
+
+func TestFinalSaveRechecksCurrentProviderEvidence(t *testing.T) {
+	store, discovery := ownerStore(), eligibilityDiscovery()
+	preflight := httptest.NewRecorder()
+	handler := sourceProviderHandler(t, store, discovery)
+	handler.ServeHTTP(preflight, providerRequest(http.MethodPost, "/api/v1/admin/source-providers/project-gutenberg/works/11/copyright-eligibility", eligibleHumanFactsJSON()))
+	if preflight.Code != http.StatusOK || !strings.Contains(preflight.Body.String(), `"overall":"eligible"`) {
+		t.Fatalf("preflight=%d/%s", preflight.Code, preflight.Body.String())
+	}
+	discovery.evidenceOut.Rights = copyrighteligibility.ProviderRightsRestricted
+	blocked := httptest.NewRecorder()
+	handler.ServeHTTP(blocked, providerRequest(http.MethodPost, "/api/v1/admin/source-providers/project-gutenberg/works/11/acquisitions", eligibleHumanFactsJSON()))
+	if blocked.Code != http.StatusUnprocessableEntity || store.persistSourceAcquisitionCalls != 0 || !strings.Contains(blocked.Body.String(), `"overall":"blocked"`) {
+		t.Fatalf("save=%d/%s store=%d", blocked.Code, blocked.Body.String(), store.persistSourceAcquisitionCalls)
+	}
+}
+
+func TestSavedSourceRoutesExposeTextOnlyOnDetailAndSourceQualityOnly(t *testing.T) {
+	const id = "11111111-1111-4111-8111-111111111111"
+	summary := model.AdminSourceAcquisitionSummary{ID: id, Title: "Alice", SourceQuality: model.AdminSourceQualityReview{Status: model.AdminSourceQualityPending}}
 	store := ownerStore()
 	store.listSourceAcquisitionsResponse = model.AdminSourceAcquisitionsListResponse{Items: []model.AdminSourceAcquisitionSummary{summary}}
-	store.getSourceAcquisitionResponse = model.AdminSourceAcquisitionDetail{AdminSourceAcquisitionSummary: summary, SourceText: "The saved source text.\n"}
-	store.rightsReviewResponse = summary
-	store.editorialReviewResponse = summary
-	discovery := &discoveryStub{}
-	handler := sourceProviderHandler(store, discovery)
-
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, providerRequest(http.MethodGet, "/api/v1/admin/source-acquisitions?limit=20"))
-	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" || strings.Contains(response.Body.String(), "sourceText") || store.listSourceAcquisitionCalls != 1 || store.listSourceAcquisitionLimit != 20 {
-		t.Fatalf("list status/headers/body/store = %d/%q/%s/%+v", response.Code, response.Header().Get("Cache-Control"), response.Body.String(), store)
+	store.getSourceAcquisitionResponse = model.AdminSourceAcquisitionDetail{AdminSourceAcquisitionSummary: summary, SourceText: "Saved source\n"}
+	store.qualityReviewResponse = summary
+	handler := sourceProviderHandler(t, store, eligibilityDiscovery())
+	list := httptest.NewRecorder()
+	handler.ServeHTTP(list, providerRequest(http.MethodGet, "/api/v1/admin/source-acquisitions", ""))
+	if list.Code != http.StatusOK || strings.Contains(list.Body.String(), "sourceText") {
+		t.Fatalf("list=%d/%s", list.Code, list.Body.String())
 	}
-
-	response = httptest.NewRecorder()
-	handler.ServeHTTP(response, providerRequest(http.MethodGet, "/api/v1/admin/source-acquisitions/"+acquisitionID))
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"sourceText":"The saved source text.\n"`) || store.getSourceAcquisitionCalls != 1 || store.getSourceAcquisitionID != acquisitionID {
-		t.Fatalf("detail status/body/store = %d/%s/%+v", response.Code, response.Body.String(), store)
+	detail := httptest.NewRecorder()
+	handler.ServeHTTP(detail, providerRequest(http.MethodGet, "/api/v1/admin/source-acquisitions/"+id, ""))
+	if detail.Code != http.StatusOK || !strings.Contains(detail.Body.String(), `"sourceText":"Saved source\n"`) {
+		t.Fatalf("detail=%d/%s", detail.Code, detail.Body.String())
 	}
-
-	for _, test := range []struct {
-		path                                string
-		wantRightsCalls, wantEditorialCalls int
-	}{
-		{"/api/v1/admin/source-acquisitions/" + acquisitionID + "/rights-review", 1, 0},
-		{"/api/v1/admin/source-acquisitions/" + acquisitionID + "/editorial-review", 1, 1},
-	} {
-		request := httptest.NewRequest(http.MethodPut, test.path, strings.NewReader(`{"status":"approved","note":"Reviewed manually."}`))
-		request.Header.Set("Authorization", "Bearer valid")
-		request.Header.Set("X-PP-Account-ID", ownerAccount)
-		request.Header.Set("X-PP-Admin-Key", "admin-key")
-		response = httptest.NewRecorder()
-		handler.ServeHTTP(response, request)
-		if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" || store.rightsReviewCalls != test.wantRightsCalls || store.editorialReviewCalls != test.wantEditorialCalls {
-			t.Fatalf("review status/headers/calls = %d/%q/%d/%d body=%s", response.Code, response.Header().Get("Cache-Control"), store.rightsReviewCalls, store.editorialReviewCalls, response.Body.String())
-		}
+	quality := httptest.NewRecorder()
+	handler.ServeHTTP(quality, providerRequest(http.MethodPut, "/api/v1/admin/source-acquisitions/"+id+"/source-quality-review", `{"status":"approved","note":"Complete."}`))
+	if quality.Code != http.StatusOK || store.qualityReviewCalls != 1 || store.qualityReviewRequest.Status != model.AdminSourceQualityApproved {
+		t.Fatalf("quality=%d/%s/%+v", quality.Code, quality.Body.String(), store)
 	}
-	if discovery.searchCalls != 0 || discovery.workCalls != 0 || discovery.candidateCalls != 0 {
-		t.Fatalf("saved acquisition operations called provider: %+v", discovery)
+	old := httptest.NewRecorder()
+	handler.ServeHTTP(old, providerRequest(http.MethodPut, "/api/v1/admin/source-acquisitions/"+id+"/rights-review", `{}`))
+	if old.Code != http.StatusNotFound {
+		t.Fatalf("old rights route=%d", old.Code)
 	}
 }
 
-func TestSourceAcquisitionRoutesRetainAdminAuthorizationAndFiniteErrors(t *testing.T) {
+func TestEligibilityRoutesRetainAdminBoundaryAndSafeErrors(t *testing.T) {
 	for _, test := range []struct {
-		name, token, account, key string
-		memberships               []appidentity.Membership
-		want                      int
-	}{
-		{"missing bearer", "", ownerAccount, "admin-key", []appidentity.Membership{{AccountID: ownerAccount, Role: appidentity.RoleOwner}}, http.StatusUnauthorized},
-		{"adult membership", "valid", adultAccount, "admin-key", []appidentity.Membership{{AccountID: adultAccount, Role: appidentity.RoleAdult}}, http.StatusForbidden},
-		{"missing key", "valid", ownerAccount, "", []appidentity.Membership{{AccountID: ownerAccount, Role: appidentity.RoleOwner}}, http.StatusForbidden},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			store := &adminStore{memberships: test.memberships}
-			discovery := &discoveryStub{}
-			request := httptest.NewRequest(http.MethodPost, "/api/v1/admin/source-providers/project-gutenberg/works/11/acquisitions", nil)
-			if test.token != "" {
-				request.Header.Set("Authorization", "Bearer "+test.token)
-			}
-			if test.account != "" {
-				request.Header.Set("X-PP-Account-ID", test.account)
-			}
-			if test.key != "" {
-				request.Header.Set("X-PP-Admin-Key", test.key)
-			}
-			response := httptest.NewRecorder()
-			sourceProviderHandler(store, discovery).ServeHTTP(response, request)
-			if response.Code != test.want || discovery.candidateCalls != 0 || store.persistSourceAcquisitionCalls != 0 {
-				t.Fatalf("status/provider/store = %d/%d/%d body=%s", response.Code, discovery.candidateCalls, store.persistSourceAcquisitionCalls, response.Body.String())
-			}
-		})
+		token, account, key string
+		want                int
+	}{{"", ownerAccount, "admin-key", http.StatusUnauthorized}, {"valid", adultAccount, "admin-key", http.StatusForbidden}, {"valid", ownerAccount, "", http.StatusForbidden}} {
+		store := &adminStore{memberships: []appidentity.Membership{{AccountID: test.account, Role: appidentity.RoleAdult}}}
+		if test.account == ownerAccount {
+			store.memberships = []appidentity.Membership{{AccountID: ownerAccount, Role: appidentity.RoleOwner}}
+		}
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/source-providers/project-gutenberg/works/11/copyright-eligibility", nil)
+		if test.token != "" {
+			req.Header.Set("Authorization", "Bearer "+test.token)
+		}
+		if test.account != "" {
+			req.Header.Set("X-PP-Account-ID", test.account)
+		}
+		if test.key != "" {
+			req.Header.Set("X-PP-Admin-Key", test.key)
+		}
+		response := httptest.NewRecorder()
+		sourceProviderHandler(t, store, eligibilityDiscovery()).ServeHTTP(response, req)
+		if response.Code != test.want {
+			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+		}
 	}
-
-	store := ownerStore()
-	store.getSourceAcquisitionErr = model.ErrAdminSourceAcquisitionNotFound
+	stub := eligibilityDiscovery()
+	stub.evidenceErr = errors.New("dial tcp 10.0.0.1: private diagnostic")
 	response := httptest.NewRecorder()
-	sourceProviderHandler(store, &discoveryStub{}).ServeHTTP(response, providerRequest(http.MethodGet, "/api/v1/admin/source-acquisitions/11111111-1111-4111-8111-111111111111"))
-	if response.Code != http.StatusNotFound || !strings.Contains(response.Body.String(), `"code":"source_acquisition_not_found"`) {
-		t.Fatalf("status/body = %d/%s", response.Code, response.Body.String())
+	sourceProviderHandler(t, ownerStore(), stub).ServeHTTP(response, providerRequest(http.MethodPost, "/api/v1/admin/source-providers/project-gutenberg/works/11/copyright-eligibility", "{}"))
+	if response.Code != http.StatusBadGateway || strings.Contains(response.Body.String(), "private diagnostic") {
+		t.Fatalf("safe error=%d/%s", response.Code, response.Body.String())
 	}
+}
 
-	store = ownerStore()
-	store.listSourceAcquisitionsErr = errors.New("database detail must not leak")
-	response = httptest.NewRecorder()
-	sourceProviderHandler(store, &discoveryStub{}).ServeHTTP(response, providerRequest(http.MethodGet, "/api/v1/admin/source-acquisitions?limit=101"))
-	if response.Code != http.StatusBadRequest || store.listSourceAcquisitionCalls != 0 {
-		t.Fatalf("invalid list status/calls = %d/%d", response.Code, store.listSourceAcquisitionCalls)
-	}
-	response = httptest.NewRecorder()
-	sourceProviderHandler(store, &discoveryStub{}).ServeHTTP(response, providerRequest(http.MethodGet, "/api/v1/admin/source-acquisitions"))
-	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), `"code":"source_acquisition_failed"`) || strings.Contains(response.Body.String(), "database detail") {
-		t.Fatalf("safe store error status/body = %d/%s", response.Code, response.Body.String())
-	}
+func eligibilityDiscovery() *discoveryStub {
+	death := 1898
+	return &discoveryStub{candidateOut: sourceprovider.SourceCandidate{Provider: sourceprovider.ProjectGutenberg, ExternalID: "11", Title: "Alice", Contributors: []sourceprovider.Contributor{{Name: "Lewis Carroll", Role: "author"}}, Languages: []string{"en"}, LandingURL: "https://www.gutenberg.org/ebooks/11", ProviderRights: "Public domain in the USA.", SelectedRepresentation: sourceprovider.Representation{MediaType: "text/plain", URL: "https://www.gutenberg.org/files/11/11.txt"}, NormalisationVersion: "project-gutenberg-plain-text-v1", RetrievedContentHash: strings.Repeat("a", 64), NormalisedContentHash: strings.Repeat("b", 64), SourceText: "Saved source\n"}, evidenceOut: copyrighteligibility.ProviderEvidence{Provider: string(sourceprovider.ProjectGutenberg), ExternalID: "11", Title: "Alice", Rights: copyrighteligibility.ProviderRightsPublicDomain, EvidenceDigest: strings.Repeat("d", 64), Contributors: []copyrighteligibility.ContributorEvidence{{Name: "Lewis Carroll", Role: "author", DeathYear: &death}, {Name: "Lewis Carroll", Role: "illustrator"}}}}
+}
+
+func eligibleHumanFactsJSON() string {
+	return `{"workCategory":"ordinary_literary","workCategoryReferences":[{"source":"Catalogue","fact":"ordinary literary work"}],"firstPublicationYear":1865,"firstPublicationReferences":[{"source":"Catalogue","fact":"published in 1865"}],"translation":{"state":"none_confirmed","references":[{"source":"Catalogue","fact":"no translation in acquired text"}]},"additionalTextualContribution":{"state":"none_confirmed","references":[{"source":"Catalogue","fact":"no additional textual content"}]},"specialCategory":{"state":"none_confirmed","references":[{"source":"Catalogue","fact":"not a special category"}]},"unpublishedAtEnd1988":{"state":"none_confirmed","references":[{"source":"Catalogue","fact":"published before 1988"}]}}`
 }

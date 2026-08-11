@@ -11,7 +11,7 @@ import (
 	"pandapages/api/internal/appidentity"
 	"pandapages/api/internal/httpbearer"
 	"pandapages/api/internal/model"
-	"pandapages/api/internal/sourceprovider"
+	"pandapages/api/internal/sourceeligibility"
 )
 
 const ownerAccount = "11111111-1111-4111-8111-111111111111"
@@ -34,7 +34,7 @@ type adminStore struct {
 	editionSourceKey                 model.AdminStoryEditionKey
 	editionSourceID                  string
 	persistSourceAcquisitionCalls    int
-	persistedSourceCandidate         sourceprovider.SourceCandidate
+	persistedEligibility             sourceeligibility.Evaluation
 	persistSourceAcquisitionResponse model.AdminSourceAcquisitionPersistResponse
 	persistSourceAcquisitionErr      error
 	listSourceAcquisitionCalls       int
@@ -45,16 +45,11 @@ type adminStore struct {
 	getSourceAcquisitionID           string
 	getSourceAcquisitionResponse     model.AdminSourceAcquisitionDetail
 	getSourceAcquisitionErr          error
-	rightsReviewCalls                int
-	rightsReviewID                   string
-	rightsReviewRequest              model.AdminSourceAcquisitionReviewUpdateRequest
-	rightsReviewResponse             model.AdminSourceAcquisitionSummary
-	rightsReviewErr                  error
-	editorialReviewCalls             int
-	editorialReviewID                string
-	editorialReviewRequest           model.AdminSourceAcquisitionReviewUpdateRequest
-	editorialReviewResponse          model.AdminSourceAcquisitionSummary
-	editorialReviewErr               error
+	qualityReviewCalls               int
+	qualityReviewID                  string
+	qualityReviewRequest             model.AdminSourceQualityReviewUpdateRequest
+	qualityReviewResponse            model.AdminSourceAcquisitionSummary
+	qualityReviewErr                 error
 }
 
 func (s *adminStore) Identity(context.Context, appidentity.ExternalIdentity) (appidentity.Snapshot, error) {
@@ -98,9 +93,9 @@ func (*adminStore) AdminGetSourceVersion(string, string) (model.AdminSourceVersi
 	return model.AdminSourceVersionResponse{}, nil
 }
 
-func (s *adminStore) AdminPersistSourceAcquisition(candidate sourceprovider.SourceCandidate) (model.AdminSourceAcquisitionPersistResponse, error) {
+func (s *adminStore) AdminPersistEligibleSourceAcquisition(evaluation sourceeligibility.Evaluation) (model.AdminSourceAcquisitionPersistResponse, error) {
 	s.persistSourceAcquisitionCalls++
-	s.persistedSourceCandidate = candidate
+	s.persistedEligibility = evaluation
 	return s.persistSourceAcquisitionResponse, s.persistSourceAcquisitionErr
 }
 
@@ -116,18 +111,11 @@ func (s *adminStore) AdminGetSourceAcquisition(id string) (model.AdminSourceAcqu
 	return s.getSourceAcquisitionResponse, s.getSourceAcquisitionErr
 }
 
-func (s *adminStore) AdminUpdateSourceAcquisitionRightsReview(id string, req model.AdminSourceAcquisitionReviewUpdateRequest) (model.AdminSourceAcquisitionSummary, error) {
-	s.rightsReviewCalls++
-	s.rightsReviewID = id
-	s.rightsReviewRequest = req
-	return s.rightsReviewResponse, s.rightsReviewErr
-}
-
-func (s *adminStore) AdminUpdateSourceAcquisitionEditorialReview(id string, req model.AdminSourceAcquisitionReviewUpdateRequest) (model.AdminSourceAcquisitionSummary, error) {
-	s.editorialReviewCalls++
-	s.editorialReviewID = id
-	s.editorialReviewRequest = req
-	return s.editorialReviewResponse, s.editorialReviewErr
+func (s *adminStore) AdminUpdateSourceAcquisitionSourceQualityReview(id string, req model.AdminSourceQualityReviewUpdateRequest) (model.AdminSourceAcquisitionSummary, error) {
+	s.qualityReviewCalls++
+	s.qualityReviewID = id
+	s.qualityReviewRequest = req
+	return s.qualityReviewResponse, s.qualityReviewErr
 }
 
 func (s *adminStore) AdminGetEditionVersionSource(

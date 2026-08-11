@@ -166,7 +166,46 @@ function sourceAcquisitionSummary(overrides: Record<string, unknown> = {}) {
     normalisedContentHash: sourceHash,
     snapshotHash: sourceHash,
     createdAt: timestamp,
-    review: { rights: { status: 'pending' }, editorial: { status: 'pending' } },
+    eligibility: sourceEligibility(),
+    sourceQuality: { status: 'pending', note: null as string | null, reviewedAt: null as string | null },
+    ...overrides,
+  }
+}
+
+function sourceEvidenceReference(fact: string) {
+  return [{ source: 'Catalogue record', fact }]
+}
+
+function sourceEligibility(overrides: Record<string, unknown> = {}) {
+  return {
+    policyVersion: 'panda-pages-copyright-v1',
+    evaluationDate: '2026-07-20',
+    evaluatedAt: timestamp,
+    us: { status: 'eligible', reason: 'us_provider_public_domain_confirmed' },
+    uk: { status: 'eligible', reason: 'uk_ordinary_literary_term_expired' },
+    overall: 'eligible',
+    overallReason: 'overall_eligible',
+    opdsRights: 'public_domain',
+    rdfRights: 'public_domain',
+    headerRights: 'public_domain',
+    providerTitle: "Alice's Adventures in Wonderland",
+    contributors: [{ name: 'Lewis Carroll', role: 'author', deathYear: 1898 }],
+    rdfDigest: sourceHash,
+    effectiveUkEvidence: {
+      workCategory: 'ordinary_literary',
+      workCategoryReferences: sourceEvidenceReference('ordinary literary work'),
+      authorship: 'single_known',
+      authorshipReferences: sourceEvidenceReference('one author'),
+      authorName: 'Lewis Carroll',
+      authorDeathYear: 1898,
+      authorReferences: sourceEvidenceReference('died in 1898'),
+      firstPublicationYear: 1865,
+      firstPublicationReferences: sourceEvidenceReference('first published in 1865'),
+      translation: { state: 'none_confirmed', references: sourceEvidenceReference('no translation') },
+      additionalTextualContribution: { state: 'none_confirmed', references: sourceEvidenceReference('no additional textual contribution') },
+      specialCategory: { state: 'none_confirmed', references: sourceEvidenceReference('not a special category') },
+      unpublishedAtEnd1988: { state: 'none_confirmed', references: sourceEvidenceReference('published before 1988') },
+    },
     ...overrides,
   }
 }
@@ -199,6 +238,9 @@ class StudioAPI {
   } | null = null
   detailGates = new Map<string, ReturnType<typeof deferred<void>>>()
   sourceSearchGates = new Map<string, ReturnType<typeof deferred<void>>>()
+  sourceWorkGates = new Map<string, ReturnType<typeof deferred<void>>>()
+  sourceEligibilityGates = new Map<string, ReturnType<typeof deferred<void>>>()
+  sourceEligibilityOverrides = new Map<string, Record<string, unknown>>()
   sourceDetailGates = new Map<string, ReturnType<typeof deferred<void>>>()
   sourceListPlans: Array<{ gate: ReturnType<typeof deferred<void>>; items: ReturnType<typeof sourceAcquisitionSummary>[] }> = []
 
@@ -336,8 +378,12 @@ class StudioAPI {
       return
     }
 
-    if (path === '/api/v1/admin/source-providers/project-gutenberg/works/11' && method === 'GET') {
-      await this.fulfill(route, sourceProviderWork())
+    const sourceWorkMatch = /^\/api\/v1\/admin\/source-providers\/project-gutenberg\/works\/(\d+)$/.exec(path)
+    if (sourceWorkMatch && method === 'GET') {
+      const externalId = sourceWorkMatch[1]
+      const gate = this.sourceWorkGates.get(externalId)
+      if (gate) { this.sourceWorkGates.delete(externalId); await gate.promise }
+      await this.fulfill(route, sourceProviderWork(externalId, externalId === '12' ? 'Rabbit source' : "Alice's Adventures in Wonderland"))
       return
     }
 
@@ -353,6 +399,15 @@ class StudioAPI {
       return
     }
 
+    const sourceEligibilityMatch = /^\/api\/v1\/admin\/source-providers\/project-gutenberg\/works\/(\d+)\/copyright-eligibility$/.exec(path)
+    if (sourceEligibilityMatch && method === 'POST') {
+      const externalId = sourceEligibilityMatch[1]
+      const gate = this.sourceEligibilityGates.get(externalId)
+      if (gate) { this.sourceEligibilityGates.delete(externalId); await gate.promise }
+      await this.fulfill(route, sourceEligibility({ providerTitle: externalId === '12' ? 'Rabbit source' : "Alice's Adventures in Wonderland", ...this.sourceEligibilityOverrides.get(externalId) }))
+      return
+    }
+
     if (path === '/api/v1/admin/source-acquisitions' && method === 'GET') {
       const plan = this.sourceListPlans.shift()
       if (plan) {
@@ -364,7 +419,7 @@ class StudioAPI {
       return
     }
 
-    const acquisitionReviewMatch = /^\/api\/v1\/admin\/source-acquisitions\/([^/]+)\/(rights-review|editorial-review)$/.exec(path)
+    const acquisitionReviewMatch = /^\/api\/v1\/admin\/source-acquisitions\/([^/]+)\/source-quality-review$/.exec(path)
     if (acquisitionReviewMatch && method === 'PUT') {
       const acquisition = this.sourceAcquisitions.find((item) => item.id === acquisitionReviewMatch[1])
       const update = body as { status?: string; note?: string }
@@ -372,13 +427,9 @@ class StudioAPI {
         await this.fail(route, { status: 400, code: 'source_acquisition_review_invalid', message: 'source acquisition review is invalid' })
         return
       }
-      const dimension = acquisitionReviewMatch[2] === 'rights-review' ? 'rights' : 'editorial'
-      acquisition.review = {
-        ...acquisition.review,
-        [dimension]: update.status === 'pending'
-          ? { status: 'pending' }
-          : { status: update.status, note: String(update.note ?? ''), reviewedAt: timestamp },
-      }
+      acquisition.sourceQuality = update.status === 'pending'
+        ? { status: 'pending', note: null, reviewedAt: null }
+        : { status: update.status, note: String(update.note ?? ''), reviewedAt: timestamp }
       await this.fulfill(route, acquisition)
       return
     }
@@ -811,7 +862,7 @@ test('catalogue loads human statuses and supports deterministic search and filte
   expect(api.unhandled).toEqual([])
 })
 
-test('global source review saves a selected work directly and keeps rights and source-quality review independent', async ({ page }) => {
+test('global source review validates factual evidence, saves eligible work, and keeps source-quality review independent', async ({ page }) => {
   const api = new StudioAPI()
   await api.install(page)
   await page.goto('/admin/source-review')
@@ -819,63 +870,96 @@ test('global source review saves a selected work directly and keeps rights and s
   await expect(page.getByRole('heading', { level: 1, name: 'Source review' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Source review', exact: true })).toHaveAttribute('aria-current', 'page')
   await expect(page.getByText('No sources saved for review yet')).toHaveCount(0)
-  await page.getByRole('tab', { name: 'Find a source' }).focus()
+  const findTab = page.getByRole('tab', { name: 'Find a source' })
+  const savedTab = page.getByRole('tab', { name: 'Saved sources' })
+  await findTab.focus()
   await page.keyboard.press('ArrowRight')
-  await expect(page.getByRole('tab', { name: 'Saved sources' })).toHaveAttribute('aria-selected', 'true')
+  await expect(savedTab).toHaveAttribute('aria-selected', 'true')
+  await expect(savedTab).toBeFocused()
   await page.keyboard.press('ArrowLeft')
-  await expect(page.getByRole('tab', { name: 'Find a source' })).toHaveAttribute('aria-selected', 'true')
+  await expect(findTab).toHaveAttribute('aria-selected', 'true')
+  await expect(findTab).toBeFocused()
   await page.getByRole('searchbox', { name: 'Search Project Gutenberg' }).fill('alice')
   await page.getByRole('button', { name: 'Search', exact: true }).click()
   await expect(page.getByRole('heading', { name: "Alice's Adventures in Wonderland" })).toBeVisible()
   await page.getByRole('button', { name: 'Select work' }).click()
   await expect(page.getByRole('heading', { name: "Alice's Adventures in Wonderland" })).toHaveCount(2)
-  await expect(page.getByRole('button', { name: 'Save for source review' })).toBeVisible()
+  await expect(page.getByText('United States:')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Validate & save for source review' })).toBeVisible()
   await expect(page.getByRole('button', { name: /Preview source|Approve preview|Accept candidate/ })).toHaveCount(0)
-  await page.getByRole('button', { name: 'Save for source review' }).click()
+  await page.getByLabel('Work type evidence source').fill('Title-page record')
+  await page.getByLabel('Work type observed fact').fill('The title page identifies this as an ordinary literary work.')
+  await page.getByLabel('First publication year').fill('1865')
+  await page.getByLabel('First publication evidence source').fill('Library catalogue')
+  await page.getByLabel('First publication observed fact').fill('The catalogue records first publication in 1865.')
+  await page.getByLabel('First publication evidence locator / reference (optional)').fill('Shelfmark C.123, title page')
+  await page.getByLabel('Translation', { exact: true }).selectOption('none_confirmed')
+  await page.getByLabel('Translation evidence source').fill('Edition inspection')
+  await page.getByLabel('Translation observed fact').fill('No translator is identified in this acquired text.')
+  await page.getByLabel('Additional textual contribution', { exact: true }).selectOption('none_confirmed')
+  await page.getByLabel('Additional textual contribution evidence source').fill('Edition inspection')
+  await page.getByLabel('Additional textual contribution observed fact').fill('No additional textual contribution appears in this acquired text.')
+  await page.getByLabel('Special category', { exact: true }).selectOption('none_confirmed')
+  await page.getByLabel('Special category evidence source').fill('Catalogue record')
+  await page.getByLabel('Special category observed fact').fill('The catalogue identifies no Crown or special category.')
+  await page.getByLabel('Unpublished at end of 1988', { exact: true }).selectOption('none_confirmed')
+  await page.getByLabel('Unpublished-at-end-of-1988 evidence source').fill('Publication record')
+  await page.getByLabel('Unpublished-at-end-of-1988 observed fact').fill('The work was published before the end of 1988.')
+  await page.getByRole('button', { name: 'Validate & save for source review' }).click()
 
   await expect(page.getByText('Saved for source review.')).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Saved source text' })).toBeVisible()
-  await expect(page.locator('pre[aria-label="Saved source text"]')).toContainText('durable provider material')
-  await expect(page.getByText('Provider rights information is evidence only. It does not constitute Panda Pages approval.')).toBeVisible()
+  await expect(page.locator('.source-review__text pre')).toContainText('durable provider material')
+  await expect(page.getByRole('heading', { name: 'Copyright eligibility' })).toBeVisible()
   expect(api.count('POST', '/api/v1/admin/source-providers/project-gutenberg/works/11/acquisitions')).toBe(1)
-  expect(api.requests.find((request) => request.path.endsWith('/acquisitions'))?.body).toBeNull()
-
-  await page.getByLabel('Rights status').selectOption('rejected')
-  await page.getByLabel('Rationale').first().fill('Evidence needs a second review.')
-  await page.getByRole('button', { name: 'Save rights review' }).click()
-  await expect(page.getByText('Rights review updated.')).toBeVisible()
-  await expect(page.getByText('Rights: Rejected · Source quality: Pending')).toBeVisible()
-
-  await page.getByLabel('Rights status').selectOption('approved')
-  await page.getByLabel('Rationale').first().fill('Reviewed against the supplied provider evidence.')
-  await page.getByRole('button', { name: 'Save rights review' }).click()
-  await expect(page.getByText('Rights: Approved · Source quality: Pending')).toBeVisible()
+  const saveBody = api.requests.find((request) => request.path.endsWith('/acquisitions'))?.body as Record<string, unknown>
+  expect(saveBody).toMatchObject({ firstPublicationYear: 1865, workCategoryReferences: [{ source: 'Title-page record', fact: 'The title page identifies this as an ordinary literary work.' }], firstPublicationReferences: [{ source: 'Library catalogue', fact: 'The catalogue records first publication in 1865.', locator: 'Shelfmark C.123, title page' }], translation: { references: [{ source: 'Edition inspection', fact: 'No translator is identified in this acquired text.' }] } })
+  expect(JSON.stringify(saveBody)).not.toMatch(/sourceText|providerUrl|snapshotHash|policyVersion|"eligible"/)
+  await expect(page.getByLabel('Rights status')).toHaveCount(0)
 
   await page.getByLabel('Source quality status').selectOption('rejected')
-  await page.getByLabel('Rationale').last().fill('Complete, readable text for the intended work.')
+  await page.getByLabel('Rationale').fill('Complete, readable text for the intended work.')
   await page.getByRole('button', { name: 'Save source quality review' }).click()
   await expect(page.getByText('Source quality review updated.')).toBeVisible()
-  await expect(page.getByText('Rights: Approved · Source quality: Rejected')).toBeVisible()
 
   await page.getByLabel('Source quality status').selectOption('approved')
-  await page.getByLabel('Rationale').last().fill('Complete, readable text for the intended work.')
+  await page.getByLabel('Rationale').fill('Complete, readable text for the intended work.')
   await page.getByRole('button', { name: 'Save source quality review' }).click()
   await expect(page.getByRole('heading', { name: 'Ready for canonical-source promotion' })).toBeVisible()
   await expect(page.getByText('Canonical-source promotion is not available yet.')).toBeVisible()
   await expect(page.getByRole('button', { name: /Promote|Create story|Generate editions|Publish/ })).toHaveCount(0)
-  expect(api.count('PUT', `/api/v1/admin/source-acquisitions/${acquisitionID}/rights-review`)).toBe(2)
-  expect(api.count('PUT', `/api/v1/admin/source-acquisitions/${acquisitionID}/editorial-review`)).toBe(2)
+  expect(api.count('PUT', `/api/v1/admin/source-acquisitions/${acquisitionID}/source-quality-review`)).toBe(2)
 
   await page.getByRole('tab', { name: 'Find a source' }).click()
   await page.getByRole('searchbox', { name: 'Search Project Gutenberg' }).fill('alice')
   await page.getByRole('button', { name: 'Search', exact: true }).click()
   await page.getByRole('button', { name: 'Select work' }).click()
-  await page.getByRole('button', { name: 'Save for source review' }).click()
+  await page.getByRole('button', { name: 'Validate & save for source review' }).click()
   await expect(page.getByText('This exact saved source already exists. Opening it for review.')).toBeVisible()
   expect(api.count('POST', '/api/v1/admin/source-providers/project-gutenberg/works/11/acquisitions')).toBe(2)
   expect(api.unhandled).toEqual([])
   expect(await seriousOrCriticalViolations(page)).toEqual([])
 })
+
+test('global source review preserves provider facts through a stale factual form', async ({ page }) => {
+  const api = new StudioAPI()
+  api.sourceEligibilityOverrides.set('11', { contributors: [{ name: 'Lewis Carroll', role: 'author', deathYear: 1898 }, { name: 'Translator', role: 'translator' }] })
+  await api.install(page)
+  await page.goto('/admin/source-review')
+  await page.getByRole('searchbox', { name: 'Search Project Gutenberg' }).fill('alice')
+  await page.getByRole('button', { name: 'Search', exact: true }).click()
+  await page.getByRole('button', { name: 'Select work' }).click()
+  await expect(page.getByText('Translator — translator')).toBeVisible()
+  await expect(page.getByText('Provider author death year: 1898')).toBeVisible()
+  await expect(page.getByLabel('Translation', { exact: true })).toHaveCount(0)
+  await expect(page.getByLabel('Author death year', { exact: true })).toHaveCount(0)
+  await page.getByLabel('First publication year').fill('1865')
+  await expect(page.locator('.source-review__stale')).toHaveAttribute('role', 'status')
+  await expect(page.getByText('Eligibility conclusion needs revalidation after factual evidence changed.')).toBeVisible()
+  await expect(page.getByText('Translator — translator')).toBeVisible()
+  expect(api.unhandled).toEqual([])
+})
+
 
 test('global source review isolates stale search, saved-list, and detail requests', async ({ page }) => {
   const api = new StudioAPI()
@@ -912,6 +996,20 @@ test('global source review isolates stale search, saved-list, and detail request
   await expect(page.getByRole('heading', { name: 'Rabbit source' })).toHaveCount(0)
   searchB.resolve()
   await expect(page.getByRole('heading', { name: 'Rabbit source' })).toBeVisible()
+
+  const delayedWorkA = deferred<void>()
+  api.sourceWorkGates.set('11', delayedWorkA)
+  await page.getByRole('searchbox', { name: 'Search Project Gutenberg' }).fill('alice')
+  await page.getByRole('button', { name: 'Search', exact: true }).click()
+  await page.getByRole('button', { name: 'Select work' }).click()
+  await expect.poll(() => api.count('GET', '/api/v1/admin/source-providers/project-gutenberg/works/11')).toBe(1)
+  await page.getByRole('searchbox', { name: 'Search Project Gutenberg' }).fill('rabbit')
+  await page.getByRole('button', { name: 'Search', exact: true }).click()
+  await page.getByRole('button', { name: 'Select work' }).click()
+  await expect(page.getByText('Project Gutenberg #12').last()).toBeVisible()
+  delayedWorkA.resolve()
+  await expect(page.getByText('Project Gutenberg #12').last()).toBeVisible()
+  await expect(page.getByRole('alert')).toHaveCount(0)
 
   api.sourceListPlans.push({ gate: savedA, items: [first] }, { gate: savedB, items: [second] })
   await page.getByRole('tab', { name: 'Saved sources' }).click()

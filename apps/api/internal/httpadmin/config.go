@@ -2,6 +2,7 @@ package httpadmin
 
 import (
 	"pandapages/api/internal/httpbearer"
+	"pandapages/api/internal/sourceeligibility"
 	"pandapages/api/internal/sourceprovider"
 )
 
@@ -10,4 +11,5 @@ type Config struct {
 	BearerAuthenticator *httpbearer.Authenticator
 	SourceDiscovery     sourceprovider.Discovery
 	SourceAcquisition   sourceprovider.Acquisition
+	SourceEligibility   *sourceeligibility.Service
 }

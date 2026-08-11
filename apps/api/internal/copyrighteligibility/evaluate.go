@@ -62,6 +62,9 @@ func evaluateUK(evaluationDate time.Time, evidence UKEvidence) JurisdictionAsses
 	if evidence.WorkCategory != WorkCategoryOrdinaryLiterary {
 		return JurisdictionAssessment{Status: JurisdictionIndeterminate, Reason: ReasonUKWorkCategoryUnsupported}
 	}
+	if !hasEvidence(evidence.WorkCategoryReferences) {
+		return JurisdictionAssessment{Status: JurisdictionIndeterminate, Reason: ReasonUKWorkCategoryEvidenceMissing}
+	}
 	switch evidence.Authorship {
 	case AuthorshipSingleKnown:
 	case AuthorshipJoint:
@@ -72,6 +75,9 @@ func evaluateUK(evaluationDate time.Time, evidence UKEvidence) JurisdictionAsses
 		return JurisdictionAssessment{Status: JurisdictionIndeterminate, Reason: ReasonUKPseudonymousAuthorshipUnsupported}
 	default:
 		return JurisdictionAssessment{Status: JurisdictionIndeterminate, Reason: ReasonUKAuthorshipUnsupported}
+	}
+	if !hasEvidence(evidence.AuthorshipReferences) {
+		return JurisdictionAssessment{Status: JurisdictionIndeterminate, Reason: ReasonUKAuthorshipEvidenceMissing}
 	}
 	if strings.TrimSpace(evidence.Author.Name) == "" {
 		return JurisdictionAssessment{Status: JurisdictionIndeterminate, Reason: ReasonUKAuthorIdentityMissing}

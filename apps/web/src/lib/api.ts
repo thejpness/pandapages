@@ -1075,16 +1075,19 @@ export type AdminSourceProviderSearchResponse = {
   provider: AdminSourceProviderID;
   results: AdminSourceProviderWork[];
 };
-export type AdminSourceAcquisitionReviewStatus = "pending" | "approved" | "rejected";
-export type AdminSourceAcquisitionReviewDimension = {
-  status: AdminSourceAcquisitionReviewStatus;
-  note: string | null;
-  reviewedAt: string | null;
-};
-export type AdminSourceAcquisitionReview = {
-  rights: AdminSourceAcquisitionReviewDimension;
-  editorial: AdminSourceAcquisitionReviewDimension;
-};
+export type AdminSourceQualityStatus = "pending" | "approved" | "rejected";
+export type AdminSourceQualityReview = { status: AdminSourceQualityStatus; note: string | null; reviewedAt: string | null };
+export type AdminCopyrightFactState = "none_confirmed" | "present" | "unknown";
+export type AdminCopyrightEvidenceReference = { source: string; fact: string; locator?: string; identifier?: string; digest?: string };
+export type AdminCopyrightFactEvidence = { state: AdminCopyrightFactState; references: AdminCopyrightEvidenceReference[] };
+export type AdminSourceEligibilityHumanEvidence = { workCategory?: "ordinary_literary" | "unknown"; workCategoryReferences?: AdminCopyrightEvidenceReference[]; authorDeathYear?: number; authorDeathReferences?: AdminCopyrightEvidenceReference[]; firstPublicationYear?: number; firstPublicationReferences?: AdminCopyrightEvidenceReference[]; translation?: AdminCopyrightFactEvidence; additionalTextualContribution?: AdminCopyrightFactEvidence; specialCategory?: AdminCopyrightFactEvidence; unpublishedAtEnd1988?: AdminCopyrightFactEvidence };
+export type AdminCopyrightContributorEvidence = { name: string; role: string; birthYear?: number; deathYear?: number };
+export type AdminCopyrightReason =
+  | "us_provider_public_domain_confirmed" | "us_provider_restricted" | "us_provider_rights_missing" | "us_provider_rights_conflict" | "us_header_rights_conflict" | "us_header_rights_unknown"
+  | "uk_ordinary_literary_term_expired" | "uk_ordinary_literary_term_active" | "uk_evaluation_date_invalid" | "uk_work_category_unsupported" | "uk_work_category_evidence_missing" | "uk_joint_authorship_unsupported" | "uk_anonymous_authorship_unsupported" | "uk_pseudonymous_authorship_unsupported" | "uk_authorship_unsupported" | "uk_authorship_evidence_missing" | "uk_author_identity_missing" | "uk_author_death_unknown" | "uk_author_evidence_missing" | "uk_publication_evidence_missing" | "uk_publication_posthumous_unsupported" | "uk_translation_present" | "uk_translation_unknown" | "uk_translation_evidence_missing" | "uk_additional_contribution_present" | "uk_additional_contribution_unknown" | "uk_additional_contribution_evidence_missing" | "uk_special_category_unsupported" | "uk_special_category_evidence_missing" | "uk_unpublished_history_unsupported" | "uk_unpublished_history_evidence_missing" | "uk_author_death_invalid" | "uk_author_death_future" | "uk_publication_year_invalid" | "uk_publication_year_future" | "overall_eligible" | "overall_blocked";
+export type AdminCopyrightJurisdiction = { status: "eligible" | "ineligible" | "indeterminate"; reason: AdminCopyrightReason };
+export type AdminSourceEligibilityEffectiveUK = { workCategory: string; workCategoryReferences: AdminCopyrightEvidenceReference[]; authorship: string; authorshipReferences: AdminCopyrightEvidenceReference[]; authorName: string; authorDeathYear: number; authorReferences: AdminCopyrightEvidenceReference[]; firstPublicationYear: number; firstPublicationReferences: AdminCopyrightEvidenceReference[]; translation: AdminCopyrightFactEvidence; additionalTextualContribution: AdminCopyrightFactEvidence; specialCategory: AdminCopyrightFactEvidence; unpublishedAtEnd1988: AdminCopyrightFactEvidence };
+export type AdminSourceEligibility = { policyVersion: "panda-pages-copyright-v1"; evaluationDate: string; evaluatedAt: string; us: AdminCopyrightJurisdiction; uk: AdminCopyrightJurisdiction; overall: "eligible" | "blocked"; overallReason: AdminCopyrightReason; opdsRights: "public_domain" | "restricted" | "unknown"; rdfRights: "public_domain" | "restricted" | "unknown"; headerRights: "public_domain" | "restricted" | "no_classification" | "conflicting"; providerTitle: string; contributors: AdminCopyrightContributorEvidence[]; rdfDigest: string; effectiveUkEvidence: AdminSourceEligibilityEffectiveUK; assessmentHash?: string };
 export type AdminSourceAcquisitionRepresentation = {
   label: string | null;
   mediaType: string;
@@ -1106,7 +1109,8 @@ export type AdminSourceAcquisitionSummary = {
   normalisedContentHash: string;
   snapshotHash: string;
   createdAt: string;
-  review: AdminSourceAcquisitionReview;
+  eligibility: AdminSourceEligibility | null;
+  sourceQuality: AdminSourceQualityReview;
 };
 export type AdminSourceAcquisitionDetail = AdminSourceAcquisitionSummary & {
   sourceText: string;
@@ -1118,8 +1122,8 @@ export type AdminSourceAcquisitionPersistResponse = {
 export type AdminSourceAcquisitionListResponse = {
   items: AdminSourceAcquisitionSummary[];
 };
-export type AdminSourceAcquisitionReviewUpdateRequest = {
-  status: AdminSourceAcquisitionReviewStatus;
+export type AdminSourceQualityReviewUpdateRequest = {
+  status: AdminSourceQualityStatus;
   note: string;
 };
 
@@ -1132,7 +1136,10 @@ const adminEditionIngestOutcomes = new Set<AdminEditionIngestOutcome>(["created"
 const adminReleaseOutcomes = new Set<AdminReleaseOutcome>(["created", "reused_current"]);
 const adminSourceOutcomes = new Set<AdminSourceOutcome>(["created_source", "created_version", "reused"]);
 const adminSourceProviderIDs = new Set<AdminSourceProviderID>(["project-gutenberg"]);
-const adminSourceAcquisitionReviewStatuses = new Set<AdminSourceAcquisitionReviewStatus>(["pending", "approved", "rejected"]);
+const adminSourceQualityStatuses = new Set<AdminSourceQualityStatus>(["pending", "approved", "rejected"]);
+const adminCopyrightFactStates = new Set<AdminCopyrightFactState>(["none_confirmed", "present", "unknown"]);
+const adminCopyrightJurisdictionStatuses = new Set<AdminCopyrightJurisdiction["status"]>(["eligible", "ineligible", "indeterminate"]);
+const adminCopyrightReasons = new Set<AdminCopyrightReason>(["us_provider_public_domain_confirmed", "us_provider_restricted", "us_provider_rights_missing", "us_provider_rights_conflict", "us_header_rights_conflict", "us_header_rights_unknown", "uk_ordinary_literary_term_expired", "uk_ordinary_literary_term_active", "uk_evaluation_date_invalid", "uk_work_category_unsupported", "uk_work_category_evidence_missing", "uk_joint_authorship_unsupported", "uk_anonymous_authorship_unsupported", "uk_pseudonymous_authorship_unsupported", "uk_authorship_unsupported", "uk_authorship_evidence_missing", "uk_author_identity_missing", "uk_author_death_unknown", "uk_author_evidence_missing", "uk_publication_evidence_missing", "uk_publication_posthumous_unsupported", "uk_translation_present", "uk_translation_unknown", "uk_translation_evidence_missing", "uk_additional_contribution_present", "uk_additional_contribution_unknown", "uk_additional_contribution_evidence_missing", "uk_special_category_unsupported", "uk_special_category_evidence_missing", "uk_unpublished_history_unsupported", "uk_unpublished_history_evidence_missing", "uk_author_death_invalid", "uk_author_death_future", "uk_publication_year_invalid", "uk_publication_year_future", "overall_eligible", "overall_blocked"]);
 const adminSourceAcquisitionOutcomes = new Set<AdminSourceAcquisitionPersistResponse["outcome"]>(["created", "reused"]);
 const adminUUIDPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -1334,29 +1341,56 @@ export function parseAdminSourceProviderSearchResponse(value: unknown): AdminSou
   return { provider, results };
 }
 
-function parseAdminSourceAcquisitionReviewDimension(value: unknown): AdminSourceAcquisitionReviewDimension {
+function parseAdminSourceQualityReview(value: unknown): AdminSourceQualityReview {
   const record = adminRecord(value);
-  if (typeof record.status !== "string" || !adminSourceAcquisitionReviewStatuses.has(record.status as AdminSourceAcquisitionReviewStatus)) {
-    throw new Error("Invalid admin response");
-  }
-  const status = record.status as AdminSourceAcquisitionReviewStatus;
+  if (typeof record.status !== "string" || !adminSourceQualityStatuses.has(record.status as AdminSourceQualityStatus)) throw new Error("Invalid admin response");
+  const status = record.status as AdminSourceQualityStatus;
   const note = optionalAdminString(record, "note");
-  const reviewedAt = record.reviewedAt === undefined || record.reviewedAt === null
-    ? null
-    : parseAdminNullableTimestamp(record.reviewedAt);
-  if ((status === "pending" && (note !== null || reviewedAt !== null)) || (status !== "pending" && (note === null || reviewedAt === null))) {
-    throw new Error("Invalid admin response");
-  }
+  const reviewedAt = record.reviewedAt === undefined || record.reviewedAt === null ? null : parseAdminNullableTimestamp(record.reviewedAt);
+  if ((status === "pending" && (note !== null || reviewedAt !== null)) || (status !== "pending" && (note === null || reviewedAt === null))) throw new Error("Invalid admin response");
   return { status, note, reviewedAt };
 }
 
-function parseAdminSourceAcquisitionReview(value: unknown): AdminSourceAcquisitionReview {
-  const record = adminRecord(value);
-  return {
-    rights: parseAdminSourceAcquisitionReviewDimension(record.rights),
-    editorial: parseAdminSourceAcquisitionReviewDimension(record.editorial),
-  };
+function parseAdminEvidenceReferences(value: unknown): AdminCopyrightEvidenceReference[] {
+  if (!Array.isArray(value) || value.length > 8) throw new Error("Invalid admin response");
+  return value.map((item) => {
+    // A citation locator is display-only evidence metadata. It is deliberately
+    // parsed as a small closed object rather than becoming a Reader locator or
+    // a URL the browser/application will fetch.
+    if (!isRecord(item) || !isJsonObject(item) || Object.keys(item).some((key) => !["source", "fact", "locator", "identifier", "digest"].includes(key))) throw new Error("Invalid admin response");
+    const record = item;
+    const locator = optionalAdminString(record, "locator");
+    const identifier = optionalAdminString(record, "identifier");
+    const digest = optionalAdminString(record, "digest");
+    if (digest !== null) parseAdminSHA256(digest);
+    return { source: requiredAdminString(record, "source"), fact: requiredAdminString(record, "fact"), ...(locator === null ? {} : { locator }), ...(identifier === null ? {} : { identifier }), ...(digest === null ? {} : { digest }) };
+  });
 }
+
+function parseAdminFactEvidence(value: unknown): AdminCopyrightFactEvidence {
+  const record = adminRecord(value);
+  if (typeof record.state !== "string" || !adminCopyrightFactStates.has(record.state as AdminCopyrightFactState)) throw new Error("Invalid admin response");
+  return { state: record.state as AdminCopyrightFactState, references: parseAdminEvidenceReferences(record.references) };
+}
+
+export function parseAdminEligibility(value: unknown): AdminSourceEligibility {
+  const record = adminRecord(value);
+  const reason = (item: unknown): AdminCopyrightReason => { if (typeof item !== "string" || !adminCopyrightReasons.has(item as AdminCopyrightReason)) throw new Error("Invalid admin response"); return item as AdminCopyrightReason; };
+  const jurisdiction = (item: unknown): AdminCopyrightJurisdiction => { const itemRecord = adminRecord(item); if (typeof itemRecord.status !== "string" || !adminCopyrightJurisdictionStatuses.has(itemRecord.status as AdminCopyrightJurisdiction["status"])) throw new Error("Invalid admin response"); return { status: itemRecord.status as AdminCopyrightJurisdiction["status"], reason: reason(itemRecord.reason) }; };
+  const evidenceRecord = adminRecord(record.effectiveUkEvidence);
+  const workCategory = evidenceRecord.workCategory; const authorship = evidenceRecord.authorship; const authorName = evidenceRecord.authorName;
+  if ((workCategory !== "ordinary_literary" && workCategory !== "unknown") || typeof authorship !== "string" || !["single_known", "joint", "anonymous", "pseudonymous", "unknown"].includes(authorship) || typeof authorName !== "string") throw new Error("Invalid admin response");
+  const effectiveUkEvidence: AdminSourceEligibilityEffectiveUK = { workCategory, workCategoryReferences: parseAdminEvidenceReferences(evidenceRecord.workCategoryReferences), authorship, authorshipReferences: parseAdminEvidenceReferences(evidenceRecord.authorshipReferences), authorName, authorDeathYear: parseAdminInteger(evidenceRecord.authorDeathYear), authorReferences: parseAdminEvidenceReferences(evidenceRecord.authorReferences), firstPublicationYear: parseAdminInteger(evidenceRecord.firstPublicationYear), firstPublicationReferences: parseAdminEvidenceReferences(evidenceRecord.firstPublicationReferences), translation: parseAdminFactEvidence(evidenceRecord.translation), additionalTextualContribution: parseAdminFactEvidence(evidenceRecord.additionalTextualContribution), specialCategory: parseAdminFactEvidence(evidenceRecord.specialCategory), unpublishedAtEnd1988: parseAdminFactEvidence(evidenceRecord.unpublishedAtEnd1988) };
+  if (!Array.isArray(record.contributors)) throw new Error("Invalid admin response");
+  const contributors = record.contributors.map((item) => { const itemRecord = adminRecord(item); const birthYear = itemRecord.birthYear === undefined ? undefined : parseAdminInteger(itemRecord.birthYear); const deathYear = itemRecord.deathYear === undefined ? undefined : parseAdminInteger(itemRecord.deathYear); return { name: requiredAdminString(itemRecord, "name"), role: requiredAdminString(itemRecord, "role"), ...(birthYear === undefined ? {} : { birthYear }), ...(deathYear === undefined ? {} : { deathYear }) }; });
+  const overall = record.overall; if (overall !== "eligible" && overall !== "blocked") throw new Error("Invalid admin response");
+  const assessmentHash = optionalAdminString(record, "assessmentHash");
+  if (record.policyVersion !== "panda-pages-copyright-v1" || (record.opdsRights !== "public_domain" && record.opdsRights !== "restricted" && record.opdsRights !== "unknown") || (record.rdfRights !== "public_domain" && record.rdfRights !== "restricted" && record.rdfRights !== "unknown") || (record.headerRights !== "public_domain" && record.headerRights !== "restricted" && record.headerRights !== "no_classification" && record.headerRights !== "conflicting")) throw new Error("Invalid admin response");
+  const evaluatedAt = parseAdminNullableTimestamp(record.evaluatedAt); if (evaluatedAt === null) throw new Error("Invalid admin response");
+  return { policyVersion: record.policyVersion, evaluationDate: requiredAdminString(record, "evaluationDate"), evaluatedAt, us: jurisdiction(record.us), uk: jurisdiction(record.uk), overall, overallReason: reason(record.overallReason), opdsRights: record.opdsRights, rdfRights: record.rdfRights, headerRights: record.headerRights, providerTitle: requiredAdminString(record, "providerTitle"), contributors, rdfDigest: parseAdminSHA256(record.rdfDigest), effectiveUkEvidence, ...(assessmentHash === null ? {} : { assessmentHash: parseAdminSHA256(assessmentHash) }) };
+}
+
+function parseAdminInteger(value: unknown): number { if (typeof value !== "number" || !Number.isSafeInteger(value)) throw new Error("Invalid admin response"); return value; }
 
 function parseAdminSourceAcquisitionRepresentation(value: unknown): AdminSourceAcquisitionRepresentation {
   const record = adminRecord(value);
@@ -1393,7 +1427,8 @@ export function parseAdminSourceAcquisitionSummary(value: unknown): AdminSourceA
     normalisedContentHash: parseAdminSHA256(record.normalisedContentHash),
     snapshotHash: parseAdminSHA256(record.snapshotHash),
     createdAt,
-    review: parseAdminSourceAcquisitionReview(record.review),
+    eligibility: record.eligibility === undefined || record.eligibility === null ? null : parseAdminEligibility(record.eligibility),
+    sourceQuality: parseAdminSourceQualityReview(record.sourceQuality),
   };
 }
 
@@ -1741,10 +1776,23 @@ export async function adminGetSourceProviderWork(
 export async function adminPersistSourceAcquisition(
   provider: AdminSourceProviderID,
   externalID: string,
+  payload: AdminSourceEligibilityHumanEvidence,
 ): Promise<AdminSourceAcquisitionPersistResponse> {
   return parseAdminSourceAcquisitionPersistResponse(await request<unknown>(
-    `/api/v1/admin/source-providers/${encodeURIComponent(provider)}/works/${encodeURIComponent(externalID)}/acquisitions`,
-    { method: "POST" },
+    "/api/v1/admin/source-providers/" + encodeURIComponent(provider) + "/works/" + encodeURIComponent(externalID) + "/acquisitions",
+    { method: "POST", body: JSON.stringify(payload) },
+  ));
+}
+
+export async function adminCheckSourceEligibility(
+  provider: AdminSourceProviderID,
+  externalID: string,
+  payload: AdminSourceEligibilityHumanEvidence,
+  signal?: AbortSignal,
+): Promise<AdminSourceEligibility> {
+  return parseAdminEligibility(await request<unknown>(
+    "/api/v1/admin/source-providers/" + encodeURIComponent(provider) + "/works/" + encodeURIComponent(externalID) + "/copyright-eligibility",
+    { method: "POST", body: JSON.stringify(payload), signal },
   ));
 }
 
@@ -1756,22 +1804,12 @@ export async function adminGetSourceAcquisition(id: string, signal?: AbortSignal
   return parseAdminSourceAcquisitionDetail(await request<unknown>(`/api/v1/admin/source-acquisitions/${encodeURIComponent(id)}`, { signal }));
 }
 
-export async function adminUpdateSourceAcquisitionRightsReview(
+export async function adminUpdateSourceAcquisitionSourceQualityReview(
   id: string,
-  payload: AdminSourceAcquisitionReviewUpdateRequest,
+  payload: AdminSourceQualityReviewUpdateRequest,
 ): Promise<AdminSourceAcquisitionSummary> {
   return parseAdminSourceAcquisitionSummary(await request<unknown>(
-    `/api/v1/admin/source-acquisitions/${encodeURIComponent(id)}/rights-review`,
-    { method: "PUT", body: JSON.stringify(payload) },
-  ));
-}
-
-export async function adminUpdateSourceAcquisitionEditorialReview(
-  id: string,
-  payload: AdminSourceAcquisitionReviewUpdateRequest,
-): Promise<AdminSourceAcquisitionSummary> {
-  return parseAdminSourceAcquisitionSummary(await request<unknown>(
-    `/api/v1/admin/source-acquisitions/${encodeURIComponent(id)}/editorial-review`,
+    "/api/v1/admin/source-acquisitions/" + encodeURIComponent(id) + "/source-quality-review",
     { method: "PUT", body: JSON.stringify(payload) },
   ));
 }

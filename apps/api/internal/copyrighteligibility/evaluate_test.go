@@ -79,6 +79,19 @@ func TestEvaluateUKConfirmedAbsencesWithEvidenceSupportEligiblePath(t *testing.T
 	}
 }
 
+func TestEvaluateUKRequiresEvidenceForHumanPassCriticalClassifications(t *testing.T) {
+	base := ordinaryLiteraryEvidence(1898)
+	base.WorkCategoryReferences = nil
+	if got := Evaluate(Input{EvaluationDate: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), UK: base}).UK; got.Reason != ReasonUKWorkCategoryEvidenceMissing {
+		t.Fatalf("work category evidence = %#v", got)
+	}
+	base = ordinaryLiteraryEvidence(1898)
+	base.AuthorshipReferences = nil
+	if got := Evaluate(Input{EvaluationDate: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), UK: base}).UK; got.Reason != ReasonUKAuthorshipEvidenceMissing {
+		t.Fatalf("authorship evidence = %#v", got)
+	}
+}
+
 func TestEvaluateUKFailsClosedOutsideOrdinarySupportedSubset(t *testing.T) {
 	valid := ordinaryLiteraryEvidence(1898)
 	tests := []struct {
@@ -165,8 +178,10 @@ func TestOverallRequiresBothJurisdictionsToBeEligible(t *testing.T) {
 
 func ordinaryLiteraryEvidence(deathYear int) UKEvidence {
 	return UKEvidence{
-		WorkCategory: WorkCategoryOrdinaryLiterary,
-		Authorship:   AuthorshipSingleKnown,
+		WorkCategory:           WorkCategoryOrdinaryLiterary,
+		Authorship:             AuthorshipSingleKnown,
+		WorkCategoryReferences: []EvidenceReference{{Source: "Bibliographic record", Fact: "The acquired work is an ordinary literary work."}},
+		AuthorshipReferences:   []EvidenceReference{{Source: "Author authority record", Fact: "The provider identifies one author."}},
 		Author: PersonEvidence{
 			Name:      "Lewis Carroll",
 			DeathYear: deathYear,
