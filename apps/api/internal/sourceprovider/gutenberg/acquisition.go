@@ -8,7 +8,6 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -17,7 +16,7 @@ import (
 
 const maxSourceBytes = 10 << 20 // 10 MiB decoded plain-text source body.
 
-// Acquire obtains one server-selected, trusted plain-text representation and
+// Acquire obtains one provider-constructed, trusted plain-text representation and
 // returns an in-memory review candidate. It never writes Panda Pages data.
 func (a *Adapter) Acquire(ctx context.Context, externalID string) (sourceprovider.SourceCandidate, error) {
 	acquired, err := a.AcquireEvidence(ctx, externalID)
@@ -34,7 +33,7 @@ func (a *Adapter) AcquireEvidence(ctx context.Context, externalID string) (sourc
 	if err != nil {
 		return sourceprovider.AcquisitionEvidence{}, err
 	}
-	representation, err := selectPlainTextRepresentation(work.Representations)
+	representation, err := plainTextRepresentation(work.ExternalID)
 	if err != nil {
 		return sourceprovider.AcquisitionEvidence{}, err
 	}
@@ -68,40 +67,15 @@ func (a *Adapter) AcquireEvidence(ctx context.Context, externalID string) (sourc
 	}, nil
 }
 
-func selectPlainTextRepresentation(representations []sourceprovider.Representation) (sourceprovider.Representation, error) {
-	type candidate struct {
-		representation sourceprovider.Representation
-		rank           int
+func plainTextRepresentation(externalID string) (sourceprovider.Representation, error) {
+	if !validExternalID(externalID) {
+		return sourceprovider.Representation{}, sourceprovider.ErrWorkIDInvalid
 	}
-	candidates := make([]candidate, 0, len(representations))
-	for _, representation := range representations {
-		mediaType, parameters, err := mime.ParseMediaType(representation.MediaType)
-		if err != nil || !strings.EqualFold(mediaType, "text/plain") || !trustedRepresentationURL(representation.URL) {
-			continue
-		}
-		rank, ok := plainTextCharsetRank(parameters["charset"])
-		if !ok {
-			continue
-		}
-		candidates = append(candidates, candidate{representation: representation, rank: rank})
-	}
-	if len(candidates) == 0 {
-		return sourceprovider.Representation{}, sourceprovider.ErrRepresentationUnavailable
-	}
-	sort.Slice(candidates, func(i, j int) bool {
-		left, right := candidates[i], candidates[j]
-		if left.rank != right.rank {
-			return left.rank < right.rank
-		}
-		if left.representation.MediaType != right.representation.MediaType {
-			return left.representation.MediaType < right.representation.MediaType
-		}
-		if left.representation.Label != right.representation.Label {
-			return left.representation.Label < right.representation.Label
-		}
-		return left.representation.URL < right.representation.URL
-	})
-	return candidates[0].representation, nil
+	return sourceprovider.Representation{
+		Label:     "Plain Text UTF-8",
+		MediaType: "text/plain; charset=utf-8",
+		URL:       "https://" + endpointHost + "/cache/epub/" + externalID + "/pg" + externalID + ".txt",
+	}, nil
 }
 
 func plainTextCharsetRank(raw string) (int, bool) {

@@ -17,7 +17,7 @@ import (
 
 const searchFixture = `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom" xmlns:dcterms="http://purl.org/dc/terms/"><entry><id>https://www.gutenberg.org/ebooks/authors/search.opds/?query=alice</id><title>Authors</title></entry><entry><id>https://www.gutenberg.org/ebooks/11.opds</id><title>Alice's Adventures in Wonderland</title><rights>Public domain in the USA.</rights><author><name>Carroll, Lewis</name></author><dcterms:language>en</dcterms:language><link rel="http://opds-spec.org/acquisition" type="text/plain" title="Plain Text UTF-8" length="123" href="https://www.gutenberg.org/files/11/11-0.txt"/></entry><entry><id>https://www.gutenberg.org/ebooks/12.opds</id><title>Through the Looking-Glass</title><author><name>Carroll, Lewis</name></author><dcterms:language>en</dcterms:language></entry></feed>`
 
-const workFixture = `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom" xmlns:dcterms="http://purl.org/dc/terms/"><entry><id>urn:gutenberg:11:2</id><title>Alice's Adventures in Wonderland</title><rights>Public domain in the USA.</rights><author><name>Carroll, Lewis</name></author><dcterms:language>en</dcterms:language><link rel="http://opds-spec.org/acquisition" type="text/plain" title="Plain Text UTF-8" length="123" href="https://www.gutenberg.org/files/11/11-0.txt"/></entry><entry><id>urn:gutenberg:11:3</id><title>Alice's Adventures in Wonderland</title><rights>Public domain in the USA.</rights><author><name>Carroll, Lewis</name></author><dcterms:language>en</dcterms:language><link rel="http://opds-spec.org/acquisition" type="application/epub+zip" title="EPUB" length="456" href="https://www.gutenberg.org/ebooks/11.epub.images"/></entry></feed>`
+const workFixture = `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom" xmlns:dcterms="http://purl.org/dc/terms/"><entry><id>urn:gutenberg:11:2</id><title>Alice's Adventures in Wonderland</title><rights>Public domain in the USA.</rights><author><name>Carroll, Lewis</name></author><dcterms:language>en</dcterms:language><link rel="http://opds-spec.org/acquisition" type="application/epub+zip" title="EPUB" length="456" href="https://www.gutenberg.org/ebooks/11.epub.images"/></entry><entry><id>urn:gutenberg:11:3</id><title>Alice's Adventures in Wonderland</title><rights>Public domain in the USA.</rights><author><name>Carroll, Lewis</name></author><dcterms:language>en</dcterms:language><link rel="http://opds-spec.org/acquisition" type="application/x-mobipocket-ebook" title="Kindle" length="789" href="https://www.gutenberg.org/ebooks/11.kf8.images"/></entry></feed>`
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
@@ -81,7 +81,7 @@ func TestParseWorkAggregatesSupportedMachineDetail(t *testing.T) {
 	if work.ExternalID != "11" || work.LandingURL != "https://www.gutenberg.org/ebooks/11" || len(work.Representations) != 2 {
 		t.Fatalf("work=%+v", work)
 	}
-	if work.ProviderRights != "Public domain in the USA." || work.Representations[1].MediaType != "application/epub+zip" {
+	if work.ProviderRights != "Public domain in the USA." || work.Representations[1].MediaType != "application/x-mobipocket-ebook" {
 		t.Fatalf("work=%+v", work)
 	}
 }
