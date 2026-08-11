@@ -30,10 +30,11 @@ const (
 type SourceClass string
 
 const (
-	SourceProjectGutenberg  SourceClass = "project_gutenberg"
-	SourceLibraryOfCongress SourceClass = "library_of_congress"
-	SourceOpenLibrary       SourceClass = "open_library"
-	SourceWikidata          SourceClass = "wikidata"
+	SourceProjectGutenberg              SourceClass = "project_gutenberg"
+	SourceBibliothequeNationaleDeFrance SourceClass = "bibliotheque_nationale_de_france"
+	SourceLibraryOfCongress             SourceClass = "library_of_congress"
+	SourceOpenLibrary                   SourceClass = "open_library"
+	SourceWikidata                      SourceClass = "wikidata"
 )
 
 // PublicationAuthority is Panda Pages' fact-specific trust policy for
@@ -100,8 +101,8 @@ type BibliographicRecord struct {
 	Subjects             []string
 	MaterialTypes        []string
 	// ContributorRolesObserved means the source supplied a structured
-	// contributor-role list for the identified edition. An empty list is an
-	// observable result, not an adapter assertion that a contribution cannot
+	// contributor-role list for the identified exact edition. An empty list is
+	// an observable result, not an adapter assertion that a contribution cannot
 	// exist outside the record.
 	ContributorRolesObserved bool
 }
@@ -129,6 +130,11 @@ type BibliographicSource interface {
 type ExactSourceContext struct {
 	ProviderEvidence copyrighteligibility.ProviderEvidence
 	SourceText       string
+	// SourceFrontMatter is a bounded, server-owned prefix of the acquired raw
+	// provider text. It is never placed on SourceCandidate or returned to a
+	// browser; it only supports positive contributor inspection before source
+	// normalisation removes the provider wrapper.
+	SourceFrontMatter string
 }
 
 type Diagnostic struct {

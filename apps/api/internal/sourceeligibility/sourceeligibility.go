@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"pandapages/api/internal/copyrighteligibility"
+	"pandapages/api/internal/evidenceresolver"
 	"pandapages/api/internal/sourceprovider"
 )
 
@@ -26,6 +27,13 @@ var (
 type ProviderGateway interface {
 	AcquireEvidence(context.Context, sourceprovider.ID, string) (sourceprovider.AcquisitionEvidence, error)
 	CopyrightEvidence(context.Context, sourceprovider.ID, string) (copyrighteligibility.ProviderEvidence, error)
+}
+
+// EvidenceResolver produces only server-owned factual observations from the
+// exact provider work and source text. Eligibility remains the responsibility
+// of copyrighteligibility.Evaluate.
+type EvidenceResolver interface {
+	Resolve(context.Context, evidenceresolver.ExactSourceContext) (evidenceresolver.Resolution, error)
 }
 
 // HumanUKEvidence is the factual dossier supplied by an administrator. It
@@ -57,30 +65,41 @@ type Evaluation struct {
 }
 
 type Config struct {
-	Gateway ProviderGateway
-	Now     func() time.Time
+	Gateway  ProviderGateway
+	Resolver EvidenceResolver
+	Now      func() time.Time
 }
 
 type Service struct {
-	gateway ProviderGateway
-	now     func() time.Time
+	gateway  ProviderGateway
+	resolver EvidenceResolver
+	now      func() time.Time
 }
 
 func New(cfg Config) (*Service, error) {
 	if cfg.Gateway == nil {
 		return nil, errors.New("source eligibility gateway is required")
 	}
+	if cfg.Resolver == nil {
+		cfg.Resolver = emptyEvidenceResolver{}
+	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	return &Service{gateway: cfg.Gateway, now: cfg.Now}, nil
+	return &Service{gateway: cfg.Gateway, resolver: cfg.Resolver, now: cfg.Now}, nil
+}
+
+type emptyEvidenceResolver struct{}
+
+func (emptyEvidenceResolver) Resolve(context.Context, evidenceresolver.ExactSourceContext) (evidenceresolver.Resolution, error) {
+	return evidenceresolver.Resolution{}, nil
 }
 
 // Evaluate reacquires current server-owned source material and RDF evidence
 // for the exact provider ID before evaluating the pure policy. It performs no
 // database work; callers must re-run it at final persistence time.
 func (s *Service) Evaluate(ctx context.Context, provider sourceprovider.ID, externalID string, human HumanUKEvidence) (Evaluation, error) {
-	if s == nil || s.gateway == nil {
+	if s == nil || s.gateway == nil || s.resolver == nil {
 		return Evaluation{}, ErrProviderEvidenceInvalid
 	}
 	acquired, err := s.gateway.AcquireEvidence(ctx, provider, externalID)
@@ -95,7 +114,15 @@ func (s *Service) Evaluate(ctx context.Context, provider sourceprovider.ID, exte
 		providerEvidence.Provider != string(provider) || providerEvidence.ExternalID != externalID {
 		return Evaluation{}, ErrProviderEvidenceInvalid
 	}
-	effective, err := bindGutenbergUKEvidence(providerEvidence, human)
+	resolution, err := s.resolver.Resolve(ctx, evidenceresolver.ExactSourceContext{
+		ProviderEvidence:  providerEvidence,
+		SourceText:        acquired.Candidate.SourceText,
+		SourceFrontMatter: acquired.SourceFrontMatter,
+	})
+	if err != nil {
+		return Evaluation{}, ErrProviderEvidenceInvalid
+	}
+	effective, err := bindGutenbergUKEvidence(providerEvidence, evidenceresolver.ToUKEvidence(resolution), human)
 	if err != nil {
 		return Evaluation{}, err
 	}
@@ -122,21 +149,41 @@ func (s *Service) Evaluate(ctx context.Context, provider sourceprovider.ID, exte
 	}, nil
 }
 
-func bindGutenbergUKEvidence(provider copyrighteligibility.ProviderEvidence, human HumanUKEvidence) (copyrighteligibility.UKEvidence, error) {
+func bindGutenbergUKEvidence(provider copyrighteligibility.ProviderEvidence, automated copyrighteligibility.UKEvidence, human HumanUKEvidence) (copyrighteligibility.UKEvidence, error) {
 	if provider.Provider != string(sourceprovider.ProjectGutenberg) || strings.TrimSpace(provider.ExternalID) == "" {
 		return copyrighteligibility.UKEvidence{}, ErrProviderEvidenceInvalid
 	}
+	if automated.WorkTitle != "" && strings.TrimSpace(automated.WorkTitle) != strings.TrimSpace(provider.Title) {
+		return copyrighteligibility.UKEvidence{}, ErrProviderEvidenceInvalid
+	}
+	workCategory, workCategoryReferences, err := mergeWorkCategory(automated.WorkCategory, automated.WorkCategoryReferences, human.WorkCategory, human.WorkCategoryReferences)
+	if err != nil {
+		return copyrighteligibility.UKEvidence{}, err
+	}
+	firstPublication, err := mergePublication(automated.FirstPublication, human.FirstPublication)
+	if err != nil {
+		return copyrighteligibility.UKEvidence{}, err
+	}
+	translation, err := mergeFact(automated.Translation, human.Translation)
+	if err != nil {
+		return copyrighteligibility.UKEvidence{}, err
+	}
+	additionalTextual, err := mergeFact(automated.AdditionalTextualContribution, human.AdditionalTextual)
+	if err != nil {
+		return copyrighteligibility.UKEvidence{}, err
+	}
+	unpublished, err := mergeFact(automated.UnpublishedAtEnd1988, human.UnpublishedAtEnd1988)
+	if err != nil {
+		return copyrighteligibility.UKEvidence{}, err
+	}
 	result := copyrighteligibility.UKEvidence{
-		WorkTitle:              strings.TrimSpace(provider.Title),
-		WorkCategory:           human.WorkCategory,
-		WorkCategoryReferences: canonicalReferences(human.WorkCategoryReferences),
-		FirstPublication: copyrighteligibility.PublicationEvidence{
-			Year:       human.FirstPublication.Year,
-			References: canonicalReferences(human.FirstPublication.References),
-		},
-		Translation:                   canonicalFactEvidence(human.Translation),
-		AdditionalTextualContribution: canonicalFactEvidence(human.AdditionalTextual),
-		UnpublishedAtEnd1988:          canonicalFactEvidence(human.UnpublishedAtEnd1988),
+		WorkTitle:                     strings.TrimSpace(provider.Title),
+		WorkCategory:                  workCategory,
+		WorkCategoryReferences:        workCategoryReferences,
+		FirstPublication:              firstPublication,
+		Translation:                   translation,
+		AdditionalTextualContribution: additionalTextual,
+		UnpublishedAtEnd1988:          unpublished,
 	}
 
 	authors := contributorsWithRole(provider.Contributors, "author")
@@ -170,6 +217,50 @@ func bindGutenbergUKEvidence(provider copyrighteligibility.ProviderEvidence, hum
 		result.AdditionalTextualContribution = providerFactEvidence(provider, copyrighteligibility.FactPresent, "Project Gutenberg RDF identifies a possible additional textual contributor.")
 	}
 	return canonicalUKEvidence(result), nil
+}
+
+func mergeWorkCategory(automated copyrighteligibility.WorkCategory, automatedReferences []copyrighteligibility.EvidenceReference, human copyrighteligibility.WorkCategory, humanReferences []copyrighteligibility.EvidenceReference) (copyrighteligibility.WorkCategory, []copyrighteligibility.EvidenceReference, error) {
+	if !unknownWorkCategory(automated) {
+		if !unknownWorkCategory(human) && human != automated {
+			return copyrighteligibility.WorkCategoryUnknown, nil, ErrHumanEvidenceConflict
+		}
+		return automated, canonicalReferences(automatedReferences), nil
+	}
+	if unknownWorkCategory(human) {
+		return copyrighteligibility.WorkCategoryUnknown, nil, nil
+	}
+	return human, canonicalReferences(humanReferences), nil
+}
+
+func mergePublication(automated, human copyrighteligibility.PublicationEvidence) (copyrighteligibility.PublicationEvidence, error) {
+	if automated.Year != 0 {
+		if human.Year != 0 && human.Year != automated.Year {
+			return copyrighteligibility.PublicationEvidence{}, ErrHumanEvidenceConflict
+		}
+		return copyrighteligibility.PublicationEvidence{Year: automated.Year, References: canonicalReferences(automated.References)}, nil
+	}
+	return copyrighteligibility.PublicationEvidence{Year: human.Year, References: canonicalReferences(human.References)}, nil
+}
+
+func mergeFact(automated, human copyrighteligibility.FactEvidence) (copyrighteligibility.FactEvidence, error) {
+	if !unknownFactState(automated.State) {
+		if !unknownFactState(human.State) && human.State != automated.State {
+			return copyrighteligibility.FactEvidence{}, ErrHumanEvidenceConflict
+		}
+		return canonicalFactEvidence(automated), nil
+	}
+	if unknownFactState(human.State) {
+		return copyrighteligibility.FactEvidence{State: copyrighteligibility.FactUnknown}, nil
+	}
+	return canonicalFactEvidence(human), nil
+}
+
+func unknownWorkCategory(value copyrighteligibility.WorkCategory) bool {
+	return value == "" || value == copyrighteligibility.WorkCategoryUnknown
+}
+
+func unknownFactState(value copyrighteligibility.FactState) bool {
+	return value == "" || value == copyrighteligibility.FactUnknown
 }
 
 func providerReference(provider copyrighteligibility.ProviderEvidence, fact string) copyrighteligibility.EvidenceReference {

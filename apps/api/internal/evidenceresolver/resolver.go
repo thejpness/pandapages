@@ -78,7 +78,11 @@ func (s *Service) Resolve(ctx context.Context, exact ExactSourceContext) (Resolu
 		}
 	}
 	canonicalRecords(records)
-	front := ExtractFrontMatter(exact.SourceText)
+	frontSource := exact.SourceFrontMatter
+	if frontSource == "" {
+		frontSource = exact.SourceText
+	}
+	front := ExtractFrontMatter(frontSource)
 	resolution := Resolution{
 		WorkTitle:         strings.TrimSpace(exact.ProviderEvidence.Title),
 		WorkCategory:      resolveWorkCategory(records),
@@ -111,7 +115,7 @@ func validExactContext(exact ExactSourceContext) bool {
 
 func validSourceClass(value SourceClass) bool {
 	switch value {
-	case SourceLibraryOfCongress, SourceOpenLibrary, SourceWikidata:
+	case SourceBibliothequeNationaleDeFrance, SourceLibraryOfCongress, SourceOpenLibrary, SourceWikidata:
 		return true
 	default:
 		return false
@@ -180,6 +184,11 @@ func hasOrdinaryLiteraryMaterial(record BibliographicRecord) bool {
 	for _, value := range values {
 		value = strings.ToLower(strings.TrimSpace(value))
 		if strings.Contains(value, "fiction") || strings.Contains(value, "novel") || strings.Contains(value, "short stor") || strings.Contains(value, "poetry") || strings.Contains(value, "literature") {
+			return true
+		}
+		// BnF's controlled French subject heading "Littératures" is the
+		// direct bibliographic equivalent of the existing literature signal.
+		if strings.Contains(value, "littératur") {
 			return true
 		}
 	}
@@ -303,8 +312,8 @@ func resolveAdditionalTextual(provider copyrighteligibility.ProviderEvidence, re
 
 // resolveTranslationAbsence requires three independent, observable conditions:
 // a bounded exact-source wrapper with no translator signal, no Gutenberg RDF
-// translator, and an exact-edition bibliographic record that reports a
-// contributor-role list with no translator while its original language agrees
+// translator, and an exact-edition bibliographic contributor record that
+// reports no translator while its original language agrees
 // with the acquired source language. Missing any condition remains unknown.
 func resolveTranslationAbsence(provider copyrighteligibility.ProviderEvidence, records []BibliographicRecord, front FrontMatter) ResolvedFact {
 	if !front.Inspected || !hasSingleLanguage(provider.Languages) {
@@ -323,7 +332,7 @@ func resolveTranslationAbsence(provider copyrighteligibility.ProviderEvidence, r
 		providerReference(provider, "Project Gutenberg RDF contains no recognised translator role."),
 		{Class: SourceProjectGutenberg, Source: "Project Gutenberg source front matter", Digest: front.Digest, Fact: "Bounded provider front matter contains no translator signal."},
 	}
-	evidence = append(evidence, recordReferences(values, "An exact-edition bibliographic record has matching original/source language and no translator role.")...)
+	evidence = append(evidence, recordReferences(values, "An exact-edition bibliographic contributor record has matching original/source language and no translator role.")...)
 	return ResolvedFact{Status: ResolutionEstablished, State: copyrighteligibility.FactNoneConfirmed, Reason: ReasonEstablished, Evidence: evidence}
 }
 
@@ -348,7 +357,7 @@ func resolveAdditionalTextualAbsence(provider copyrighteligibility.ProviderEvide
 		providerReference(provider, "Project Gutenberg RDF contains no recognised additional textual contributor role."),
 		{Class: SourceProjectGutenberg, Source: "Project Gutenberg source front matter", Digest: front.Digest, Fact: "Bounded provider front matter contains no additional textual-contributor signal."},
 	}
-	evidence = append(evidence, recordReferences(values, "An exact-edition bibliographic record has no relevant textual contributor role.")...)
+	evidence = append(evidence, recordReferences(values, "An exact-edition bibliographic contributor record has no relevant textual contributor role.")...)
 	return ResolvedFact{Status: ResolutionEstablished, State: copyrighteligibility.FactNoneConfirmed, Reason: ReasonEstablished, Evidence: evidence}
 }
 
@@ -393,7 +402,26 @@ func singleLanguageAgreement(source, original []string) bool {
 	if len(source) != 1 || len(original) != 1 {
 		return false
 	}
-	return strings.EqualFold(strings.TrimSpace(source[0]), strings.TrimSpace(original[0])) && strings.TrimSpace(source[0]) != ""
+	left, right := canonicalLanguage(source[0]), canonicalLanguage(original[0])
+	return left != "" && left == right
+}
+
+func canonicalLanguage(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.TrimPrefix(value, "http://id.loc.gov/vocabulary/iso639-2/")
+	value = strings.TrimPrefix(value, "https://id.loc.gov/vocabulary/iso639-2/")
+	switch value {
+	case "en", "eng":
+		return "eng"
+	case "fr", "fre", "fra":
+		return "fra"
+	case "de", "ger", "deu":
+		return "deu"
+	case "es", "spa":
+		return "spa"
+	default:
+		return value
+	}
 }
 
 func hasSingleLanguage(values []string) bool {
@@ -437,12 +465,12 @@ func distinctClasses(records []BibliographicRecord) map[SourceClass]struct{} {
 }
 
 // publicationAuthority is the central Panda Pages policy for this one fact.
-// Library of Congress is currently the only authoritative class; Open Library
-// and Wikidata are corroborating. Adding another authority requires updating
-// this table alongside its source class and adapter, never this algorithm.
+// BnF and Library of Congress are authoritative classes; Open Library and
+// Wikidata are corroborating. Adding another authority requires updating this
+// table alongside its source class and adapter, never this algorithm.
 func publicationAuthority(class SourceClass) PublicationAuthority {
 	switch class {
-	case SourceLibraryOfCongress:
+	case SourceBibliothequeNationaleDeFrance, SourceLibraryOfCongress:
 		return PublicationAuthorityAuthoritative
 	case SourceOpenLibrary, SourceWikidata:
 		return PublicationAuthorityCorroborating

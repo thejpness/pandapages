@@ -46,6 +46,9 @@ func TestAcquireFetchesOneServerSelectedPlainTextCandidate(t *testing.T) {
 	if acquired.HeaderRights != copyrighteligibility.SourceHeaderRightsPublicDomain {
 		t.Fatalf("header rights=%q", acquired.HeaderRights)
 	}
+	if acquired.SourceFrontMatter != candidateTextFixture {
+		t.Fatalf("front matter=%q", acquired.SourceFrontMatter)
+	}
 	if candidate.Provider != sourceprovider.ProjectGutenberg || candidate.ExternalID != "11" || candidate.SelectedRepresentation != (sourceprovider.Representation{Label: "Plain Text UTF-8", MediaType: "text/plain; charset=utf-8", URL: "https://www.gutenberg.org/cache/epub/11/pg11.txt"}) || candidate.NormalisationVersion != normalisationVersion {
 		t.Fatalf("candidate=%+v", candidate)
 	}

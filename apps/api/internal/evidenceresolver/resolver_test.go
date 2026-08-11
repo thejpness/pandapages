@@ -89,6 +89,23 @@ func TestResolveNegativeFactsRequireExactObservableEvidence(t *testing.T) {
 	}
 }
 
+func TestResolveBNFWorkRecordCannotEstablishNegativeContributorFacts(t *testing.T) {
+	death := 1898
+	publication := 1865
+	workRecord := record(SourceBibliothequeNationaleDeFrance, "ark:/12148/cb12011248f", "Lewis Carroll", &death, &publication)
+	workRecord.WorkID = workRecord.Identifier
+	workRecord.OriginalLanguages = []string{"eng"}
+	// A work record can identify the underlying work and original language, but
+	// cannot identify the exact acquired expression/edition. Even an adapter
+	// bug setting this flag must not bypass the exact-edition requirement.
+	workRecord.ContributorRolesObserved = true
+
+	resolution, err := newResolver(t, workRecord).Resolve(context.Background(), aliceContext())
+	if err != nil || resolution.Translation.Status != ResolutionInsufficient || resolution.Translation.State != copyrighteligibility.FactUnknown || resolution.AdditionalTextual.Status != ResolutionInsufficient || resolution.AdditionalTextual.State != copyrighteligibility.FactUnknown {
+		t.Fatalf("resolution=%#v err=%v", resolution, err)
+	}
+}
+
 func TestResolveBibliographicPositiveContributorBlocksAbsence(t *testing.T) {
 	death := 1898
 	publication := 1865
@@ -215,6 +232,7 @@ func TestPublicationAuthorityIsCentralAndFactSpecific(t *testing.T) {
 		want  PublicationAuthority
 	}{
 		{SourceLibraryOfCongress, PublicationAuthorityAuthoritative},
+		{SourceBibliothequeNationaleDeFrance, PublicationAuthorityAuthoritative},
 		{SourceOpenLibrary, PublicationAuthorityCorroborating},
 		{SourceWikidata, PublicationAuthorityCorroborating},
 		{SourceProjectGutenberg, ""},
@@ -232,6 +250,22 @@ func TestResolveSourceFailureIsInsufficientNotFatal(t *testing.T) {
 	}
 	resolution, err := resolver.Resolve(context.Background(), aliceContext())
 	if err != nil || len(resolution.Diagnostics) != 1 || resolution.Diagnostics[0] != (Diagnostic{Source: SourceOpenLibrary, Reason: ReasonSourceUnavailable}) || resolution.WorkCategory.Status != ResolutionInsufficient {
+		t.Fatalf("resolution=%#v err=%v", resolution, err)
+	}
+}
+
+func TestResolveAuthoritativeSourceFailureLeavesPublicationInsufficient(t *testing.T) {
+	death := 1898
+	publication := 1865
+	resolver, err := New(Config{Sources: []BibliographicSource{
+		sourceStub{class: SourceBibliothequeNationaleDeFrance, err: errors.New("provider unavailable")},
+		sourceStub{class: SourceOpenLibrary, records: []BibliographicRecord{record(SourceOpenLibrary, "ol:alice", "Lewis Carroll", &death, &publication)}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolution, err := resolver.Resolve(context.Background(), aliceContext())
+	if err != nil || resolution.FirstPublication.Status != ResolutionInsufficient || len(resolution.Diagnostics) != 1 || resolution.Diagnostics[0] != (Diagnostic{Source: SourceBibliothequeNationaleDeFrance, Reason: ReasonSourceUnavailable}) {
 		t.Fatalf("resolution=%#v err=%v", resolution, err)
 	}
 }

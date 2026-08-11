@@ -48,8 +48,9 @@ func (a *Adapter) AcquireEvidence(ctx context.Context, externalID string) (sourc
 	}
 
 	return sourceprovider.AcquisitionEvidence{
-		OPDSRights:   classifyProviderRights(work.ProviderRights),
-		HeaderRights: headerRights,
+		OPDSRights:        classifyProviderRights(work.ProviderRights),
+		HeaderRights:      headerRights,
+		SourceFrontMatter: boundedSourceFrontMatter(content),
 		Candidate: sourceprovider.SourceCandidate{
 			Provider:               work.Provider,
 			ExternalID:             work.ExternalID,
@@ -65,6 +66,13 @@ func (a *Adapter) AcquireEvidence(ctx context.Context, externalID string) (sourc
 			SourceText:             normalised,
 		},
 	}, nil
+}
+
+func boundedSourceFrontMatter(content []byte) string {
+	if len(content) > sourceHeaderScanBytes {
+		content = content[:sourceHeaderScanBytes]
+	}
+	return string(content)
 }
 
 func plainTextRepresentation(externalID string) (sourceprovider.Representation, error) {

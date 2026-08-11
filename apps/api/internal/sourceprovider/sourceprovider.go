@@ -100,6 +100,10 @@ type AcquisitionEvidence struct {
 	Candidate    SourceCandidate
 	OPDSRights   copyrighteligibility.ProviderRightsClassification
 	HeaderRights copyrighteligibility.SourceHeaderRightsClassification
+	// SourceFrontMatter is a bounded raw provider prefix used only by
+	// server-side evidence resolution before normalisation removes the wrapper.
+	// It is not part of SourceCandidate and is never sent to a browser.
+	SourceFrontMatter string
 }
 
 // EvidenceAcquirer prevents eligibility orchestration from downloading an
