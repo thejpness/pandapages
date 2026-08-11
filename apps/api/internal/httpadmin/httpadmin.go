@@ -580,7 +580,7 @@ func writeSourceAcquisitionError(w http.ResponseWriter, err error, review bool) 
 			writeIssues(w, http.StatusBadRequest, code, message, validationErr.Issues)
 			return
 		}
-		slog.Error("source acquisition operation failed")
+		slog.Error("source acquisition operation failed", "error", err)
 		writeErr(w, http.StatusInternalServerError, "source_acquisition_failed", "source acquisition operation failed")
 	}
 }

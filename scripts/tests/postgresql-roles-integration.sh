@@ -215,12 +215,24 @@ psql_as "$application_role" --command="
     acquisition_id, status, note, reviewed_at
   ) VALUES (
     'a1500000-0000-4000-8000-000000000031',
-    'approved', 'Initial review rationale.', now()
+    'pending', NULL, NULL
   );
-  UPDATE source_acquisition_quality_reviews
-  SET note='Updated review rationale.', reviewed_at=now()
-  WHERE acquisition_id='a1500000-0000-4000-8000-000000000031';
 " >/dev/null
+
+# The runtime role can use the mutable quality-review row as a transaction
+# mutex while moving the review through its ordinary lifecycle.
+psql_as "$application_role" --command="
+  BEGIN;
+  SELECT acquisition_id
+  FROM source_acquisition_quality_reviews
+  WHERE acquisition_id='a1500000-0000-4000-8000-000000000031'
+  FOR UPDATE;
+  UPDATE source_acquisition_quality_reviews
+  SET status='approved', note='Updated review rationale.', reviewed_at=now()
+  WHERE acquisition_id='a1500000-0000-4000-8000-000000000031';
+  COMMIT;
+" >/dev/null
+[[ $(psql_as "$application_role" --tuples-only --no-align --command="SELECT status FROM source_acquisition_quality_reviews WHERE acquisition_id='a1500000-0000-4000-8000-000000000031';") == approved ]]
 
 psql_as "$application_role" --command="SELECT count(*) FROM stories;" >/dev/null
 psql_as "$application_role" --command="SELECT count(*) FROM source_acquisitions;" >/dev/null
@@ -230,6 +242,11 @@ expect_denied \
   'application acquisition mutation' \
   "$application_role" \
   "UPDATE source_acquisitions SET title='Mutation denied' WHERE id='a1500000-0000-4000-8000-000000000031';"
+
+expect_denied \
+  'application immutable acquisition lock' \
+  "$application_role" \
+  "SELECT id FROM source_acquisitions WHERE id='a1500000-0000-4000-8000-000000000031' FOR UPDATE;"
 
 expect_denied \
   'application acquisition deletion' \

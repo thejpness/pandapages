@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"pandapages/api/internal/model"
 )
@@ -80,5 +81,106 @@ func TestAdminSourceAcquisitionPromotionIntegration(t *testing.T) {
 
 	if _, err := store.AdminUpdateSourceAcquisitionSourceQualityReview(persisted.Acquisition.ID, model.AdminSourceQualityReviewUpdateRequest{Status: model.AdminSourceQualityRejected, Note: "Too late"}); !errors.Is(err, model.ErrAdminSourceAcquisitionAlreadyPromoted) {
 		t.Fatalf("quality lock error=%v", err)
+	}
+}
+
+func TestAdminSourceAcquisitionPromotionAndQualityReviewSerializeIntegration(t *testing.T) {
+	if os.Getenv(readerIntegrationGuardVar) != "1" {
+		t.Skip("set PP_READER_STORE_TEST_DISPOSABLE=1 to run the disposable PostgreSQL integration test")
+	}
+	databaseURL := strings.TrimSpace(os.Getenv(readerIntegrationURLVar))
+	if databaseURL == "" {
+		t.Fatalf("%s is required", readerIntegrationURLVar)
+	}
+	adminDB, err := sql.Open("pgx", databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = adminDB.Close() })
+	var databaseName string
+	if err := adminDB.QueryRow(`SELECT current_database()`).Scan(&databaseName); err != nil || databaseName != readerIntegrationDBName {
+		t.Fatalf("refusing promotion test database %q: %v", databaseName, err)
+	}
+
+	store := newReaderIntegrationStore(t, databaseURL)
+	acquisition := persistReadyPromotionAcquisition(t, store, "905")
+	lockTx, err := adminDB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lockTx.Rollback() }()
+	if _, err := lockTx.Exec(`SELECT acquisition_id FROM source_acquisition_quality_reviews WHERE acquisition_id = $1 FOR UPDATE`, acquisition.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	promotionErrs := make(chan error, 1)
+	go func() {
+		_, err := store.AdminPromoteSourceAcquisition(acquisition.ID, model.AdminSourceAcquisitionPromotionRequest{Target: model.AdminSourceAcquisitionPromotionTarget{
+			Mode:  model.AdminSourceAcquisitionPromotionTargetNewStory,
+			Title: "Quality review race",
+			Slug:  "promotion-quality-review-race",
+		}})
+		promotionErrs <- err
+	}()
+	qualityErrs := make(chan error, 1)
+	go func() {
+		_, err := store.AdminUpdateSourceAcquisitionSourceQualityReview(acquisition.ID, model.AdminSourceQualityReviewUpdateRequest{
+			Status: model.AdminSourceQualityRejected,
+			Note:   "Concurrent source-quality rejection.",
+		})
+		qualityErrs <- err
+	}()
+	waitForSourceAcquisitionLockWaiters(t, adminDB, 2)
+	if err := lockTx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	promotionErr := <-promotionErrs
+	qualityErr := <-qualityErrs
+	var qualityStatus string
+	if err := adminDB.QueryRow(`SELECT status FROM source_acquisition_quality_reviews WHERE acquisition_id = $1`, acquisition.ID).Scan(&qualityStatus); err != nil {
+		t.Fatal(err)
+	}
+	var promotionCount int
+	if err := adminDB.QueryRow(`SELECT count(*) FROM story_source_versions WHERE source_acquisition_id = $1`, acquisition.ID).Scan(&promotionCount); err != nil {
+		t.Fatal(err)
+	}
+
+	switch {
+	case promotionErr == nil:
+		if !errors.Is(qualityErr, model.ErrAdminSourceAcquisitionAlreadyPromoted) || qualityStatus != string(model.AdminSourceQualityApproved) || promotionCount != 1 {
+			t.Fatalf("promotion won: promotion=%v quality=%v status=%q versions=%d", promotionErr, qualityErr, qualityStatus, promotionCount)
+		}
+	case errors.Is(promotionErr, model.ErrAdminSourceAcquisitionNotReady):
+		if qualityErr != nil || qualityStatus != string(model.AdminSourceQualityRejected) || promotionCount != 0 {
+			t.Fatalf("quality update won: promotion=%v quality=%v status=%q versions=%d", promotionErr, qualityErr, qualityStatus, promotionCount)
+		}
+	default:
+		t.Fatalf("unexpected serialized results: promotion=%v quality=%v", promotionErr, qualityErr)
+	}
+}
+
+func waitForSourceAcquisitionLockWaiters(t *testing.T, adminDB *sql.DB, want int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var waiters int
+		err := adminDB.QueryRow(`
+			SELECT count(*)
+			FROM pg_stat_activity
+			WHERE datname = current_database()
+			  AND wait_event_type = 'Lock'
+			  AND query LIKE '%source_acquisition%'
+		`).Scan(&waiters)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if waiters >= want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("source acquisition lock waiters=%d, want at least %d", waiters, want)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
