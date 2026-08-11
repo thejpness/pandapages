@@ -1053,6 +1053,76 @@ export type AdminStoryStatusResponse = {
   releaseCount: number;
 };
 
+export type AdminSourceProviderID = "project-gutenberg";
+export type AdminSourceProviderContributor = { name: string; role: string };
+export type AdminSourceProviderRepresentation = {
+  label: string;
+  mediaType: string;
+  url: string;
+  sizeBytes?: number;
+};
+export type AdminSourceProviderWork = {
+  provider: AdminSourceProviderID;
+  externalId: string;
+  title: string;
+  contributors: AdminSourceProviderContributor[];
+  languages: string[];
+  landingUrl: string;
+  providerRights?: string;
+  representations: AdminSourceProviderRepresentation[];
+};
+export type AdminSourceProviderSearchResponse = {
+  provider: AdminSourceProviderID;
+  results: AdminSourceProviderWork[];
+};
+export type AdminSourceAcquisitionReviewStatus = "pending" | "approved" | "rejected";
+export type AdminSourceAcquisitionReviewDimension = {
+  status: AdminSourceAcquisitionReviewStatus;
+  note: string | null;
+  reviewedAt: string | null;
+};
+export type AdminSourceAcquisitionReview = {
+  rights: AdminSourceAcquisitionReviewDimension;
+  editorial: AdminSourceAcquisitionReviewDimension;
+};
+export type AdminSourceAcquisitionRepresentation = {
+  label: string | null;
+  mediaType: string;
+  providerUrl: string;
+  sizeBytes: number | null;
+};
+export type AdminSourceAcquisitionSummary = {
+  id: string;
+  provider: AdminSourceProviderID;
+  externalId: string;
+  title: string;
+  contributors: AdminSourceProviderContributor[];
+  languages: string[];
+  landingUrl: string;
+  providerRights: string | null;
+  selectedRepresentation: AdminSourceAcquisitionRepresentation;
+  normalisationVersion: string;
+  retrievedContentHash: string;
+  normalisedContentHash: string;
+  snapshotHash: string;
+  createdAt: string;
+  review: AdminSourceAcquisitionReview;
+};
+export type AdminSourceAcquisitionDetail = AdminSourceAcquisitionSummary & {
+  sourceText: string;
+};
+export type AdminSourceAcquisitionPersistResponse = {
+  outcome: "created" | "reused";
+  acquisition: AdminSourceAcquisitionSummary;
+};
+export type AdminSourceAcquisitionListResponse = {
+  items: AdminSourceAcquisitionSummary[];
+};
+export type AdminSourceAcquisitionReviewUpdateRequest = {
+  status: AdminSourceAcquisitionReviewStatus;
+  note: string;
+};
+
 const adminStoryStatuses = new Set<AdminStoryStatus>(["draft_only", "published", "published_with_draft", "unpublished", "repair_required"]);
 const adminEditionStatuses = new Set<AdminEditionStatus>(["empty", "draft_only", "published", "published_with_draft", "unpublished", "repair_required"]);
 const adminSourceStatuses = new Set<AdminSourceStatus>(["missing", "ready", "repair_required"]);
@@ -1061,6 +1131,9 @@ const adminDraftOutcomes = new Set<AdminDraftOutcome>(["created_story", "created
 const adminEditionIngestOutcomes = new Set<AdminEditionIngestOutcome>(["created", "reused"]);
 const adminReleaseOutcomes = new Set<AdminReleaseOutcome>(["created", "reused_current"]);
 const adminSourceOutcomes = new Set<AdminSourceOutcome>(["created_source", "created_version", "reused"]);
+const adminSourceProviderIDs = new Set<AdminSourceProviderID>(["project-gutenberg"]);
+const adminSourceAcquisitionReviewStatuses = new Set<AdminSourceAcquisitionReviewStatus>(["pending", "approved", "rejected"]);
+const adminSourceAcquisitionOutcomes = new Set<AdminSourceAcquisitionPersistResponse["outcome"]>(["created", "reused"]);
 const adminUUIDPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const forbiddenAdminKeys = new Set([
@@ -1173,6 +1246,179 @@ function parseAdminUUID(value: unknown): string {
     throw new Error("Invalid admin response");
   }
   return value;
+}
+
+function parseAdminSourceProviderID(value: unknown): AdminSourceProviderID {
+  if (typeof value !== "string" || !adminSourceProviderIDs.has(value as AdminSourceProviderID)) {
+    throw new Error("Invalid admin response");
+  }
+  return value as AdminSourceProviderID;
+}
+
+function parseAdminURL(value: unknown): string {
+  const raw = requiredAdminString({ value }, "value");
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error("Invalid admin response");
+  }
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password) {
+    throw new Error("Invalid admin response");
+  }
+  return raw;
+}
+
+function optionalAdminString(record: Record<string, unknown>, key: string): string | null {
+  if (!(key in record) || record[key] === null) return null;
+  return requiredAdminString(record, key);
+}
+
+function parseAdminBoundedSize(value: unknown): number | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw new Error("Invalid admin response");
+  return value;
+}
+
+function parseAdminSourceProviderContributors(value: unknown): AdminSourceProviderContributor[] {
+  if (!Array.isArray(value)) throw new Error("Invalid admin response");
+  return value.map((item) => {
+    const record = adminRecord(item);
+    return { name: requiredAdminString(record, "name"), role: requiredAdminString(record, "role") };
+  });
+}
+
+function parseAdminLanguages(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new Error("Invalid admin response");
+  return value.map((item) => {
+    if (typeof item !== "string" || item.trim().length === 0) throw new Error("Invalid admin response");
+    return item;
+  });
+}
+
+function parseAdminSourceProviderRepresentation(value: unknown): AdminSourceProviderRepresentation {
+  const record = adminRecord(value);
+  const sizeBytes = parseAdminBoundedSize(record.sizeBytes);
+  if (typeof record.label !== "string") throw new Error("Invalid admin response");
+  const result: AdminSourceProviderRepresentation = {
+    label: record.label,
+    mediaType: requiredAdminString(record, "mediaType"),
+    url: parseAdminURL(record.url),
+  };
+  if (sizeBytes !== null) result.sizeBytes = sizeBytes;
+  return result;
+}
+
+export function parseAdminSourceProviderWork(value: unknown): AdminSourceProviderWork {
+  const record = adminRecord(value);
+  if (!Array.isArray(record.representations)) throw new Error("Invalid admin response");
+  const providerRights = optionalAdminString(record, "providerRights");
+  return {
+    provider: parseAdminSourceProviderID(record.provider),
+    externalId: requiredAdminString(record, "externalId"),
+    title: requiredAdminString(record, "title"),
+    contributors: parseAdminSourceProviderContributors(record.contributors),
+    languages: parseAdminLanguages(record.languages),
+    landingUrl: parseAdminURL(record.landingUrl),
+    ...(providerRights === null ? {} : { providerRights }),
+    representations: record.representations.map(parseAdminSourceProviderRepresentation),
+  };
+}
+
+export function parseAdminSourceProviderSearchResponse(value: unknown): AdminSourceProviderSearchResponse {
+  const record = adminRecord(value);
+  if (!Array.isArray(record.results)) throw new Error("Invalid admin response");
+  const provider = parseAdminSourceProviderID(record.provider);
+  const results = record.results.map(parseAdminSourceProviderWork);
+  if (results.some((work) => work.provider !== provider)) throw new Error("Invalid admin response");
+  return { provider, results };
+}
+
+function parseAdminSourceAcquisitionReviewDimension(value: unknown): AdminSourceAcquisitionReviewDimension {
+  const record = adminRecord(value);
+  if (typeof record.status !== "string" || !adminSourceAcquisitionReviewStatuses.has(record.status as AdminSourceAcquisitionReviewStatus)) {
+    throw new Error("Invalid admin response");
+  }
+  const status = record.status as AdminSourceAcquisitionReviewStatus;
+  const note = optionalAdminString(record, "note");
+  const reviewedAt = record.reviewedAt === undefined || record.reviewedAt === null
+    ? null
+    : parseAdminNullableTimestamp(record.reviewedAt);
+  if ((status === "pending" && (note !== null || reviewedAt !== null)) || (status !== "pending" && (note === null || reviewedAt === null))) {
+    throw new Error("Invalid admin response");
+  }
+  return { status, note, reviewedAt };
+}
+
+function parseAdminSourceAcquisitionReview(value: unknown): AdminSourceAcquisitionReview {
+  const record = adminRecord(value);
+  return {
+    rights: parseAdminSourceAcquisitionReviewDimension(record.rights),
+    editorial: parseAdminSourceAcquisitionReviewDimension(record.editorial),
+  };
+}
+
+function parseAdminSourceAcquisitionRepresentation(value: unknown): AdminSourceAcquisitionRepresentation {
+  const record = adminRecord(value);
+  return {
+    label: optionalAdminString(record, "label"),
+    mediaType: requiredAdminString(record, "mediaType"),
+    providerUrl: parseAdminURL(record.providerUrl),
+    sizeBytes: parseAdminBoundedSize(record.sizeBytes),
+  };
+}
+
+function parseAdminSHA256(value: unknown): string {
+  if (typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value)) throw new Error("Invalid admin response");
+  return value;
+}
+
+export function parseAdminSourceAcquisitionSummary(value: unknown): AdminSourceAcquisitionSummary {
+  const record = adminRecord(value);
+  if ("sourceText" in record) throw new Error("Invalid admin response");
+  const createdAt = parseAdminNullableTimestamp(record.createdAt);
+  if (createdAt === null) throw new Error("Invalid admin response");
+  return {
+    id: parseAdminUUID(record.id),
+    provider: parseAdminSourceProviderID(record.provider),
+    externalId: requiredAdminString(record, "externalId"),
+    title: requiredAdminString(record, "title"),
+    contributors: parseAdminSourceProviderContributors(record.contributors),
+    languages: parseAdminLanguages(record.languages),
+    landingUrl: parseAdminURL(record.landingUrl),
+    providerRights: optionalAdminString(record, "providerRights"),
+    selectedRepresentation: parseAdminSourceAcquisitionRepresentation(record.selectedRepresentation),
+    normalisationVersion: requiredAdminString(record, "normalisationVersion"),
+    retrievedContentHash: parseAdminSHA256(record.retrievedContentHash),
+    normalisedContentHash: parseAdminSHA256(record.normalisedContentHash),
+    snapshotHash: parseAdminSHA256(record.snapshotHash),
+    createdAt,
+    review: parseAdminSourceAcquisitionReview(record.review),
+  };
+}
+
+export function parseAdminSourceAcquisitionDetail(value: unknown): AdminSourceAcquisitionDetail {
+  const record = adminRecord(value, ["sourcetext"]);
+  if (typeof record.sourceText !== "string" || record.sourceText.length === 0) throw new Error("Invalid admin response");
+  const summaryRecord = { ...record };
+  delete summaryRecord.sourceText;
+  return { ...parseAdminSourceAcquisitionSummary(summaryRecord), sourceText: record.sourceText };
+}
+
+export function parseAdminSourceAcquisitionListResponse(value: unknown): AdminSourceAcquisitionListResponse {
+  const record = adminRecord(value);
+  if (!Array.isArray(record.items)) throw new Error("Invalid admin response");
+  const items = record.items.map(parseAdminSourceAcquisitionSummary);
+  if (new Set(items.map((item) => item.id)).size !== items.length) throw new Error("Invalid admin response");
+  return { items };
+}
+
+export function parseAdminSourceAcquisitionPersistResponse(value: unknown): AdminSourceAcquisitionPersistResponse {
+  const record = adminRecord(value);
+  if (typeof record.outcome !== "string" || !adminSourceAcquisitionOutcomes.has(record.outcome as AdminSourceAcquisitionPersistResponse["outcome"])) {
+    throw new Error("Invalid admin response");
+  }
+  return { outcome: record.outcome as AdminSourceAcquisitionPersistResponse["outcome"], acquisition: parseAdminSourceAcquisitionSummary(record.acquisition) };
 }
 
 function parseAdminStatus(value: unknown): AdminStoryStatus {
@@ -1467,6 +1713,67 @@ export async function adminCreateRelease(slug: string, payload: AdminCreateRelea
 }
 export async function adminUnpublishStory(slug: string): Promise<AdminStoryStatusResponse> {
   return parseAdminStoryStatusResponse(await request<unknown>(`/api/v1/admin/stories/${encodeURIComponent(slug)}/unpublish`, { method: "POST" }));
+}
+
+export async function adminSearchSourceProvider(
+  provider: AdminSourceProviderID,
+  query: string,
+  signal?: AbortSignal,
+): Promise<AdminSourceProviderSearchResponse> {
+  const params = new URLSearchParams({ q: query });
+  return parseAdminSourceProviderSearchResponse(await request<unknown>(
+    `/api/v1/admin/source-providers/${encodeURIComponent(provider)}/search?${params}`,
+    { signal },
+  ));
+}
+
+export async function adminGetSourceProviderWork(
+  provider: AdminSourceProviderID,
+  externalID: string,
+  signal?: AbortSignal,
+): Promise<AdminSourceProviderWork> {
+  return parseAdminSourceProviderWork(await request<unknown>(
+    `/api/v1/admin/source-providers/${encodeURIComponent(provider)}/works/${encodeURIComponent(externalID)}`,
+    { signal },
+  ));
+}
+
+export async function adminPersistSourceAcquisition(
+  provider: AdminSourceProviderID,
+  externalID: string,
+): Promise<AdminSourceAcquisitionPersistResponse> {
+  return parseAdminSourceAcquisitionPersistResponse(await request<unknown>(
+    `/api/v1/admin/source-providers/${encodeURIComponent(provider)}/works/${encodeURIComponent(externalID)}/acquisitions`,
+    { method: "POST" },
+  ));
+}
+
+export async function adminListSourceAcquisitions(signal?: AbortSignal): Promise<AdminSourceAcquisitionListResponse> {
+  return parseAdminSourceAcquisitionListResponse(await request<unknown>("/api/v1/admin/source-acquisitions", { signal }));
+}
+
+export async function adminGetSourceAcquisition(id: string, signal?: AbortSignal): Promise<AdminSourceAcquisitionDetail> {
+  return parseAdminSourceAcquisitionDetail(await request<unknown>(`/api/v1/admin/source-acquisitions/${encodeURIComponent(id)}`, { signal }));
+}
+
+export async function adminUpdateSourceAcquisitionRightsReview(
+  id: string,
+  payload: AdminSourceAcquisitionReviewUpdateRequest,
+): Promise<AdminSourceAcquisitionSummary> {
+  return parseAdminSourceAcquisitionSummary(await request<unknown>(
+    `/api/v1/admin/source-acquisitions/${encodeURIComponent(id)}/rights-review`,
+    { method: "PUT", body: JSON.stringify(payload) },
+  ));
+}
+
+export async function adminUpdateSourceAcquisitionEditorialReview(
+  id: string,
+  payload: AdminSourceAcquisitionReviewUpdateRequest,
+): Promise<AdminSourceAcquisitionSummary> {
+  return parseAdminSourceAcquisitionSummary(await request<unknown>(
+    `/api/v1/admin/source-acquisitions/${encodeURIComponent(id)}/editorial-review`,
+    { method: "PUT", body: JSON.stringify(payload) },
+  ));
 }
 
 /* ---------------------------- Progress -------------------------- */

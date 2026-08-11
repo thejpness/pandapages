@@ -5,7 +5,9 @@ import type { Page, Route } from '@playwright/test'
 const versionOne = '11111111-1111-4111-8111-111111111111'
 const versionTwo = '22222222-2222-4222-8222-222222222222'
 const versionThree = '33333333-3333-4333-8333-333333333333'
+const acquisitionID = '44444444-4444-4444-8444-444444444444'
 const timestamp = '2026-07-20T10:00:00Z'
+const sourceHash = 'a'.repeat(64)
 
 type QueuedFailure = { status: number; code: string; message: string }
 
@@ -148,6 +150,40 @@ function withDetail(item: TestStorySummary, versions: TestVersionSummary[]): Tes
   }
 }
 
+function sourceAcquisitionSummary(overrides: Record<string, unknown> = {}) {
+  return {
+    id: acquisitionID,
+    provider: 'project-gutenberg',
+    externalId: '11',
+    title: "Alice's Adventures in Wonderland",
+    contributors: [{ name: 'Lewis Carroll', role: 'author' }],
+    languages: ['en'],
+    landingUrl: 'https://www.gutenberg.org/ebooks/11',
+    providerRights: 'Public domain in the United States.',
+    selectedRepresentation: { label: 'Plain text UTF-8', mediaType: 'text/plain; charset=utf-8', providerUrl: 'https://www.gutenberg.org/files/11/11-0.txt', sizeBytes: 1234 },
+    normalisationVersion: 'project-gutenberg-plain-text-v1',
+    retrievedContentHash: sourceHash,
+    normalisedContentHash: sourceHash,
+    snapshotHash: sourceHash,
+    createdAt: timestamp,
+    review: { rights: { status: 'pending' }, editorial: { status: 'pending' } },
+    ...overrides,
+  }
+}
+
+function sourceProviderWork(externalId = '11', title = "Alice's Adventures in Wonderland") {
+  return {
+    provider: 'project-gutenberg',
+    externalId,
+    title,
+    contributors: [{ name: 'Lewis Carroll', role: 'author' }],
+    languages: ['en'],
+    landingUrl: `https://www.gutenberg.org/ebooks/${externalId}`,
+    providerRights: 'Provider metadata only.',
+    representations: [{ label: 'Plain text UTF-8', mediaType: 'text/plain; charset=utf-8', url: `https://www.gutenberg.org/files/${externalId}/${externalId}-0.txt`, sizeBytes: 1234 }],
+  }
+}
+
 class StudioAPI {
   readonly requests: Array<{ method: string; path: string; body: unknown }> = []
   readonly unhandled: string[] = []
@@ -162,6 +198,9 @@ class StudioAPI {
     release: ReturnType<typeof deferred<void>>
   } | null = null
   detailGates = new Map<string, ReturnType<typeof deferred<void>>>()
+  sourceSearchGates = new Map<string, ReturnType<typeof deferred<void>>>()
+  sourceDetailGates = new Map<string, ReturnType<typeof deferred<void>>>()
+  sourceListPlans: Array<{ gate: ReturnType<typeof deferred<void>>; items: ReturnType<typeof sourceAcquisitionSummary>[] }> = []
 
   stories = [
     summary('panda-tale', 'The Panda Tale', 'published_with_draft'),
@@ -193,6 +232,7 @@ class StudioAPI {
       ]),
     ],
   ])
+  sourceAcquisitions: ReturnType<typeof sourceAcquisitionSummary>[] = []
 
   async install(page: Page) {
     await page.route('**/api/v1/**', (route) => this.handle(route))
@@ -279,6 +319,83 @@ class StudioAPI {
           },
         ],
       })
+      return
+    }
+
+    if (path === '/api/v1/admin/source-providers/project-gutenberg/search' && method === 'GET') {
+      const query = url.searchParams.get('q') ?? ''
+      const gate = this.sourceSearchGates.get(query)
+      if (gate) {
+        this.sourceSearchGates.delete(query)
+        await gate.promise
+      }
+      const work = query === 'rabbit'
+        ? sourceProviderWork('12', 'Rabbit source')
+        : sourceProviderWork()
+      await this.fulfill(route, { provider: 'project-gutenberg', results: [work] })
+      return
+    }
+
+    if (path === '/api/v1/admin/source-providers/project-gutenberg/works/11' && method === 'GET') {
+      await this.fulfill(route, sourceProviderWork())
+      return
+    }
+
+    if (path === '/api/v1/admin/source-providers/project-gutenberg/works/11/acquisitions' && method === 'POST') {
+      const existing = this.sourceAcquisitions.find((item) => item.externalId === '11')
+      if (existing) {
+        await this.fulfill(route, { outcome: 'reused', acquisition: existing })
+        return
+      }
+      const acquisition = sourceAcquisitionSummary()
+      this.sourceAcquisitions.unshift(acquisition)
+      await this.fulfill(route, { outcome: 'created', acquisition }, 201)
+      return
+    }
+
+    if (path === '/api/v1/admin/source-acquisitions' && method === 'GET') {
+      const plan = this.sourceListPlans.shift()
+      if (plan) {
+        await plan.gate.promise
+        await this.fulfill(route, { items: plan.items })
+        return
+      }
+      await this.fulfill(route, { items: this.sourceAcquisitions })
+      return
+    }
+
+    const acquisitionReviewMatch = /^\/api\/v1\/admin\/source-acquisitions\/([^/]+)\/(rights-review|editorial-review)$/.exec(path)
+    if (acquisitionReviewMatch && method === 'PUT') {
+      const acquisition = this.sourceAcquisitions.find((item) => item.id === acquisitionReviewMatch[1])
+      const update = body as { status?: string; note?: string }
+      if (!acquisition || (update.status !== 'pending' && update.status !== 'approved' && update.status !== 'rejected')) {
+        await this.fail(route, { status: 400, code: 'source_acquisition_review_invalid', message: 'source acquisition review is invalid' })
+        return
+      }
+      const dimension = acquisitionReviewMatch[2] === 'rights-review' ? 'rights' : 'editorial'
+      acquisition.review = {
+        ...acquisition.review,
+        [dimension]: update.status === 'pending'
+          ? { status: 'pending' }
+          : { status: update.status, note: String(update.note ?? ''), reviewedAt: timestamp },
+      }
+      await this.fulfill(route, acquisition)
+      return
+    }
+
+    const acquisitionDetailMatch = /^\/api\/v1\/admin\/source-acquisitions\/([^/]+)$/.exec(path)
+    if (acquisitionDetailMatch && method === 'GET') {
+      const acquisition = this.sourceAcquisitions.find((item) => item.id === acquisitionDetailMatch[1])
+      const gate = this.sourceDetailGates.get(acquisitionDetailMatch[1])
+      if (gate) {
+        this.sourceDetailGates.delete(acquisitionDetailMatch[1])
+        await gate.promise
+      }
+      if (!acquisition) {
+        await this.fail(route, { status: 404, code: 'source_acquisition_not_found', message: 'source acquisition was not found' })
+        return
+      }
+      await this.fulfill(route, { ...acquisition, sourceText: 'Down the rabbit-hole.\n\nThis is durable provider material.\n' })
       return
     }
 
@@ -691,6 +808,140 @@ test('catalogue loads human statuses and supports deterministic search and filte
   await expect(page.getByRole('heading', { name: 'The Tangled Story' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'The Quiet Moon' })).toBeHidden()
   expect(await seriousOrCriticalViolations(page)).toEqual([])
+  expect(api.unhandled).toEqual([])
+})
+
+test('global source review saves a selected work directly and keeps rights and source-quality review independent', async ({ page }) => {
+  const api = new StudioAPI()
+  await api.install(page)
+  await page.goto('/admin/source-review')
+
+  await expect(page.getByRole('heading', { level: 1, name: 'Source review' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Source review', exact: true })).toHaveAttribute('aria-current', 'page')
+  await expect(page.getByText('No sources saved for review yet')).toHaveCount(0)
+  await page.getByRole('tab', { name: 'Find a source' }).focus()
+  await page.keyboard.press('ArrowRight')
+  await expect(page.getByRole('tab', { name: 'Saved sources' })).toHaveAttribute('aria-selected', 'true')
+  await page.keyboard.press('ArrowLeft')
+  await expect(page.getByRole('tab', { name: 'Find a source' })).toHaveAttribute('aria-selected', 'true')
+  await page.getByRole('searchbox', { name: 'Search Project Gutenberg' }).fill('alice')
+  await page.getByRole('button', { name: 'Search', exact: true }).click()
+  await expect(page.getByRole('heading', { name: "Alice's Adventures in Wonderland" })).toBeVisible()
+  await page.getByRole('button', { name: 'Select work' }).click()
+  await expect(page.getByRole('heading', { name: "Alice's Adventures in Wonderland" })).toHaveCount(2)
+  await expect(page.getByRole('button', { name: 'Save for source review' })).toBeVisible()
+  await expect(page.getByRole('button', { name: /Preview source|Approve preview|Accept candidate/ })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Save for source review' }).click()
+
+  await expect(page.getByText('Saved for source review.')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Saved source text' })).toBeVisible()
+  await expect(page.locator('pre[aria-label="Saved source text"]')).toContainText('durable provider material')
+  await expect(page.getByText('Provider rights information is evidence only. It does not constitute Panda Pages approval.')).toBeVisible()
+  expect(api.count('POST', '/api/v1/admin/source-providers/project-gutenberg/works/11/acquisitions')).toBe(1)
+  expect(api.requests.find((request) => request.path.endsWith('/acquisitions'))?.body).toBeNull()
+
+  await page.getByLabel('Rights status').selectOption('rejected')
+  await page.getByLabel('Rationale').first().fill('Evidence needs a second review.')
+  await page.getByRole('button', { name: 'Save rights review' }).click()
+  await expect(page.getByText('Rights review updated.')).toBeVisible()
+  await expect(page.getByText('Rights: Rejected · Source quality: Pending')).toBeVisible()
+
+  await page.getByLabel('Rights status').selectOption('approved')
+  await page.getByLabel('Rationale').first().fill('Reviewed against the supplied provider evidence.')
+  await page.getByRole('button', { name: 'Save rights review' }).click()
+  await expect(page.getByText('Rights: Approved · Source quality: Pending')).toBeVisible()
+
+  await page.getByLabel('Source quality status').selectOption('rejected')
+  await page.getByLabel('Rationale').last().fill('Complete, readable text for the intended work.')
+  await page.getByRole('button', { name: 'Save source quality review' }).click()
+  await expect(page.getByText('Source quality review updated.')).toBeVisible()
+  await expect(page.getByText('Rights: Approved · Source quality: Rejected')).toBeVisible()
+
+  await page.getByLabel('Source quality status').selectOption('approved')
+  await page.getByLabel('Rationale').last().fill('Complete, readable text for the intended work.')
+  await page.getByRole('button', { name: 'Save source quality review' }).click()
+  await expect(page.getByRole('heading', { name: 'Ready for canonical-source promotion' })).toBeVisible()
+  await expect(page.getByText('Canonical-source promotion is not available yet.')).toBeVisible()
+  await expect(page.getByRole('button', { name: /Promote|Create story|Generate editions|Publish/ })).toHaveCount(0)
+  expect(api.count('PUT', `/api/v1/admin/source-acquisitions/${acquisitionID}/rights-review`)).toBe(2)
+  expect(api.count('PUT', `/api/v1/admin/source-acquisitions/${acquisitionID}/editorial-review`)).toBe(2)
+
+  await page.getByRole('tab', { name: 'Find a source' }).click()
+  await page.getByRole('searchbox', { name: 'Search Project Gutenberg' }).fill('alice')
+  await page.getByRole('button', { name: 'Search', exact: true }).click()
+  await page.getByRole('button', { name: 'Select work' }).click()
+  await page.getByRole('button', { name: 'Save for source review' }).click()
+  await expect(page.getByText('This exact saved source already exists. Opening it for review.')).toBeVisible()
+  expect(api.count('POST', '/api/v1/admin/source-providers/project-gutenberg/works/11/acquisitions')).toBe(2)
+  expect(api.unhandled).toEqual([])
+  expect(await seriousOrCriticalViolations(page)).toEqual([])
+})
+
+test('global source review isolates stale search, saved-list, and detail requests', async ({ page }) => {
+  const api = new StudioAPI()
+  const searchA = deferred<void>()
+  const searchB = deferred<void>()
+  const savedA = deferred<void>()
+  const savedB = deferred<void>()
+  const detailA = deferred<void>()
+  const detailB = deferred<void>()
+  const secondID = '55555555-5555-4555-8555-555555555555'
+  const first = sourceAcquisitionSummary({ title: 'First saved source' })
+  const second = sourceAcquisitionSummary({ id: secondID, externalId: '12', title: 'Second saved source' })
+  api.sourceAcquisitions = []
+  await api.install(page)
+  await page.goto('/admin/source-review')
+  await expect.poll(() => api.count('GET', '/api/v1/admin/source-acquisitions')).toBe(1)
+  api.sourceAcquisitions = [first, second]
+
+  api.sourceSearchGates.set('alice', searchA)
+  api.sourceSearchGates.set('rabbit', searchB)
+  await page.getByRole('searchbox', { name: 'Search Project Gutenberg' }).fill('alice')
+  await page.getByRole('button', { name: 'Search', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Searching Project Gutenberg' })).toBeVisible()
+  await page.locator('#source-provider-search').evaluate((element) => {
+    const input = element as HTMLInputElement
+    input.value = 'rabbit'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    input.form?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+  })
+  await expect.poll(() => api.count('GET', '/api/v1/admin/source-providers/project-gutenberg/search')).toBe(2)
+  searchA.resolve()
+  await expect(page.getByRole('heading', { name: 'Searching Project Gutenberg' })).toBeVisible()
+  await expect(page.getByRole('alert')).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'Rabbit source' })).toHaveCount(0)
+  searchB.resolve()
+  await expect(page.getByRole('heading', { name: 'Rabbit source' })).toBeVisible()
+
+  api.sourceListPlans.push({ gate: savedA, items: [first] }, { gate: savedB, items: [second] })
+  await page.getByRole('tab', { name: 'Saved sources' }).click()
+  await expect.poll(() => api.count('GET', '/api/v1/admin/source-acquisitions')).toBe(2)
+  await page.getByRole('tab', { name: 'Find a source' }).click()
+  await page.getByRole('tab', { name: 'Saved sources' }).click()
+  await expect.poll(() => api.count('GET', '/api/v1/admin/source-acquisitions')).toBe(3)
+  savedA.resolve()
+  await expect(page.getByRole('heading', { name: 'Loading saved sources' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'First saved source' })).toHaveCount(0)
+  await expect(page.getByRole('alert')).toHaveCount(0)
+  savedB.resolve()
+  await expect(page.getByRole('button', { name: 'Second saved source' })).toBeVisible()
+  await page.getByRole('tab', { name: 'Find a source' }).click()
+  await page.getByRole('tab', { name: 'Saved sources' }).click()
+  await expect(page.getByRole('button', { name: 'First saved source' })).toBeVisible()
+
+  api.sourceDetailGates.set(acquisitionID, detailA)
+  api.sourceDetailGates.set(secondID, detailB)
+  await page.getByRole('button', { name: 'First saved source' }).click()
+  await expect.poll(() => api.count('GET', `/api/v1/admin/source-acquisitions/${acquisitionID}`)).toBe(1)
+  await page.getByRole('button', { name: 'Second saved source' }).click()
+  await expect.poll(() => api.count('GET', `/api/v1/admin/source-acquisitions/${secondID}`)).toBe(1)
+  detailA.resolve()
+  await expect(page.getByRole('heading', { name: 'Opening saved source' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'First saved source' })).toHaveCount(0)
+  await expect(page.getByRole('alert')).toHaveCount(0)
+  detailB.resolve()
+  await expect(page.getByRole('heading', { name: 'Second saved source' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'First saved source' })).toHaveCount(0)
   expect(api.unhandled).toEqual([])
 })
 
