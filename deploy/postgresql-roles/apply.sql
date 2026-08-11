@@ -309,7 +309,8 @@ WITH runtime_table(name) AS (
     ('reader_story_edition_overrides'),
     ('reading_progress'),
     ('source_acquisitions'),
-    ('source_acquisition_reviews'),
+    ('source_acquisition_eligibility_assessments'),
+    ('source_acquisition_quality_reviews'),
     ('stories'),
     ('story_editions'),
     ('story_release_editions'),
@@ -337,7 +338,7 @@ WHERE namespace.nspname = 'public'
 -- Release history and acquisition evidence are immutable at the runtime
 -- privilege boundary. Review state deliberately lives in its own table.
 WITH immutable_runtime_table(name) AS (
-  VALUES ('story_releases'), ('story_release_editions'), ('source_acquisitions')
+  VALUES ('story_releases'), ('story_release_editions'), ('source_acquisitions'), ('source_acquisition_eligibility_assessments')
 )
 SELECT format(
   'REVOKE UPDATE, DELETE ON TABLE public.%I FROM %I',
@@ -361,7 +362,7 @@ SELECT format(
 FROM pg_class class
 JOIN pg_namespace namespace ON namespace.oid = class.relnamespace
 WHERE namespace.nspname = 'public'
-  AND class.relname = 'source_acquisition_reviews'
+  AND class.relname = 'source_acquisition_quality_reviews'
   AND class.relkind IN ('r', 'p')
 \gexec
 

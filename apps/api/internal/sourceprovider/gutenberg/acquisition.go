@@ -20,36 +20,51 @@ const maxSourceBytes = 10 << 20 // 10 MiB decoded plain-text source body.
 // Acquire obtains one server-selected, trusted plain-text representation and
 // returns an in-memory review candidate. It never writes Panda Pages data.
 func (a *Adapter) Acquire(ctx context.Context, externalID string) (sourceprovider.SourceCandidate, error) {
-	work, err := a.GetWork(ctx, externalID)
+	acquired, err := a.AcquireEvidence(ctx, externalID)
 	if err != nil {
 		return sourceprovider.SourceCandidate{}, err
+	}
+	return acquired.Candidate, nil
+}
+
+// AcquireEvidence obtains one trusted plain-text body and derives both the
+// existing review candidate and bounded header rights evidence from it.
+func (a *Adapter) AcquireEvidence(ctx context.Context, externalID string) (sourceprovider.AcquisitionEvidence, error) {
+	work, err := a.GetWork(ctx, externalID)
+	if err != nil {
+		return sourceprovider.AcquisitionEvidence{}, err
 	}
 	representation, err := selectPlainTextRepresentation(work.Representations)
 	if err != nil {
-		return sourceprovider.SourceCandidate{}, err
+		return sourceprovider.AcquisitionEvidence{}, err
 	}
 	content, err := a.fetchPlainText(ctx, representation.URL)
 	if err != nil {
-		return sourceprovider.SourceCandidate{}, err
+		return sourceprovider.AcquisitionEvidence{}, err
 	}
+	headerRights := classifySourceHeaderRights(content)
 	normalised, err := normalisePlainText(content)
 	if err != nil {
-		return sourceprovider.SourceCandidate{}, err
+		return sourceprovider.AcquisitionEvidence{}, err
 	}
 
-	return sourceprovider.SourceCandidate{
-		Provider:               work.Provider,
-		ExternalID:             work.ExternalID,
-		Title:                  work.Title,
-		Contributors:           work.Contributors,
-		Languages:              work.Languages,
-		LandingURL:             work.LandingURL,
-		ProviderRights:         work.ProviderRights,
-		SelectedRepresentation: representation,
-		NormalisationVersion:   normalisationVersion,
-		RetrievedContentHash:   sha256Hex(content),
-		NormalisedContentHash:  sha256HexString(normalised),
-		SourceText:             normalised,
+	return sourceprovider.AcquisitionEvidence{
+		OPDSRights:   classifyProviderRights(work.ProviderRights),
+		HeaderRights: headerRights,
+		Candidate: sourceprovider.SourceCandidate{
+			Provider:               work.Provider,
+			ExternalID:             work.ExternalID,
+			Title:                  work.Title,
+			Contributors:           work.Contributors,
+			Languages:              work.Languages,
+			LandingURL:             work.LandingURL,
+			ProviderRights:         work.ProviderRights,
+			SelectedRepresentation: representation,
+			NormalisationVersion:   normalisationVersion,
+			RetrievedContentHash:   sha256Hex(content),
+			NormalisedContentHash:  sha256HexString(normalised),
+			SourceText:             normalised,
+		},
 	}, nil
 }
 
@@ -168,3 +183,4 @@ func sha256HexString(value string) string {
 }
 
 var _ sourceprovider.Acquirer = (*Adapter)(nil)
+var _ sourceprovider.EvidenceAcquirer = (*Adapter)(nil)

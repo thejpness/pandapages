@@ -162,7 +162,8 @@ WITH runtime_table(name, can_update, can_delete) AS (
     ('reader_story_edition_overrides', true, true),
     ('reading_progress', true, true),
     ('source_acquisitions', false, false),
-    ('source_acquisition_reviews', true, false),
+    ('source_acquisition_eligibility_assessments', false, false),
+    ('source_acquisition_quality_reviews', true, false),
     ('stories', true, true),
     ('story_editions', true, true),
     ('story_release_editions', false, false),
@@ -193,7 +194,7 @@ WITH runtime_table(name, can_update, can_delete) AS (
     AND class.relkind IN ('r', 'p')
 )
 SELECT
-  count(*) = 20
+  count(*) = 21
   AND to_regclass('public.child_profiles') IS NULL
   AND to_regclass('public.prompt_profiles') IS NULL
   AND to_regclass('public.profile_settings') IS NULL
@@ -253,7 +254,8 @@ WITH runtime_table(name) AS (
     ('reader_story_edition_overrides'),
     ('reading_progress'),
     ('source_acquisitions'),
-    ('source_acquisition_reviews'),
+    ('source_acquisition_eligibility_assessments'),
+    ('source_acquisition_quality_reviews'),
     ('stories'),
     ('story_editions'),
     ('story_release_editions'),

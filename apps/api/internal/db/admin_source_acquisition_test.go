@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"pandapages/api/internal/model"
 	"pandapages/api/internal/sourceprovider"
@@ -65,25 +66,55 @@ func TestAdminSourceAcquisitionInputRejectsInconsistentSourceHash(t *testing.T) 
 	}
 }
 
-func TestCanonicalSourceAcquisitionReview(t *testing.T) {
+func TestSourceEligibilityAssessmentHashUsesSemanticEvidenceNotTimestamp(t *testing.T) {
+	candidate := testSourceAcquisitionCandidate()
+	acquisition, err := adminSourceAcquisitionInput(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := testEligibleEvaluation(candidate)
+	second := first
+	second.EvaluatedAt = first.EvaluatedAt.Add(2 * time.Hour)
+	firstInput, err := sourceEligibilityAssessmentInputFor("11111111-1111-4111-8111-111111111111", acquisition, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondInput, err := sourceEligibilityAssessmentInputFor("11111111-1111-4111-8111-111111111111", acquisition, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstInput.Hash != secondInput.Hash {
+		t.Fatalf("timestamp-only assessment hashes differ: %s / %s", firstInput.Hash, secondInput.Hash)
+	}
+	second.ProviderEvidence.EvidenceDigest = strings.Repeat("e", 64)
+	changedInput, err := sourceEligibilityAssessmentInputFor("11111111-1111-4111-8111-111111111111", acquisition, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstInput.Hash == changedInput.Hash {
+		t.Fatal("provider evidence change did not affect assessment hash")
+	}
+}
+
+func TestCanonicalSourceAcquisitionQualityReview(t *testing.T) {
 	tests := []struct {
 		name       string
-		req        model.AdminSourceAcquisitionReviewUpdateRequest
-		wantStatus model.AdminSourceAcquisitionReviewStatus
+		req        model.AdminSourceQualityReviewUpdateRequest
+		wantStatus model.AdminSourceQualityStatus
 		wantNote   *string
 		wantError  bool
 	}{
-		{"pending", model.AdminSourceAcquisitionReviewUpdateRequest{Status: model.AdminSourceAcquisitionReviewPending}, model.AdminSourceAcquisitionReviewPending, nil, false},
-		{"approved", model.AdminSourceAcquisitionReviewUpdateRequest{Status: model.AdminSourceAcquisitionReviewApproved, Note: "Reviewed for Panda Pages."}, model.AdminSourceAcquisitionReviewApproved, stringPointer("Reviewed for Panda Pages."), false},
-		{"rejected", model.AdminSourceAcquisitionReviewUpdateRequest{Status: model.AdminSourceAcquisitionReviewRejected, Note: "Needs a clearer source."}, model.AdminSourceAcquisitionReviewRejected, stringPointer("Needs a clearer source."), false},
-		{"pending note", model.AdminSourceAcquisitionReviewUpdateRequest{Status: model.AdminSourceAcquisitionReviewPending, Note: "Not allowed"}, "", nil, true},
-		{"approved without note", model.AdminSourceAcquisitionReviewUpdateRequest{Status: model.AdminSourceAcquisitionReviewApproved}, "", nil, true},
-		{"unknown status", model.AdminSourceAcquisitionReviewUpdateRequest{Status: "maybe", Note: "No"}, "", nil, true},
-		{"oversized note", model.AdminSourceAcquisitionReviewUpdateRequest{Status: model.AdminSourceAcquisitionReviewRejected, Note: strings.Repeat("a", 4001)}, "", nil, true},
+		{"pending", model.AdminSourceQualityReviewUpdateRequest{Status: model.AdminSourceQualityPending}, model.AdminSourceQualityPending, nil, false},
+		{"approved", model.AdminSourceQualityReviewUpdateRequest{Status: model.AdminSourceQualityApproved, Note: "Reviewed for Panda Pages."}, model.AdminSourceQualityApproved, stringPointer("Reviewed for Panda Pages."), false},
+		{"rejected", model.AdminSourceQualityReviewUpdateRequest{Status: model.AdminSourceQualityRejected, Note: "Needs a clearer source."}, model.AdminSourceQualityRejected, stringPointer("Needs a clearer source."), false},
+		{"pending note", model.AdminSourceQualityReviewUpdateRequest{Status: model.AdminSourceQualityPending, Note: "Not allowed"}, "", nil, true},
+		{"approved without note", model.AdminSourceQualityReviewUpdateRequest{Status: model.AdminSourceQualityApproved}, "", nil, true},
+		{"unknown status", model.AdminSourceQualityReviewUpdateRequest{Status: "maybe", Note: "No"}, "", nil, true},
+		{"oversized note", model.AdminSourceQualityReviewUpdateRequest{Status: model.AdminSourceQualityRejected, Note: strings.Repeat("a", 4001)}, "", nil, true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			status, note, err := canonicalSourceAcquisitionReview(test.req)
+			status, note, err := canonicalSourceAcquisitionQualityReview(test.req)
 			if test.wantError {
 				if err == nil {
 					t.Fatal("expected validation error")

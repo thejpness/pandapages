@@ -10,10 +10,13 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"pandapages/api/internal/appidentity"
+	"pandapages/api/internal/copyrighteligibility"
 	"pandapages/api/internal/model"
+	"pandapages/api/internal/sourceeligibility"
 	"pandapages/api/internal/sourceprovider"
 )
 
@@ -33,11 +36,10 @@ type Store interface {
 	AdminGetSource(slug string) (model.AdminSourceDetailResponse, error)
 	AdminGetSourceVersion(slug string, versionID string) (model.AdminSourceVersionResponse, error)
 
-	AdminPersistSourceAcquisition(sourceprovider.SourceCandidate) (model.AdminSourceAcquisitionPersistResponse, error)
+	AdminPersistEligibleSourceAcquisition(sourceeligibility.Evaluation) (model.AdminSourceAcquisitionPersistResponse, error)
 	AdminListSourceAcquisitions(limit int) (model.AdminSourceAcquisitionsListResponse, error)
 	AdminGetSourceAcquisition(id string) (model.AdminSourceAcquisitionDetail, error)
-	AdminUpdateSourceAcquisitionRightsReview(id string, req model.AdminSourceAcquisitionReviewUpdateRequest) (model.AdminSourceAcquisitionSummary, error)
-	AdminUpdateSourceAcquisitionEditorialReview(id string, req model.AdminSourceAcquisitionReviewUpdateRequest) (model.AdminSourceAcquisitionSummary, error)
+	AdminUpdateSourceAcquisitionSourceQualityReview(id string, req model.AdminSourceQualityReviewUpdateRequest) (model.AdminSourceAcquisitionSummary, error)
 }
 
 const (
@@ -45,7 +47,10 @@ const (
 	// Keep public APIs small; only admin gets this.
 	maxJSONBodyBytes           = 20 << 20 // 20MB
 	sourceProviderMaximumLimit = 20
+	maxSourceEligibilityBody   = 64 << 10
 )
+
+var errSourceEligibilityInput = errors.New("source eligibility evidence is invalid")
 
 func New(cfg Config, store Store) http.Handler {
 	adminKey := strings.TrimSpace(cfg.AdminKey)
@@ -58,6 +63,7 @@ func New(cfg Config, store Store) http.Handler {
 
 	discovery := cfg.SourceDiscovery
 	acquisition := cfg.SourceAcquisition
+	eligibility := cfg.SourceEligibility
 	mux := http.NewServeMux()
 
 	withAdmin := func(next http.HandlerFunc) http.HandlerFunc {
@@ -208,21 +214,51 @@ func New(cfg Config, store Store) http.Handler {
 		writeJSON(w, http.StatusOK, out)
 	}))
 
-	mux.HandleFunc("POST /api/v1/admin/source-providers/{provider}/works/{externalID}/acquisitions", withAdmin(func(w http.ResponseWriter, r *http.Request) {
-		if err := requireEmptyBody(w, r); err != nil {
-			writeErr(w, http.StatusBadRequest, "source_acquisition_invalid", "source acquisition request must not include a body")
+	// POST /api/v1/admin/source-providers/{provider}/works/{externalID}/copyright-eligibility
+	// evaluates current provider material without creating any database state.
+	mux.HandleFunc("POST /api/v1/admin/source-providers/{provider}/works/{externalID}/copyright-eligibility", withAdmin(func(w http.ResponseWriter, r *http.Request) {
+		if eligibility == nil {
+			writeErr(w, http.StatusServiceUnavailable, "source_eligibility_unavailable", "copyright eligibility is unavailable")
 			return
 		}
-		if acquisition == nil {
-			writeErr(w, http.StatusServiceUnavailable, "source_provider_unavailable", "source provider is unavailable")
-			return
-		}
-		candidate, err := acquisition.Acquire(r.Context(), sourceprovider.ID(strings.TrimSpace(r.PathValue("provider"))), strings.TrimSpace(r.PathValue("externalID")))
+		human, err := decodeSourceEligibilityHumanEvidence(w, r)
 		if err != nil {
-			writeSourceProviderError(w, err, true)
+			writeSourceEligibilityInputError(w, err)
 			return
 		}
-		out, err := store.AdminPersistSourceAcquisition(candidate)
+		evaluation, err := eligibility.Evaluate(r.Context(), sourceprovider.ID(strings.TrimSpace(r.PathValue("provider"))), strings.TrimSpace(r.PathValue("externalID")), human)
+		if err != nil {
+			writeSourceEligibilityError(w, err)
+			return
+		}
+		noStore(w)
+		writeJSON(w, http.StatusOK, sourceEligibilityResponse(evaluation))
+	}))
+
+	mux.HandleFunc("POST /api/v1/admin/source-providers/{provider}/works/{externalID}/acquisitions", withAdmin(func(w http.ResponseWriter, r *http.Request) {
+		if eligibility == nil {
+			writeErr(w, http.StatusServiceUnavailable, "source_eligibility_unavailable", "copyright eligibility is unavailable")
+			return
+		}
+		human, err := decodeSourceEligibilityHumanEvidence(w, r)
+		if err != nil {
+			writeSourceEligibilityInputError(w, err)
+			return
+		}
+		evaluation, err := eligibility.Evaluate(r.Context(), sourceprovider.ID(strings.TrimSpace(r.PathValue("provider"))), strings.TrimSpace(r.PathValue("externalID")), human)
+		if err != nil {
+			writeSourceEligibilityError(w, err)
+			return
+		}
+		if evaluation.Assessment.Overall != "eligible" {
+			noStore(w)
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+				"error":       map[string]string{"code": "source_eligibility_blocked", "message": "copyright eligibility is blocked"},
+				"eligibility": sourceEligibilityResponse(evaluation),
+			})
+			return
+		}
+		out, err := store.AdminPersistEligibleSourceAcquisition(evaluation)
 		if err != nil {
 			writeSourceAcquisitionError(w, err, false)
 			return
@@ -260,28 +296,13 @@ func New(cfg Config, store Store) http.Handler {
 		writeJSON(w, http.StatusOK, out)
 	}))
 
-	mux.HandleFunc("PUT /api/v1/admin/source-acquisitions/{acquisitionID}/rights-review", withAdmin(func(w http.ResponseWriter, r *http.Request) {
-		var body model.AdminSourceAcquisitionReviewUpdateRequest
+	mux.HandleFunc("PUT /api/v1/admin/source-acquisitions/{acquisitionID}/source-quality-review", withAdmin(func(w http.ResponseWriter, r *http.Request) {
+		var body model.AdminSourceQualityReviewUpdateRequest
 		if err := decodeJSON(w, r, &body); err != nil {
 			writeDecodeError(w, err)
 			return
 		}
-		out, err := store.AdminUpdateSourceAcquisitionRightsReview(strings.TrimSpace(r.PathValue("acquisitionID")), body)
-		if err != nil {
-			writeSourceAcquisitionError(w, err, true)
-			return
-		}
-		noStore(w)
-		writeJSON(w, http.StatusOK, out)
-	}))
-
-	mux.HandleFunc("PUT /api/v1/admin/source-acquisitions/{acquisitionID}/editorial-review", withAdmin(func(w http.ResponseWriter, r *http.Request) {
-		var body model.AdminSourceAcquisitionReviewUpdateRequest
-		if err := decodeJSON(w, r, &body); err != nil {
-			writeDecodeError(w, err)
-			return
-		}
-		out, err := store.AdminUpdateSourceAcquisitionEditorialReview(strings.TrimSpace(r.PathValue("acquisitionID")), body)
+		out, err := store.AdminUpdateSourceAcquisitionSourceQualityReview(strings.TrimSpace(r.PathValue("acquisitionID")), body)
 		if err != nil {
 			writeSourceAcquisitionError(w, err, true)
 			return
@@ -535,6 +556,84 @@ func writeSourceAcquisitionError(w http.ResponseWriter, err error, review bool) 
 	}
 }
 
+func writeSourceEligibilityInputError(w http.ResponseWriter, err error) {
+	var validationErr *model.AdminValidationError
+	if errors.As(err, &validationErr) {
+		writeIssues(w, http.StatusBadRequest, "source_eligibility_invalid", "copyright evidence is invalid", validationErr.Issues)
+		return
+	}
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		writeErr(w, http.StatusRequestEntityTooLarge, "source_eligibility_invalid", "copyright evidence is too large")
+		return
+	}
+	writeErr(w, http.StatusBadRequest, "source_eligibility_invalid", "copyright evidence is invalid")
+}
+
+func writeSourceEligibilityError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, sourceeligibility.ErrHumanEvidenceConflict):
+		writeErr(w, http.StatusUnprocessableEntity, "source_eligibility_blocked", "provider evidence conflicts with submitted facts")
+	case errors.Is(err, sourceeligibility.ErrProviderEvidenceInvalid), errors.Is(err, sourceprovider.ErrEvidenceInvalid), errors.Is(err, sourceprovider.ErrEvidenceIdentityMismatch):
+		slog.Error("source eligibility evidence was invalid")
+		writeErr(w, http.StatusBadGateway, "source_eligibility_evidence_failed", "copyright evidence could not be verified")
+	case errors.Is(err, sourceprovider.ErrEvidenceTooLarge):
+		writeErr(w, http.StatusBadGateway, "source_eligibility_evidence_failed", "copyright evidence could not be verified")
+	case errors.Is(err, sourceprovider.ErrEvidenceTimeout), errors.Is(err, sourceprovider.ErrTimeout):
+		writeErr(w, http.StatusGatewayTimeout, "source_eligibility_evidence_timeout", "copyright evidence did not respond in time")
+	case errors.Is(err, sourceprovider.ErrUnknownProvider), errors.Is(err, sourceprovider.ErrWorkIDInvalid):
+		writeErr(w, http.StatusBadRequest, "source_provider_query_invalid", "source provider request is invalid")
+	case errors.Is(err, sourceprovider.ErrWorkNotFound):
+		writeErr(w, http.StatusNotFound, "source_provider_work_not_found", "source provider work was not found")
+	default:
+		slog.Error("source eligibility evaluation failed")
+		writeErr(w, http.StatusBadGateway, "source_eligibility_evidence_failed", "copyright evidence is unavailable")
+	}
+}
+
+func sourceEligibilityResponse(evaluation sourceeligibility.Evaluation) model.AdminSourceEligibility {
+	contributors := make([]model.AdminCopyrightContributorEvidence, 0, len(evaluation.ProviderEvidence.Contributors))
+	for _, contributor := range evaluation.ProviderEvidence.Contributors {
+		contributors = append(contributors, model.AdminCopyrightContributorEvidence{Name: contributor.Name, Role: contributor.Role, BirthYear: contributor.BirthYear, DeathYear: contributor.DeathYear})
+	}
+	return model.AdminSourceEligibility{
+		PolicyVersion:  evaluation.Assessment.PolicyVersion,
+		EvaluationDate: evaluation.EvaluationDate.UTC().Format("2006-01-02"),
+		EvaluatedAt:    evaluation.EvaluatedAt.UTC().Format(time.RFC3339Nano),
+		US:             model.AdminCopyrightJurisdiction{Status: string(evaluation.Assessment.US.Status), Reason: string(evaluation.Assessment.US.Reason)},
+		UK:             model.AdminCopyrightJurisdiction{Status: string(evaluation.Assessment.UK.Status), Reason: string(evaluation.Assessment.UK.Reason)},
+		Overall:        string(evaluation.Assessment.Overall),
+		OverallReason:  string(evaluation.Assessment.OverallReason),
+		OPDSRights:     string(evaluation.OPDSRights), RDFRights: string(evaluation.ProviderEvidence.Rights), HeaderRights: string(evaluation.HeaderRights),
+		ProviderTitle: evaluation.ProviderEvidence.Title, Contributors: contributors, RDFDigest: evaluation.ProviderEvidence.EvidenceDigest,
+		EffectiveUK: sourceEligibilityEffectiveUK(evaluation.EffectiveUKEvidence),
+	}
+}
+
+func sourceEligibilityEffectiveUK(value copyrighteligibility.UKEvidence) model.AdminSourceEligibilityEffectiveUKEvidence {
+	return model.AdminSourceEligibilityEffectiveUKEvidence{WorkCategory: string(value.WorkCategory), WorkCategoryReferences: sourceEligibilityResponseReferences(value.WorkCategoryReferences), Authorship: string(value.Authorship), AuthorshipReferences: sourceEligibilityResponseReferences(value.AuthorshipReferences), AuthorName: value.Author.Name, AuthorDeathYear: value.Author.DeathYear, AuthorReferences: sourceEligibilityResponseReferences(value.Author.References), FirstPublicationYear: value.FirstPublication.Year, FirstPublicationRefs: sourceEligibilityResponseReferences(value.FirstPublication.References), Translation: sourceEligibilityResponseFact(value.Translation), AdditionalTextual: sourceEligibilityResponseFact(value.AdditionalTextualContribution), SpecialCategory: sourceEligibilityResponseFact(value.SpecialCategory), UnpublishedAtEnd1988: sourceEligibilityResponseFact(value.UnpublishedAtEnd1988)}
+}
+
+func sourceEligibilityResponseFact(value copyrighteligibility.FactEvidence) model.AdminCopyrightFactEvidence {
+	return model.AdminCopyrightFactEvidence{State: string(value.State), References: sourceEligibilityResponseReferences(value.References)}
+}
+
+func sourceEligibilityResponseReferences(values []copyrighteligibility.EvidenceReference) []model.AdminCopyrightEvidenceReference {
+	result := make([]model.AdminCopyrightEvidenceReference, 0, len(values))
+	for _, value := range values {
+		result = append(result, model.AdminCopyrightEvidenceReference{Source: value.Source, Fact: value.Fact, Locator: eligibilityOptionalString(value.Locator), Identifier: eligibilityOptionalString(value.Identifier), Digest: eligibilityOptionalString(value.Digest)})
+	}
+	return result
+}
+
+func eligibilityOptionalString(value string) *string {
+	if value == "" {
+		return nil
+	}
+	result := value
+	return &result
+}
+
 func requireEmptyBody(w http.ResponseWriter, r *http.Request) error {
 	r.Body = http.MaxBytesReader(w, r.Body, 1)
 	defer r.Body.Close()
@@ -547,6 +646,125 @@ func requireEmptyBody(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	return errors.New("unexpected request body")
+}
+
+func decodeSourceEligibilityHumanEvidence(w http.ResponseWriter, r *http.Request) (sourceeligibility.HumanUKEvidence, error) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxSourceEligibilityBody)
+	defer r.Body.Close()
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		return sourceeligibility.HumanUKEvidence{}, err
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return sourceeligibility.HumanUKEvidence{}, nil
+	}
+	if !utf8.Valid(raw) {
+		return sourceeligibility.HumanUKEvidence{}, errSourceEligibilityInput
+	}
+	var body model.AdminSourceEligibilityHumanEvidence
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		return sourceeligibility.HumanUKEvidence{}, errSourceEligibilityInput
+	}
+	return sourceEligibilityHumanEvidence(body)
+}
+
+func sourceEligibilityHumanEvidence(body model.AdminSourceEligibilityHumanEvidence) (sourceeligibility.HumanUKEvidence, error) {
+	workCategory := copyrighteligibility.WorkCategory(strings.TrimSpace(body.WorkCategory))
+	if workCategory == "" {
+		workCategory = copyrighteligibility.WorkCategoryUnknown
+	}
+	if workCategory != copyrighteligibility.WorkCategoryOrdinaryLiterary && workCategory != copyrighteligibility.WorkCategoryUnknown {
+		return sourceeligibility.HumanUKEvidence{}, errSourceEligibilityInput
+	}
+	workCategoryReferences, err := sourceEligibilityReferences(body.WorkCategoryReferences)
+	if err != nil {
+		return sourceeligibility.HumanUKEvidence{}, err
+	}
+	authorDeathReferences, err := sourceEligibilityReferences(body.AuthorDeathReferences)
+	if err != nil {
+		return sourceeligibility.HumanUKEvidence{}, err
+	}
+	publicationReferences, err := sourceEligibilityReferences(body.FirstPublicationRefs)
+	if err != nil {
+		return sourceeligibility.HumanUKEvidence{}, err
+	}
+	translation, err := sourceEligibilityFactEvidence(body.Translation)
+	if err != nil {
+		return sourceeligibility.HumanUKEvidence{}, err
+	}
+	additional, err := sourceEligibilityFactEvidence(body.AdditionalTextual)
+	if err != nil {
+		return sourceeligibility.HumanUKEvidence{}, err
+	}
+	special, err := sourceEligibilityFactEvidence(body.SpecialCategory)
+	if err != nil {
+		return sourceeligibility.HumanUKEvidence{}, err
+	}
+	unpublished, err := sourceEligibilityFactEvidence(body.UnpublishedAtEnd1988)
+	if err != nil {
+		return sourceeligibility.HumanUKEvidence{}, err
+	}
+	if (body.AuthorDeathYear != nil && (*body.AuthorDeathYear < -9999 || *body.AuthorDeathYear > 9999)) || body.FirstPublicationYear < -9999 || body.FirstPublicationYear > 9999 {
+		return sourceeligibility.HumanUKEvidence{}, errSourceEligibilityInput
+	}
+	return sourceeligibility.HumanUKEvidence{WorkCategory: workCategory, WorkCategoryReferences: workCategoryReferences, AuthorDeathYear: body.AuthorDeathYear, AuthorDeathReferences: authorDeathReferences, FirstPublication: copyrighteligibility.PublicationEvidence{Year: body.FirstPublicationYear, References: publicationReferences}, Translation: translation, AdditionalTextual: additional, SpecialCategory: special, UnpublishedAtEnd1988: unpublished}, nil
+}
+
+func sourceEligibilityFactEvidence(body model.AdminCopyrightFactEvidence) (copyrighteligibility.FactEvidence, error) {
+	state := copyrighteligibility.FactState(strings.TrimSpace(body.State))
+	if state == "" {
+		state = copyrighteligibility.FactUnknown
+	}
+	if state != copyrighteligibility.FactNoneConfirmed && state != copyrighteligibility.FactPresent && state != copyrighteligibility.FactUnknown {
+		return copyrighteligibility.FactEvidence{}, errSourceEligibilityInput
+	}
+	references, err := sourceEligibilityReferences(body.References)
+	if err != nil {
+		return copyrighteligibility.FactEvidence{}, err
+	}
+	return copyrighteligibility.FactEvidence{State: state, References: references}, nil
+}
+
+func sourceEligibilityReferences(values []model.AdminCopyrightEvidenceReference) ([]copyrighteligibility.EvidenceReference, error) {
+	if len(values) > 8 {
+		return nil, errSourceEligibilityInput
+	}
+	result := make([]copyrighteligibility.EvidenceReference, 0, len(values))
+	for _, value := range values {
+		reference := copyrighteligibility.EvidenceReference{Source: strings.TrimSpace(value.Source), Fact: strings.TrimSpace(value.Fact)}
+		if value.Locator != nil {
+			reference.Locator = strings.TrimSpace(*value.Locator)
+		}
+		if value.Identifier != nil {
+			reference.Identifier = strings.TrimSpace(*value.Identifier)
+		}
+		if value.Digest != nil {
+			reference.Digest = strings.TrimSpace(*value.Digest)
+		}
+		if !validEligibilityText(reference.Source, 500) || !validEligibilityText(reference.Fact, 1000) || (reference.Locator != "" && !validEligibilityText(reference.Locator, 2048)) || (reference.Identifier != "" && !validEligibilityText(reference.Identifier, 256)) || (reference.Digest != "" && !sourceEligibilityDigest(reference.Digest)) {
+			return nil, errSourceEligibilityInput
+		}
+		result = append(result, reference)
+	}
+	return result, nil
+}
+
+func validEligibilityText(value string, maximum int) bool {
+	return utf8.ValidString(value) && value == strings.TrimSpace(value) && value != "" && len(value) <= maximum
+}
+
+func sourceEligibilityDigest(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, runeValue := range value {
+		if !(runeValue >= '0' && runeValue <= '9' || runeValue >= 'a' && runeValue <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func sourceProviderLimit(raw string) (int, error) {

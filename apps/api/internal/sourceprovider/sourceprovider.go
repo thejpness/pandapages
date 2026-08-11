@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
+	"pandapages/api/internal/copyrighteligibility"
 )
 
 const ProjectGutenberg ID = "project-gutenberg"
@@ -92,6 +94,26 @@ type Acquirer interface {
 	Acquire(context.Context, string) (SourceCandidate, error)
 }
 
+// AcquisitionEvidence pairs one server-owned candidate fetch with the bounded
+// provider evidence extracted from that same source body.
+type AcquisitionEvidence struct {
+	Candidate    SourceCandidate
+	OPDSRights   copyrighteligibility.ProviderRightsClassification
+	HeaderRights copyrighteligibility.SourceHeaderRightsClassification
+}
+
+// EvidenceAcquirer prevents eligibility orchestration from downloading an
+// ebook twice merely to inspect its provider header.
+type EvidenceAcquirer interface {
+	AcquireEvidence(context.Context, string) (AcquisitionEvidence, error)
+}
+
+// CopyrightEvidenceReader returns provider-native copyright evidence in a
+// provider-neutral typed form. It never writes Panda Pages data.
+type CopyrightEvidenceReader interface {
+	CopyrightEvidence(context.Context, string) (copyrighteligibility.ProviderEvidence, error)
+}
+
 // Discovery is the narrow service used by the admin HTTP layer.
 type Discovery interface {
 	Search(context.Context, ID, string, int) (SearchResponse, error)
@@ -148,6 +170,30 @@ func (r *Registry) Acquire(ctx context.Context, providerID ID, externalID string
 		return SourceCandidate{}, ErrRepresentationUnavailable
 	}
 	return acquirer.Acquire(ctx, externalID)
+}
+
+func (r *Registry) AcquireEvidence(ctx context.Context, providerID ID, externalID string) (AcquisitionEvidence, error) {
+	provider, err := r.provider(providerID)
+	if err != nil {
+		return AcquisitionEvidence{}, err
+	}
+	acquirer, ok := provider.(EvidenceAcquirer)
+	if !ok {
+		return AcquisitionEvidence{}, ErrEvidenceUnavailable
+	}
+	return acquirer.AcquireEvidence(ctx, externalID)
+}
+
+func (r *Registry) CopyrightEvidence(ctx context.Context, providerID ID, externalID string) (copyrighteligibility.ProviderEvidence, error) {
+	provider, err := r.provider(providerID)
+	if err != nil {
+		return copyrighteligibility.ProviderEvidence{}, err
+	}
+	reader, ok := provider.(CopyrightEvidenceReader)
+	if !ok {
+		return copyrighteligibility.ProviderEvidence{}, ErrEvidenceUnavailable
+	}
+	return reader.CopyrightEvidence(ctx, externalID)
 }
 
 func (r *Registry) provider(id ID) (Provider, error) {

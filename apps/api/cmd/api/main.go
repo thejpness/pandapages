@@ -21,6 +21,7 @@ import (
 	"pandapages/api/internal/httpidentity"
 	"pandapages/api/internal/httpmiddleware"
 	"pandapages/api/internal/httpprofile"
+	"pandapages/api/internal/sourceeligibility"
 	"pandapages/api/internal/sourceprovider"
 	"pandapages/api/internal/sourceprovider/gutenberg"
 	"pandapages/api/internal/supabaseauth"
@@ -129,6 +130,10 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("configure source providers: %w", err)
 	}
+	sourceEligibility, err := sourceeligibility.New(sourceeligibility.Config{Gateway: sourceDiscovery})
+	if err != nil {
+		return fmt.Errorf("configure source eligibility: %w", err)
+	}
 
 	public := httpapi.New(httpapi.Config{
 		BearerAuthenticator: bearerAuthenticator,
@@ -141,6 +146,7 @@ func run() error {
 		BearerAuthenticator: bearerAuthenticator,
 		SourceDiscovery:     sourceDiscovery,
 		SourceAcquisition:   sourceDiscovery,
+		SourceEligibility:   sourceEligibility,
 	}, store)
 
 	server := newServer(newRootHandler(public, identity, admin))

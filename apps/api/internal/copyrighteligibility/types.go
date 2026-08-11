@@ -40,10 +40,12 @@ const (
 	ReasonUKOrdinaryLiteraryTermActive            ReasonCode = "uk_ordinary_literary_term_active"
 	ReasonUKEvaluationDateInvalid                 ReasonCode = "uk_evaluation_date_invalid"
 	ReasonUKWorkCategoryUnsupported               ReasonCode = "uk_work_category_unsupported"
+	ReasonUKWorkCategoryEvidenceMissing           ReasonCode = "uk_work_category_evidence_missing"
 	ReasonUKJointAuthorshipUnsupported            ReasonCode = "uk_joint_authorship_unsupported"
 	ReasonUKAnonymousAuthorshipUnsupported        ReasonCode = "uk_anonymous_authorship_unsupported"
 	ReasonUKPseudonymousAuthorshipUnsupported     ReasonCode = "uk_pseudonymous_authorship_unsupported"
 	ReasonUKAuthorshipUnsupported                 ReasonCode = "uk_authorship_unsupported"
+	ReasonUKAuthorshipEvidenceMissing             ReasonCode = "uk_authorship_evidence_missing"
 	ReasonUKAuthorIdentityMissing                 ReasonCode = "uk_author_identity_missing"
 	ReasonUKAuthorDeathUnknown                    ReasonCode = "uk_author_death_unknown"
 	ReasonUKAuthorEvidenceMissing                 ReasonCode = "uk_author_evidence_missing"
@@ -177,6 +179,8 @@ type FactEvidence struct {
 type UKEvidence struct {
 	WorkCategory                  WorkCategory
 	Authorship                    AuthorshipCategory
+	WorkCategoryReferences        []EvidenceReference
+	AuthorshipReferences          []EvidenceReference
 	Author                        PersonEvidence
 	FirstPublication              PublicationEvidence
 	Translation                   FactEvidence
@@ -204,4 +208,43 @@ type Input struct {
 	EvaluationDate time.Time
 	US             USProviderEvidence
 	UK             UKEvidence
+}
+
+// IsJurisdictionStatus reports whether value is one of the finite policy
+// outcomes that may be retained as evidence.
+func IsJurisdictionStatus(value JurisdictionStatus) bool {
+	return value == JurisdictionEligible || value == JurisdictionIneligible || value == JurisdictionIndeterminate
+}
+
+// IsOverallStatus reports whether value is one of the finite overall policy
+// outcomes.
+func IsOverallStatus(value OverallStatus) bool {
+	return value == OverallEligible || value == OverallBlocked
+}
+
+// IsReasonCode reports whether value is a reason emitted by policy v1.
+func IsReasonCode(value ReasonCode) bool {
+	switch value {
+	case ReasonUSProviderPublicDomainConfirmed, ReasonUSProviderRestricted,
+		ReasonUSProviderRightsMissing, ReasonUSProviderRightsConflict,
+		ReasonUSHeaderRightsConflict, ReasonUSHeaderRightsUnknown,
+		ReasonUKOrdinaryLiteraryTermExpired, ReasonUKOrdinaryLiteraryTermActive,
+		ReasonUKEvaluationDateInvalid, ReasonUKWorkCategoryUnsupported,
+		ReasonUKWorkCategoryEvidenceMissing, ReasonUKJointAuthorshipUnsupported,
+		ReasonUKAnonymousAuthorshipUnsupported, ReasonUKPseudonymousAuthorshipUnsupported,
+		ReasonUKAuthorshipUnsupported, ReasonUKAuthorshipEvidenceMissing,
+		ReasonUKAuthorIdentityMissing, ReasonUKAuthorDeathUnknown,
+		ReasonUKAuthorEvidenceMissing, ReasonUKPublicationEvidenceMissing,
+		ReasonUKPublicationPosthumousUnsupported, ReasonUKTranslationPresent,
+		ReasonUKTranslationUnknown, ReasonUKTranslationEvidenceMissing,
+		ReasonUKAdditionalContributionPresent, ReasonUKAdditionalContributionUnknown,
+		ReasonUKAdditionalContributionEvidenceMissing, ReasonUKSpecialCategoryUnsupported,
+		ReasonUKSpecialCategoryEvidenceMissing, ReasonUKUnpublishedHistoryUnsupported,
+		ReasonUKUnpublishedHistoryEvidenceMissing, ReasonUKAuthorDeathInvalid,
+		ReasonUKAuthorDeathFuture, ReasonUKPublicationYearInvalid,
+		ReasonUKPublicationYearFuture, ReasonOverallEligible, ReasonOverallBlocked:
+		return true
+	default:
+		return false
+	}
 }

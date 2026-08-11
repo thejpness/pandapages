@@ -211,20 +211,20 @@ psql_as "$application_role" --command="
     'Runtime source text.',
     'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
   );
-  INSERT INTO source_acquisition_reviews (
-    acquisition_id, rights_status, rights_note, rights_reviewed_at,
-    editorial_status
+  INSERT INTO source_acquisition_quality_reviews (
+    acquisition_id, status, note, reviewed_at
   ) VALUES (
     'a1500000-0000-4000-8000-000000000031',
-    'approved', 'Initial review rationale.', now(), 'pending'
+    'approved', 'Initial review rationale.', now()
   );
-  UPDATE source_acquisition_reviews
-  SET rights_note='Updated review rationale.', rights_reviewed_at=now()
+  UPDATE source_acquisition_quality_reviews
+  SET note='Updated review rationale.', reviewed_at=now()
   WHERE acquisition_id='a1500000-0000-4000-8000-000000000031';
 " >/dev/null
 
 psql_as "$application_role" --command="SELECT count(*) FROM stories;" >/dev/null
 psql_as "$application_role" --command="SELECT count(*) FROM source_acquisitions;" >/dev/null
+psql_as "$application_role" --command="SELECT count(*) FROM source_acquisition_eligibility_assessments;" >/dev/null
 
 expect_denied \
   'application acquisition mutation' \
@@ -237,9 +237,19 @@ expect_denied \
   "DELETE FROM source_acquisitions WHERE id='a1500000-0000-4000-8000-000000000031';"
 
 expect_denied \
-  'application review deletion' \
+  'application eligibility assessment mutation' \
   "$application_role" \
-  "DELETE FROM source_acquisition_reviews WHERE acquisition_id='a1500000-0000-4000-8000-000000000031';"
+  "UPDATE source_acquisition_eligibility_assessments SET overall_reason='overall_blocked' WHERE acquisition_id='a1500000-0000-4000-8000-000000000031';"
+
+expect_denied \
+  'application eligibility assessment deletion' \
+  "$application_role" \
+  "DELETE FROM source_acquisition_eligibility_assessments WHERE acquisition_id='a1500000-0000-4000-8000-000000000031';"
+
+expect_denied \
+  'application source-quality review deletion' \
+  "$application_role" \
+  "DELETE FROM source_acquisition_quality_reviews WHERE acquisition_id='a1500000-0000-4000-8000-000000000031';"
 
 expect_denied \
   'application DDL' \

@@ -4,12 +4,14 @@ import (
 	"database/sql"
 	"errors"
 	"os"
-	"reflect"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"pandapages/api/internal/copyrighteligibility"
 	"pandapages/api/internal/model"
+	"pandapages/api/internal/sourceeligibility"
 	"pandapages/api/internal/sourceprovider"
 )
 
@@ -21,123 +23,145 @@ func TestAdminSourceAcquisitionIntegration(t *testing.T) {
 	if databaseURL == "" {
 		t.Fatalf("%s is required when %s=1", readerIntegrationURLVar, readerIntegrationGuardVar)
 	}
-
 	adminDB, err := sql.Open("pgx", databaseURL)
 	if err != nil {
 		t.Fatalf("open disposable PostgreSQL: %v", err)
 	}
 	t.Cleanup(func() { _ = adminDB.Close() })
 	var databaseName string
-	if err := adminDB.QueryRow(`SELECT current_database()`).Scan(&databaseName); err != nil {
-		t.Fatalf("read disposable database name: %v", err)
-	}
-	if databaseName != readerIntegrationDBName {
-		t.Fatalf("refusing acquisition test in database %q; want %q", databaseName, readerIntegrationDBName)
+	if err := adminDB.QueryRow(`SELECT current_database()`).Scan(&databaseName); err != nil || databaseName != readerIntegrationDBName {
+		t.Fatalf("refusing acquisition test in database %q: %v", databaseName, err)
 	}
 
 	store := newReaderIntegrationStore(t, databaseURL)
 	candidate := testSourceAcquisitionCandidate()
-	first, err := store.AdminPersistSourceAcquisition(candidate)
+	first, err := store.AdminPersistEligibleSourceAcquisition(testEligibleEvaluation(candidate))
 	if err != nil {
 		t.Fatalf("persist first acquisition: %v", err)
 	}
-	if first.Outcome != model.AdminSourceAcquisitionOutcomeCreated ||
-		first.Acquisition.Review.Rights.Status != model.AdminSourceAcquisitionReviewPending ||
-		first.Acquisition.Review.Editorial.Status != model.AdminSourceAcquisitionReviewPending {
+	if first.Outcome != model.AdminSourceAcquisitionOutcomeCreated || first.Acquisition.Eligibility == nil || first.Acquisition.Eligibility.Overall != "eligible" || first.Acquisition.SourceQuality.Status != model.AdminSourceQualityPending {
 		t.Fatalf("first acquisition = %#v", first)
 	}
-	if first.Acquisition.ProviderRights == nil || *first.Acquisition.ProviderRights != candidate.ProviderRights {
-		t.Fatalf("provider rights = %#v, want evidence only", first.Acquisition.ProviderRights)
+	var assessmentCount, qualityCount int
+	if err := adminDB.QueryRow(`SELECT count(*) FROM source_acquisition_eligibility_assessments WHERE acquisition_id = $1`, first.Acquisition.ID).Scan(&assessmentCount); err != nil || assessmentCount != 1 {
+		t.Fatalf("initial assessment count = %d / %v", assessmentCount, err)
 	}
-	assertRejected := func(name, statement string, args ...any) {
-		t.Helper()
-		if _, err := adminDB.Exec(statement, args...); err == nil {
-			t.Fatalf("database accepted %s", name)
+	if err := adminDB.QueryRow(`SELECT count(*) FROM source_acquisition_quality_reviews WHERE acquisition_id = $1`, first.Acquisition.ID).Scan(&qualityCount); err != nil || qualityCount != 1 {
+		t.Fatalf("initial source-quality count = %d / %v", qualityCount, err)
+	}
+
+	quality, err := store.AdminUpdateSourceAcquisitionSourceQualityReview(first.Acquisition.ID, model.AdminSourceQualityReviewUpdateRequest{Status: model.AdminSourceQualityApproved, Note: "Complete, intended source text."})
+	if err != nil || quality.SourceQuality.Status != model.AdminSourceQualityApproved || quality.SourceQuality.Note == nil {
+		t.Fatalf("source quality = %#v / %v", quality, err)
+	}
+	reused, err := store.AdminPersistEligibleSourceAcquisition(testEligibleEvaluation(candidate))
+	if err != nil || reused.Outcome != model.AdminSourceAcquisitionOutcomeReused || reused.Acquisition.ID != first.Acquisition.ID || reused.Acquisition.SourceQuality.Status != model.AdminSourceQualityApproved {
+		t.Fatalf("healthy reuse = %#v / %v", reused, err)
+	}
+
+	t.Run("blocked evaluation writes nothing", func(t *testing.T) {
+		var beforeAcquisitions, beforeAssessments, beforeQuality int
+		if err := adminDB.QueryRow(`SELECT count(*) FROM source_acquisitions`).Scan(&beforeAcquisitions); err != nil {
+			t.Fatal(err)
 		}
-	}
-	assertRejected("invalid acquisition hash", `UPDATE source_acquisitions SET snapshot_hash = 'not-a-sha256' WHERE id = $1`, first.Acquisition.ID)
-	assertRejected("approved rights without rationale", `UPDATE source_acquisition_reviews SET rights_status = 'approved', rights_note = NULL, rights_reviewed_at = now() WHERE acquisition_id = $1`, first.Acquisition.ID)
-	var initialReviewCount int
-	if err := adminDB.QueryRow(`SELECT count(*) FROM source_acquisition_reviews WHERE acquisition_id = $1`, first.Acquisition.ID).Scan(&initialReviewCount); err != nil || initialReviewCount != 1 {
-		t.Fatalf("initial review row count = %d / %v", initialReviewCount, err)
-	}
-
-	detail, err := store.AdminGetSourceAcquisition(first.Acquisition.ID)
-	if err != nil || detail.SourceText != candidate.SourceText || detail.SnapshotHash != first.Acquisition.SnapshotHash {
-		t.Fatalf("acquisition detail = %#v / %v", detail, err)
-	}
-
-	rights, err := store.AdminUpdateSourceAcquisitionRightsReview(first.Acquisition.ID, model.AdminSourceAcquisitionReviewUpdateRequest{
-		Status: model.AdminSourceAcquisitionReviewApproved,
-		Note:   "Reviewed for Panda Pages rights use.",
+		if err := adminDB.QueryRow(`SELECT count(*) FROM source_acquisition_eligibility_assessments`).Scan(&beforeAssessments); err != nil {
+			t.Fatal(err)
+		}
+		if err := adminDB.QueryRow(`SELECT count(*) FROM source_acquisition_quality_reviews`).Scan(&beforeQuality); err != nil {
+			t.Fatal(err)
+		}
+		blocked := testEligibleEvaluation(candidate)
+		blocked.Assessment.Overall = copyrighteligibility.OverallBlocked
+		if _, err := store.AdminPersistEligibleSourceAcquisition(blocked); err == nil {
+			t.Fatal("blocked evaluation unexpectedly persisted")
+		}
+		var afterAcquisitions, afterAssessments, afterQuality int
+		_ = adminDB.QueryRow(`SELECT count(*) FROM source_acquisitions`).Scan(&afterAcquisitions)
+		_ = adminDB.QueryRow(`SELECT count(*) FROM source_acquisition_eligibility_assessments`).Scan(&afterAssessments)
+		_ = adminDB.QueryRow(`SELECT count(*) FROM source_acquisition_quality_reviews`).Scan(&afterQuality)
+		if beforeAcquisitions != afterAcquisitions || beforeAssessments != afterAssessments || beforeQuality != afterQuality {
+			t.Fatalf("blocked evaluation changed rows: %d/%d/%d -> %d/%d/%d", beforeAcquisitions, beforeAssessments, beforeQuality, afterAcquisitions, afterAssessments, afterQuality)
+		}
 	})
-	if err != nil || rights.Review.Rights.Status != model.AdminSourceAcquisitionReviewApproved || rights.Review.Rights.Note == nil || rights.Review.Rights.ReviewedAt == nil || rights.Review.Editorial.Status != model.AdminSourceAcquisitionReviewPending {
-		t.Fatalf("rights review = %#v / %v", rights, err)
-	}
 
-	editorial, err := store.AdminUpdateSourceAcquisitionEditorialReview(first.Acquisition.ID, model.AdminSourceAcquisitionReviewUpdateRequest{
-		Status: model.AdminSourceAcquisitionReviewRejected,
-		Note:   "Needs editorial source-quality review.",
-	})
-	if err != nil || !reflect.DeepEqual(editorial.Review.Rights, rights.Review.Rights) || editorial.Review.Editorial.Status != model.AdminSourceAcquisitionReviewRejected || editorial.Review.Editorial.Note == nil || editorial.Review.Editorial.ReviewedAt == nil {
-		t.Fatalf("editorial review = %#v / %v", editorial, err)
-	}
-
-	reused, err := store.AdminPersistSourceAcquisition(candidate)
-	if err != nil || reused.Outcome != model.AdminSourceAcquisitionOutcomeReused || reused.Acquisition.ID != first.Acquisition.ID || !reflect.DeepEqual(reused.Acquisition.Review, editorial.Review) {
-		t.Fatalf("reused acquisition = %#v / %v", reused, err)
-	}
-
-	for _, test := range []struct {
-		name   string
-		mutate func(sourceprovider.SourceCandidate) sourceprovider.SourceCandidate
-	}{
-		{"source", func(changed sourceprovider.SourceCandidate) sourceprovider.SourceCandidate {
-			changed.SourceText = "A changed source text.\n"
-			changed.NormalisedContentHash = sourceAcquisitionSHA256(changed.SourceText)
-			return changed
-		}},
-		{"provider rights", func(changed sourceprovider.SourceCandidate) sourceprovider.SourceCandidate {
-			changed.ProviderRights = "A changed provider statement."
-			return changed
-		}},
-		{"representation", func(changed sourceprovider.SourceCandidate) sourceprovider.SourceCandidate {
-			changed.SelectedRepresentation.URL = "https://www.gutenberg.org/files/11/11.txt"
-			return changed
-		}},
-		{"retrieved hash", func(changed sourceprovider.SourceCandidate) sourceprovider.SourceCandidate {
-			changed.RetrievedContentHash = strings.Repeat("b", 64)
-			return changed
-		}},
+	for name, mutate := range map[string]func(*sourceprovider.SourceCandidate){
+		"source": func(value *sourceprovider.SourceCandidate) {
+			value.SourceText = "Changed source text.\n"
+			value.NormalisedContentHash = sourceAcquisitionSHA256(value.SourceText)
+		},
+		"provider rights": func(value *sourceprovider.SourceCandidate) { value.ProviderRights = "A changed provider statement." },
+		"representation": func(value *sourceprovider.SourceCandidate) {
+			value.SelectedRepresentation.URL = "https://www.gutenberg.org/files/11/11.txt"
+		},
+		"retrieved hash": func(value *sourceprovider.SourceCandidate) { value.RetrievedContentHash = strings.Repeat("b", 64) },
 	} {
-		t.Run("changed "+test.name+" creates a distinct immutable snapshot", func(t *testing.T) {
-			created, err := store.AdminPersistSourceAcquisition(test.mutate(candidate))
+		t.Run("changed "+name+" creates distinct immutable snapshot", func(t *testing.T) {
+			changed := candidate
+			mutate(&changed)
+			created, err := store.AdminPersistEligibleSourceAcquisition(testEligibleEvaluation(changed))
 			if err != nil || created.Outcome != model.AdminSourceAcquisitionOutcomeCreated || created.Acquisition.ID == first.Acquisition.ID {
-				t.Fatalf("changed %s acquisition = %#v / %v", test.name, created, err)
+				t.Fatalf("changed %s = %#v / %v", name, created, err)
 			}
 		})
 	}
 
-	if _, err := store.AdminUpdateSourceAcquisitionRightsReview(first.Acquisition.ID, model.AdminSourceAcquisitionReviewUpdateRequest{Status: model.AdminSourceAcquisitionReviewPending}); err != nil {
-		t.Fatalf("reset rights review to pending: %v", err)
-	}
-	reset, err := store.AdminGetSourceAcquisition(first.Acquisition.ID)
-	if err != nil || reset.Review.Rights.Status != model.AdminSourceAcquisitionReviewPending || reset.Review.Rights.Note != nil || reset.Review.Rights.ReviewedAt != nil || !reflect.DeepEqual(reset.Review.Editorial, editorial.Review.Editorial) {
-		t.Fatalf("reset review = %#v / %v", reset.Review, err)
-	}
-
-	for _, request := range []model.AdminSourceAcquisitionReviewUpdateRequest{
-		{Status: model.AdminSourceAcquisitionReviewApproved},
-		{Status: "not-a-status", Note: "Invalid"},
-		{Status: model.AdminSourceAcquisitionReviewRejected, Note: strings.Repeat("a", 4001)},
-	} {
-		if _, err := store.AdminUpdateSourceAcquisitionEditorialReview(first.Acquisition.ID, request); err == nil {
-			t.Fatalf("invalid editorial review unexpectedly succeeded: %#v", request)
+	t.Run("corrupt stored assessment refuses reuse without mutation", func(t *testing.T) {
+		assessmentCandidate := candidate
+		assessmentCandidate.ExternalID = "13"
+		persisted, err := store.AdminPersistEligibleSourceAcquisition(testEligibleEvaluation(assessmentCandidate))
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	if _, err := store.AdminGetSourceAcquisition("11111111-1111-4111-8111-111111111112"); !errors.Is(err, model.ErrAdminSourceAcquisitionNotFound) {
-		t.Fatalf("unknown acquisition error = %v", err)
-	}
+		var beforeAcquisitions, beforeAssessments, beforeQuality int
+		if err := adminDB.QueryRow(`SELECT count(*) FROM source_acquisitions`).Scan(&beforeAcquisitions); err != nil {
+			t.Fatal(err)
+		}
+		if err := adminDB.QueryRow(`SELECT count(*) FROM source_acquisition_eligibility_assessments`).Scan(&beforeAssessments); err != nil {
+			t.Fatal(err)
+		}
+		if err := adminDB.QueryRow(`SELECT count(*) FROM source_acquisition_quality_reviews`).Scan(&beforeQuality); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := adminDB.Exec(`UPDATE source_acquisition_eligibility_assessments SET provider_evidence = '{}'::jsonb WHERE acquisition_id = $1`, persisted.Acquisition.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.AdminPersistEligibleSourceAcquisition(testEligibleEvaluation(assessmentCandidate)); !errors.Is(err, errStoredSourceAcquisitionInvalid) {
+			t.Fatalf("corrupt assessment reuse error = %v", err)
+		}
+		var afterAcquisitions, afterAssessments, afterQuality int
+		_ = adminDB.QueryRow(`SELECT count(*) FROM source_acquisitions`).Scan(&afterAcquisitions)
+		_ = adminDB.QueryRow(`SELECT count(*) FROM source_acquisition_eligibility_assessments`).Scan(&afterAssessments)
+		_ = adminDB.QueryRow(`SELECT count(*) FROM source_acquisition_quality_reviews`).Scan(&afterQuality)
+		if beforeAcquisitions != afterAcquisitions || beforeAssessments != afterAssessments || beforeQuality != afterQuality {
+			t.Fatalf("corrupt assessment reuse changed rows: %d/%d/%d -> %d/%d/%d", beforeAcquisitions, beforeAssessments, beforeQuality, afterAcquisitions, afterAssessments, afterQuality)
+		}
+	})
+
+	t.Run("corrupt immutable snapshot refuses reuse without mutation", func(t *testing.T) {
+		var beforeAcquisitions, beforeAssessments, beforeQuality int
+		if err := adminDB.QueryRow(`SELECT count(*) FROM source_acquisitions`).Scan(&beforeAcquisitions); err != nil {
+			t.Fatal(err)
+		}
+		if err := adminDB.QueryRow(`SELECT count(*) FROM source_acquisition_eligibility_assessments`).Scan(&beforeAssessments); err != nil {
+			t.Fatal(err)
+		}
+		if err := adminDB.QueryRow(`SELECT count(*) FROM source_acquisition_quality_reviews`).Scan(&beforeQuality); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := adminDB.Exec(`UPDATE source_acquisitions SET title = $2 WHERE id = $1`, first.Acquisition.ID, "Corrupt but syntactically valid title"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.AdminPersistEligibleSourceAcquisition(testEligibleEvaluation(candidate)); !errors.Is(err, errStoredSourceAcquisitionInvalid) {
+			t.Fatalf("corrupt reuse error = %v", err)
+		}
+		var afterAcquisitions, afterAssessments, afterQuality int
+		_ = adminDB.QueryRow(`SELECT count(*) FROM source_acquisitions`).Scan(&afterAcquisitions)
+		_ = adminDB.QueryRow(`SELECT count(*) FROM source_acquisition_eligibility_assessments`).Scan(&afterAssessments)
+		_ = adminDB.QueryRow(`SELECT count(*) FROM source_acquisition_quality_reviews`).Scan(&afterQuality)
+		if beforeAcquisitions != afterAcquisitions || beforeAssessments != afterAssessments || beforeQuality != afterQuality {
+			t.Fatalf("corrupt reuse changed rows: %d/%d/%d -> %d/%d/%d", beforeAcquisitions, beforeAssessments, beforeQuality, afterAcquisitions, afterAssessments, afterQuality)
+		}
+	})
 
 	concurrent := candidate
 	concurrent.ExternalID = "12"
@@ -148,10 +172,10 @@ func TestAdminSourceAcquisitionIntegration(t *testing.T) {
 	var wait sync.WaitGroup
 	for _, concurrentStore := range stores {
 		wait.Add(1)
-		go func(concurrentStore *Store) {
+		go func(current *Store) {
 			defer wait.Done()
 			<-start
-			result, err := concurrentStore.AdminPersistSourceAcquisition(concurrent)
+			result, err := current.AdminPersistEligibleSourceAcquisition(testEligibleEvaluation(concurrent))
 			results <- result
 			errorsOut <- err
 		}(concurrentStore)
@@ -170,88 +194,26 @@ func TestAdminSourceAcquisitionIntegration(t *testing.T) {
 		concurrentResults = append(concurrentResults, result)
 	}
 	if len(concurrentResults) != 2 || concurrentResults[0].Acquisition.ID == "" || concurrentResults[0].Acquisition.ID != concurrentResults[1].Acquisition.ID {
-		t.Fatalf("concurrent acquisition results = %#v", concurrentResults)
+		t.Fatalf("concurrent results = %#v", concurrentResults)
 	}
 	concurrentInput, err := adminSourceAcquisitionInput(concurrent)
 	if err != nil {
-		t.Fatalf("concurrent input: %v", err)
+		t.Fatal(err)
 	}
-	var acquisitionCount, reviewCount int
-	if err := adminDB.QueryRow(`SELECT count(*) FROM source_acquisitions WHERE snapshot_hash = $1`, concurrentInput.SnapshotHash).Scan(&acquisitionCount); err != nil {
-		t.Fatalf("count concurrent acquisitions: %v", err)
+	var acquisitions, assessments, qualityRows int
+	_ = adminDB.QueryRow(`SELECT count(*) FROM source_acquisitions WHERE snapshot_hash = $1`, concurrentInput.SnapshotHash).Scan(&acquisitions)
+	_ = adminDB.QueryRow(`SELECT count(*) FROM source_acquisition_eligibility_assessments WHERE acquisition_snapshot_hash = $1`, concurrentInput.SnapshotHash).Scan(&assessments)
+	_ = adminDB.QueryRow(`SELECT count(*) FROM source_acquisition_quality_reviews AS quality JOIN source_acquisitions AS acquisition ON acquisition.id = quality.acquisition_id WHERE acquisition.snapshot_hash = $1`, concurrentInput.SnapshotHash).Scan(&qualityRows)
+	if acquisitions != 1 || assessments != 1 || qualityRows != 1 {
+		t.Fatalf("concurrent rows = %d/%d/%d", acquisitions, assessments, qualityRows)
 	}
-	if err := adminDB.QueryRow(`SELECT count(*) FROM source_acquisition_reviews AS review JOIN source_acquisitions AS acquisition ON acquisition.id = review.acquisition_id WHERE acquisition.snapshot_hash = $1`, concurrentInput.SnapshotHash).Scan(&reviewCount); err != nil {
-		t.Fatalf("count concurrent reviews: %v", err)
-	}
-	if acquisitionCount != 1 || reviewCount != 1 {
-		t.Fatalf("concurrent rows = acquisitions %d reviews %d", acquisitionCount, reviewCount)
-	}
+}
 
-	list, err := store.AdminListSourceAcquisitions(100)
-	if err != nil || len(list.Items) < 6 {
-		t.Fatalf("acquisition list = %#v / %v", list, err)
-	}
-	for index := 1; index < len(list.Items); index++ {
-		previous, current := list.Items[index-1], list.Items[index]
-		if previous.CreatedAt < current.CreatedAt || (previous.CreatedAt == current.CreatedAt && previous.ID < current.ID) {
-			t.Fatalf("acquisition list is not newest-first: %#v", list.Items)
-		}
-	}
-
-	t.Run("corrupt immutable snapshot refuses reuse without mutation", func(t *testing.T) {
-		var beforeAcquisitionCount, beforeReviewCount int
-		if err := adminDB.QueryRow(`SELECT count(*) FROM source_acquisitions`).Scan(&beforeAcquisitionCount); err != nil {
-			t.Fatalf("count acquisitions before corruption: %v", err)
-		}
-		if err := adminDB.QueryRow(`SELECT count(*) FROM source_acquisition_reviews`).Scan(&beforeReviewCount); err != nil {
-			t.Fatalf("count reviews before corruption: %v", err)
-		}
-		readReview := func() [6]string {
-			t.Helper()
-			var review [6]string
-			if err := adminDB.QueryRow(`
-				SELECT
-					rights_status,
-					coalesce(rights_note, ''),
-					coalesce(rights_reviewed_at::text, ''),
-					editorial_status,
-					coalesce(editorial_note, ''),
-					coalesce(editorial_reviewed_at::text, '')
-				FROM source_acquisition_reviews
-				WHERE acquisition_id = $1
-			`, first.Acquisition.ID).Scan(
-				&review[0], &review[1], &review[2], &review[3], &review[4], &review[5],
-			); err != nil {
-				t.Fatalf("read review state: %v", err)
-			}
-			return review
-		}
-		beforeReview := readReview()
-
-		const corruptTitle = "Corrupt but syntactically valid title"
-		if _, err := adminDB.Exec(`UPDATE source_acquisitions SET title = $2 WHERE id = $1`, first.Acquisition.ID, corruptTitle); err != nil {
-			t.Fatalf("corrupt immutable acquisition title: %v", err)
-		}
-		if _, err := store.AdminPersistSourceAcquisition(candidate); !errors.Is(err, errStoredSourceAcquisitionInvalid) {
-			t.Fatalf("reuse corrupt acquisition error = %v, want fail-closed integrity error", err)
-		}
-
-		var storedTitle, storedSnapshotHash, storedSourceText string
-		if err := adminDB.QueryRow(`SELECT title, snapshot_hash, source_text FROM source_acquisitions WHERE id = $1`, first.Acquisition.ID).Scan(&storedTitle, &storedSnapshotHash, &storedSourceText); err != nil {
-			t.Fatalf("read corrupt immutable acquisition: %v", err)
-		}
-		if storedTitle != corruptTitle || storedSnapshotHash != first.Acquisition.SnapshotHash || storedSourceText != candidate.SourceText {
-			t.Fatalf("corrupt immutable acquisition was repaired or changed: title=%q snapshot=%q source=%q", storedTitle, storedSnapshotHash, storedSourceText)
-		}
-		var afterAcquisitionCount, afterReviewCount int
-		if err := adminDB.QueryRow(`SELECT count(*) FROM source_acquisitions`).Scan(&afterAcquisitionCount); err != nil {
-			t.Fatalf("count acquisitions after corruption: %v", err)
-		}
-		if err := adminDB.QueryRow(`SELECT count(*) FROM source_acquisition_reviews`).Scan(&afterReviewCount); err != nil {
-			t.Fatalf("count reviews after corruption: %v", err)
-		}
-		if afterAcquisitionCount != beforeAcquisitionCount || afterReviewCount != beforeReviewCount || !reflect.DeepEqual(readReview(), beforeReview) {
-			t.Fatalf("failed reuse changed acquisition/review rows: counts=%d/%d reviews=%#v", afterAcquisitionCount, afterReviewCount, readReview())
-		}
-	})
+func testEligibleEvaluation(candidate sourceprovider.SourceCandidate) sourceeligibility.Evaluation {
+	death := 1898
+	provider := copyrighteligibility.ProviderEvidence{Provider: string(sourceprovider.ProjectGutenberg), ExternalID: candidate.ExternalID, Title: candidate.Title, Rights: copyrighteligibility.ProviderRightsPublicDomain, Contributors: []copyrighteligibility.ContributorEvidence{{Name: "Lewis Carroll", Role: "author", DeathYear: &death}}, Languages: []string{"en"}, EvidenceDigest: strings.Repeat("d", 64)}
+	effective := copyrighteligibility.UKEvidence{WorkCategory: copyrighteligibility.WorkCategoryOrdinaryLiterary, WorkCategoryReferences: []copyrighteligibility.EvidenceReference{{Source: "Catalogue", Fact: "Ordinary literary work"}}, Authorship: copyrighteligibility.AuthorshipSingleKnown, AuthorshipReferences: []copyrighteligibility.EvidenceReference{{Source: "Project Gutenberg RDF", Fact: "One author"}}, Author: copyrighteligibility.PersonEvidence{Name: "Lewis Carroll", DeathYear: death, References: []copyrighteligibility.EvidenceReference{{Source: "Project Gutenberg RDF", Fact: "Death year"}}}, FirstPublication: copyrighteligibility.PublicationEvidence{Year: 1865, References: []copyrighteligibility.EvidenceReference{{Source: "Catalogue", Fact: "First published in 1865"}}}, Translation: copyrighteligibility.FactEvidence{State: copyrighteligibility.FactNoneConfirmed, References: []copyrighteligibility.EvidenceReference{{Source: "Catalogue", Fact: "No translation in acquired text"}}}, AdditionalTextualContribution: copyrighteligibility.FactEvidence{State: copyrighteligibility.FactNoneConfirmed, References: []copyrighteligibility.EvidenceReference{{Source: "Catalogue", Fact: "No additional textual contribution"}}}, SpecialCategory: copyrighteligibility.FactEvidence{State: copyrighteligibility.FactNoneConfirmed, References: []copyrighteligibility.EvidenceReference{{Source: "Catalogue", Fact: "No special category"}}}, UnpublishedAtEnd1988: copyrighteligibility.FactEvidence{State: copyrighteligibility.FactNoneConfirmed, References: []copyrighteligibility.EvidenceReference{{Source: "Catalogue", Fact: "Published before 1988"}}}}
+	date := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	assessment := copyrighteligibility.Evaluate(copyrighteligibility.Input{EvaluationDate: date, US: copyrighteligibility.USProviderEvidence{OPDSRights: copyrighteligibility.ProviderRightsPublicDomain, RDFRights: copyrighteligibility.ProviderRightsPublicDomain, HeaderRights: copyrighteligibility.SourceHeaderRightsPublicDomain}, UK: effective})
+	return sourceeligibility.Evaluation{Candidate: candidate, ProviderEvidence: provider, OPDSRights: copyrighteligibility.ProviderRightsPublicDomain, HeaderRights: copyrighteligibility.SourceHeaderRightsPublicDomain, EffectiveUKEvidence: effective, Assessment: assessment, EvaluationDate: date, EvaluatedAt: date.Add(time.Hour)}
 }

@@ -121,7 +121,7 @@ func TestRDFEvidenceUsesFixedTrustedEndpoint(t *testing.T) {
 	}))
 	defer server.Close()
 	adapter, transport := adapterForServer(server)
-	if _, err := adapter.RDFEvidence(context.Background(), "11"); err != nil {
+	if _, err := adapter.CopyrightEvidence(context.Background(), "11"); err != nil {
 		t.Fatal(err)
 	}
 	requests := transport.requests()
@@ -135,7 +135,7 @@ func TestRDFEvidenceRejectsInvalidIDBeforeNetwork(t *testing.T) {
 		return nil, errors.New("request should not be sent")
 	})}})
 	for _, id := range []string{"", "11/evil", "http://127.0.0.1", "file:///etc/passwd"} {
-		if _, err := adapter.RDFEvidence(context.Background(), id); !errors.Is(err, sourceprovider.ErrWorkIDInvalid) {
+		if _, err := adapter.CopyrightEvidence(context.Background(), id); !errors.Is(err, sourceprovider.ErrWorkIDInvalid) {
 			t.Fatalf("id=%q error=%v", id, err)
 		}
 	}
@@ -177,7 +177,7 @@ func TestRDFEvidenceFailsClosedAtNetworkBoundary(t *testing.T) {
 			server := httptest.NewServer(test.h)
 			defer server.Close()
 			adapter, _ := adapterForServer(server)
-			if _, err := adapter.RDFEvidence(context.Background(), "11"); !errors.Is(err, test.want) {
+			if _, err := adapter.CopyrightEvidence(context.Background(), "11"); !errors.Is(err, test.want) {
 				t.Fatalf("error=%v want=%v", err, test.want)
 			}
 		})
@@ -191,12 +191,12 @@ func TestRDFEvidenceHonoursTimeoutAndCancellation(t *testing.T) {
 	})}})
 	deadline, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
-	if _, err := adapter.RDFEvidence(deadline, "11"); !errors.Is(err, sourceprovider.ErrEvidenceTimeout) {
+	if _, err := adapter.CopyrightEvidence(deadline, "11"); !errors.Is(err, sourceprovider.ErrEvidenceTimeout) {
 		t.Fatalf("timeout error=%v", err)
 	}
 	cancelled, stop := context.WithCancel(context.Background())
 	stop()
-	if _, err := adapter.RDFEvidence(cancelled, "11"); !errors.Is(err, context.Canceled) {
+	if _, err := adapter.CopyrightEvidence(cancelled, "11"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation error=%v", err)
 	}
 }

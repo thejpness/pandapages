@@ -531,48 +531,96 @@ CREATE TABLE source_acquisitions (
   CONSTRAINT source_acquisitions_snapshot_hash_check
     CHECK (snapshot_hash ~ '^[0-9a-f]{64}$'),
   CONSTRAINT source_acquisitions_snapshot_hash_key
-    UNIQUE (snapshot_hash)
+    UNIQUE (snapshot_hash),
+  CONSTRAINT source_acquisitions_id_snapshot_hash_key
+    UNIQUE (id, snapshot_hash)
 );
 
 CREATE INDEX source_acquisitions_created_idx
   ON source_acquisitions(created_at DESC, id DESC);
 
--- Mutable human review remains separate from immutable acquisition evidence.
-CREATE TABLE source_acquisition_reviews (
-  acquisition_id uuid PRIMARY KEY,
-  rights_status text NOT NULL,
-  rights_note text,
-  rights_reviewed_at timestamptz,
-  editorial_status text NOT NULL,
-  editorial_note text,
-  editorial_reviewed_at timestamptz,
+-- Copyright eligibility is immutable evidence for an exact acquisition. It
+-- is intentionally distinct from the mutable human source-quality review.
+CREATE TABLE source_acquisition_eligibility_assessments (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  acquisition_id uuid NOT NULL,
+  acquisition_snapshot_hash text NOT NULL,
+  provider text NOT NULL,
+  external_id text NOT NULL,
+  policy_version text NOT NULL,
+  evaluation_date date NOT NULL,
+  evaluated_at timestamptz NOT NULL,
+  us_status text NOT NULL,
+  us_reason text NOT NULL,
+  opds_rights text NOT NULL,
+  rdf_rights text NOT NULL,
+  header_rights text NOT NULL,
+  uk_status text NOT NULL,
+  uk_reason text NOT NULL,
+  effective_uk_evidence jsonb NOT NULL,
+  provider_evidence jsonb NOT NULL,
+  overall_status text NOT NULL,
+  overall_reason text NOT NULL,
+  assessment_hash text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
 
-  CONSTRAINT source_acquisition_reviews_acquisition_fkey
+  CONSTRAINT source_acquisition_eligibility_assessments_acquisition_snapshot_fkey
+    FOREIGN KEY (acquisition_id, acquisition_snapshot_hash)
+    REFERENCES source_acquisitions(id, snapshot_hash)
+    ON UPDATE NO ACTION ON DELETE RESTRICT,
+  CONSTRAINT source_acquisition_eligibility_assessments_provider_check
+    CHECK (provider ~ '^[a-z][a-z0-9-]{0,63}$'),
+  CONSTRAINT source_acquisition_eligibility_assessments_external_id_check
+    CHECK (external_id = btrim(external_id) AND char_length(external_id) BETWEEN 1 AND 128),
+  CONSTRAINT source_acquisition_eligibility_assessments_policy_check
+    CHECK (policy_version = btrim(policy_version) AND char_length(policy_version) BETWEEN 1 AND 128),
+  CONSTRAINT source_acquisition_eligibility_assessments_us_state_check
+    CHECK (us_status IN ('eligible', 'ineligible', 'indeterminate')),
+  CONSTRAINT source_acquisition_eligibility_assessments_uk_state_check
+    CHECK (uk_status IN ('eligible', 'ineligible', 'indeterminate')),
+  CONSTRAINT source_acquisition_eligibility_assessments_overall_state_check
+    CHECK (overall_status IN ('eligible', 'blocked')),
+  CONSTRAINT source_acquisition_eligibility_assessments_rights_check
+    CHECK (
+      opds_rights IN ('public_domain', 'restricted', 'unknown')
+      AND rdf_rights IN ('public_domain', 'restricted', 'unknown')
+      AND header_rights IN ('public_domain', 'restricted', 'no_classification', 'conflicting')
+    ),
+  CONSTRAINT source_acquisition_eligibility_assessments_evidence_check
+    CHECK (jsonb_typeof(effective_uk_evidence) = 'object' AND jsonb_typeof(provider_evidence) = 'object'),
+  CONSTRAINT source_acquisition_eligibility_assessments_hash_check
+    CHECK (assessment_hash ~ '^[0-9a-f]{64}$'),
+  CONSTRAINT source_acquisition_eligibility_assessments_hash_key
+    UNIQUE (assessment_hash),
+  CONSTRAINT source_acquisition_eligibility_assessments_success_check
+    CHECK (overall_status = 'eligible' AND us_status = 'eligible' AND uk_status = 'eligible')
+);
+
+CREATE INDEX source_acquisition_eligibility_assessments_current_idx
+  ON source_acquisition_eligibility_assessments(acquisition_id, policy_version, evaluation_date DESC, evaluated_at DESC, id DESC);
+
+-- Source quality is the sole mutable review dimension for provider
+-- acquisitions. Copyright eligibility is immutable above.
+CREATE TABLE source_acquisition_quality_reviews (
+  acquisition_id uuid PRIMARY KEY,
+  status text NOT NULL,
+  note text,
+  reviewed_at timestamptz,
+
+  CONSTRAINT source_acquisition_quality_reviews_acquisition_fkey
     FOREIGN KEY (acquisition_id) REFERENCES source_acquisitions(id)
     ON UPDATE NO ACTION ON DELETE RESTRICT,
-  CONSTRAINT source_acquisition_reviews_rights_status_check
-    CHECK (rights_status IN ('pending', 'approved', 'rejected')),
-  CONSTRAINT source_acquisition_reviews_editorial_status_check
-    CHECK (editorial_status IN ('pending', 'approved', 'rejected')),
-  CONSTRAINT source_acquisition_reviews_rights_state_check
+  CONSTRAINT source_acquisition_quality_reviews_status_check
+    CHECK (status IN ('pending', 'approved', 'rejected')),
+  CONSTRAINT source_acquisition_quality_reviews_state_check
     CHECK (
-      (rights_status = 'pending' AND rights_note IS NULL AND rights_reviewed_at IS NULL)
+      (status = 'pending' AND note IS NULL AND reviewed_at IS NULL)
       OR
-      (rights_status IN ('approved', 'rejected')
-        AND rights_note IS NOT NULL
-        AND rights_note = btrim(rights_note)
-        AND char_length(rights_note) BETWEEN 1 AND 4000
-        AND rights_reviewed_at IS NOT NULL)
-    ),
-  CONSTRAINT source_acquisition_reviews_editorial_state_check
-    CHECK (
-      (editorial_status = 'pending' AND editorial_note IS NULL AND editorial_reviewed_at IS NULL)
-      OR
-      (editorial_status IN ('approved', 'rejected')
-        AND editorial_note IS NOT NULL
-        AND editorial_note = btrim(editorial_note)
-        AND char_length(editorial_note) BETWEEN 1 AND 4000
-        AND editorial_reviewed_at IS NOT NULL)
+      (status IN ('approved', 'rejected')
+        AND note IS NOT NULL
+        AND note = btrim(note)
+        AND char_length(note) BETWEEN 1 AND 4000
+        AND reviewed_at IS NOT NULL)
     )
 );
 
@@ -740,7 +788,8 @@ DROP TABLE story_release_editions;
 DROP TABLE story_releases;
 DROP TABLE story_source_versions;
 DROP TABLE story_sources;
-DROP TABLE source_acquisition_reviews;
+DROP TABLE source_acquisition_quality_reviews;
+DROP TABLE source_acquisition_eligibility_assessments;
 DROP TABLE source_acquisitions;
 DROP TABLE reader_story_edition_overrides;
 DROP TABLE reading_progress;
