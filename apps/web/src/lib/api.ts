@@ -1035,9 +1035,10 @@ export type AdminVersionSource = {
   segmentCount: number; wordCount: number; chapterCount: number; createdAt: string;
   isDraft: boolean; isPublished: boolean; health: AdminVersionHealth;
 };
+export type AdminSourceProvenance = { kind: "source_acquisition"; acquisitionId: string; provider: AdminSourceProviderID; externalId: string; assessmentHash: string };
 export type AdminSourceVersionSummary = {
   versionId: string; version: number; title: string; author: string | null; language: string;
-  rights: JsonObject; sourceUrl: string | null; createdAt: string; isCurrent: boolean;
+  rights: JsonObject; sourceUrl: string | null; createdAt: string; isCurrent: boolean; provenance?: AdminSourceProvenance;
 };
 export type AdminSourceDetail = {
   slug: string; status: AdminSourceStatus; currentVersion: AdminVersionPointer | null;
@@ -1077,6 +1078,9 @@ export type AdminSourceProviderSearchResponse = {
 };
 export type AdminSourceQualityStatus = "pending" | "approved" | "rejected";
 export type AdminSourceQualityReview = { status: AdminSourceQualityStatus; note: string | null; reviewedAt: string | null };
+export type AdminSourceAcquisitionPromotion = { storySlug: string; storyTitle: string; sourceVersionId: string; sourceVersion: number; promotedAt: string };
+export type AdminSourceAcquisitionPromotionTarget = { mode: "new_story"; title: string; slug: string } | { mode: "existing_story"; storySlug: string };
+export type AdminSourceAcquisitionPromotionResponse = { outcome: "created" | "reused"; promotion: AdminSourceAcquisitionPromotion };
 export type AdminCopyrightFactState = "none_confirmed" | "present" | "unknown";
 export type AdminCopyrightEvidenceReference = { source: string; fact: string; locator?: string; identifier?: string; digest?: string };
 export type AdminCopyrightFactEvidence = { state: AdminCopyrightFactState; references: AdminCopyrightEvidenceReference[] };
@@ -1111,6 +1115,7 @@ export type AdminSourceAcquisitionSummary = {
   createdAt: string;
   eligibility: AdminSourceEligibility | null;
   sourceQuality: AdminSourceQualityReview;
+  promotion: AdminSourceAcquisitionPromotion | null;
 };
 export type AdminSourceAcquisitionDetail = AdminSourceAcquisitionSummary & {
   sourceText: string;
@@ -1407,6 +1412,12 @@ function parseAdminSHA256(value: unknown): string {
   return value;
 }
 
+function parseAdminSourceAcquisitionPromotion(value: unknown): AdminSourceAcquisitionPromotion {
+  const record = adminRecord(value);
+  if (!isPositiveSafeInteger(record.sourceVersion) || !isRFC3339Timestamp(record.promotedAt)) throw new Error("Invalid admin response");
+  return { storySlug: parseAdminSlug(record.storySlug), storyTitle: requiredAdminString(record, "storyTitle"), sourceVersionId: parseAdminUUID(record.sourceVersionId), sourceVersion: record.sourceVersion, promotedAt: record.promotedAt };
+}
+
 export function parseAdminSourceAcquisitionSummary(value: unknown): AdminSourceAcquisitionSummary {
   const record = adminRecord(value);
   if ("sourceText" in record) throw new Error("Invalid admin response");
@@ -1429,6 +1440,7 @@ export function parseAdminSourceAcquisitionSummary(value: unknown): AdminSourceA
     createdAt,
     eligibility: record.eligibility === undefined || record.eligibility === null ? null : parseAdminEligibility(record.eligibility),
     sourceQuality: parseAdminSourceQualityReview(record.sourceQuality),
+    promotion: record.promotion === undefined || record.promotion === null ? null : parseAdminSourceAcquisitionPromotion(record.promotion),
   };
 }
 
@@ -1611,10 +1623,15 @@ export function parseAdminVersionSource(value: unknown): AdminVersionSource {
   if (!isPositiveSafeInteger(record.version) || !isRFC3339Timestamp(record.createdAt) || typeof record.markdown !== "string" || typeof record.renderedHtml !== "string" || typeof record.isDraft !== "boolean" || typeof record.isPublished !== "boolean" || !isNonNegativeInteger(record.segmentCount) || !isNonNegativeInteger(record.wordCount) || !isNonNegativeInteger(record.chapterCount)) throw new Error("Invalid admin response");
   return { slug: parseAdminSlug(record.slug), editionKey: parseAdminEditionKey(record.editionKey), versionId: parseAdminUUID(record.versionId), version: record.version, ...parseAdminMetadata(record), markdown: record.markdown, renderedHtml: parseSafeRenderedStoryHTML(record.renderedHtml), segmentCount: record.segmentCount, wordCount: record.wordCount, chapterCount: record.chapterCount, createdAt: record.createdAt, isDraft: record.isDraft, isPublished: record.isPublished, health: parseAdminHealth(record.health) };
 }
+function parseAdminSourceProvenance(value: unknown): AdminSourceProvenance {
+  const record = adminRecord(value);
+  if (record.kind !== "source_acquisition") throw new Error("Invalid admin response");
+  return { kind: "source_acquisition", acquisitionId: parseAdminUUID(record.acquisitionId), provider: parseAdminSourceProviderID(record.provider), externalId: requiredAdminString(record, "externalId"), assessmentHash: parseAdminSHA256(record.assessmentHash) };
+}
 function parseAdminSourceVersionSummary(value: unknown): AdminSourceVersionSummary {
   const record = adminRecord(value);
   if (!isPositiveSafeInteger(record.version) || !isRFC3339Timestamp(record.createdAt) || typeof record.isCurrent !== "boolean") throw new Error("Invalid admin response");
-  return { versionId: parseAdminUUID(record.versionId), version: record.version, ...parseAdminMetadata(record), createdAt: record.createdAt, isCurrent: record.isCurrent };
+  return { versionId: parseAdminUUID(record.versionId), version: record.version, ...parseAdminMetadata(record), createdAt: record.createdAt, isCurrent: record.isCurrent, ...(record.provenance === undefined || record.provenance === null ? {} : { provenance: parseAdminSourceProvenance(record.provenance) }) };
 }
 export function parseAdminSourceDetail(value: unknown): AdminSourceDetail {
   const record = adminRecord(value); const summary = parseAdminSourceSummary(record);
@@ -1645,6 +1662,7 @@ export function parseAdminSourceVersion(value: unknown): AdminSourceVersion {
     createdAt: record.createdAt,
     isCurrent: record.isCurrent,
     sourceText: record.sourceText,
+    ...(record.provenance === undefined || record.provenance === null ? {} : { provenance: parseAdminSourceProvenance(record.provenance) }),
   };
 }
 function parseAdminIssue(value: unknown): AdminValidationIssue {
@@ -1802,6 +1820,18 @@ export async function adminListSourceAcquisitions(signal?: AbortSignal): Promise
 
 export async function adminGetSourceAcquisition(id: string, signal?: AbortSignal): Promise<AdminSourceAcquisitionDetail> {
   return parseAdminSourceAcquisitionDetail(await request<unknown>(`/api/v1/admin/source-acquisitions/${encodeURIComponent(id)}`, { signal }));
+}
+
+export async function adminPromoteSourceAcquisition(
+  id: string,
+  target: AdminSourceAcquisitionPromotionTarget,
+): Promise<AdminSourceAcquisitionPromotionResponse> {
+  const record = adminRecord(await request<unknown>(
+    "/api/v1/admin/source-acquisitions/" + encodeURIComponent(id) + "/promote",
+    { method: "POST", body: JSON.stringify({ target }) },
+  ));
+  if ((record.outcome !== "created" && record.outcome !== "reused")) throw new Error("Invalid admin response");
+  return { outcome: record.outcome, promotion: parseAdminSourceAcquisitionPromotion(record.promotion) };
 }
 
 export async function adminUpdateSourceAcquisitionSourceQualityReview(

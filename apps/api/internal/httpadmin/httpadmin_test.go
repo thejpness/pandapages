@@ -45,6 +45,11 @@ type adminStore struct {
 	getSourceAcquisitionID           string
 	getSourceAcquisitionResponse     model.AdminSourceAcquisitionDetail
 	getSourceAcquisitionErr          error
+	promoteSourceAcquisitionCalls    int
+	promoteSourceAcquisitionID       string
+	promoteSourceAcquisitionRequest  model.AdminSourceAcquisitionPromotionRequest
+	promoteSourceAcquisitionResponse model.AdminSourceAcquisitionPromotionResponse
+	promoteSourceAcquisitionErr      error
 	qualityReviewCalls               int
 	qualityReviewID                  string
 	qualityReviewRequest             model.AdminSourceQualityReviewUpdateRequest
@@ -109,6 +114,13 @@ func (s *adminStore) AdminGetSourceAcquisition(id string) (model.AdminSourceAcqu
 	s.getSourceAcquisitionCalls++
 	s.getSourceAcquisitionID = id
 	return s.getSourceAcquisitionResponse, s.getSourceAcquisitionErr
+}
+
+func (s *adminStore) AdminPromoteSourceAcquisition(id string, req model.AdminSourceAcquisitionPromotionRequest) (model.AdminSourceAcquisitionPromotionResponse, error) {
+	s.promoteSourceAcquisitionCalls++
+	s.promoteSourceAcquisitionID = id
+	s.promoteSourceAcquisitionRequest = req
+	return s.promoteSourceAcquisitionResponse, s.promoteSourceAcquisitionErr
 }
 
 func (s *adminStore) AdminUpdateSourceAcquisitionSourceQualityReview(id string, req model.AdminSourceQualityReviewUpdateRequest) (model.AdminSourceAcquisitionSummary, error) {

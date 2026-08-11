@@ -2,7 +2,13 @@ package model
 
 import "errors"
 
-var ErrAdminSourceAcquisitionNotFound = errors.New("source acquisition was not found")
+var (
+	ErrAdminSourceAcquisitionNotFound          = errors.New("source acquisition was not found")
+	ErrAdminSourceAcquisitionNotReady          = errors.New("source acquisition is not ready for promotion")
+	ErrAdminSourceAcquisitionAlreadyPromoted   = errors.New("source acquisition is already promoted")
+	ErrAdminSourceAcquisitionPromotionTarget   = errors.New("source acquisition promotion target is invalid")
+	ErrAdminSourceAcquisitionPromotionConflict = errors.New("source acquisition promotion conflicts")
+)
 
 type AdminSourceAcquisitionOutcome string
 
@@ -133,6 +139,7 @@ type AdminSourceAcquisitionSummary struct {
 	CreatedAt              string                               `json:"createdAt"`
 	Eligibility            *AdminSourceEligibility              `json:"eligibility,omitempty"`
 	SourceQuality          AdminSourceQualityReview             `json:"sourceQuality"`
+	Promotion              *AdminSourceAcquisitionPromotion     `json:"promotion,omitempty"`
 }
 
 type AdminSourceAcquisitionDetail struct {
@@ -152,4 +159,43 @@ type AdminSourceAcquisitionPersistResponse struct {
 type AdminSourceQualityReviewUpdateRequest struct {
 	Status AdminSourceQualityStatus `json:"status"`
 	Note   string                   `json:"note"`
+}
+
+type AdminSourceAcquisitionPromotionTargetMode string
+
+const (
+	AdminSourceAcquisitionPromotionTargetNewStory      AdminSourceAcquisitionPromotionTargetMode = "new_story"
+	AdminSourceAcquisitionPromotionTargetExistingStory AdminSourceAcquisitionPromotionTargetMode = "existing_story"
+)
+
+type AdminSourceAcquisitionPromotionRequest struct {
+	Target AdminSourceAcquisitionPromotionTarget `json:"target"`
+}
+
+type AdminSourceAcquisitionPromotionTarget struct {
+	Mode      AdminSourceAcquisitionPromotionTargetMode `json:"mode"`
+	Title     string                                    `json:"title"`
+	Slug      string                                    `json:"slug"`
+	StorySlug string                                    `json:"storySlug"`
+}
+
+type AdminSourceAcquisitionPromotionOutcome string
+
+const (
+	AdminSourceAcquisitionPromotionCreated AdminSourceAcquisitionPromotionOutcome = "created"
+	AdminSourceAcquisitionPromotionReused  AdminSourceAcquisitionPromotionOutcome = "reused"
+)
+
+type AdminSourceAcquisitionPromotion struct {
+	StoryID         string `json:"-"`
+	StorySlug       string `json:"storySlug"`
+	StoryTitle      string `json:"storyTitle"`
+	SourceVersionID string `json:"sourceVersionId"`
+	SourceVersion   int    `json:"sourceVersion"`
+	PromotedAt      string `json:"promotedAt"`
+}
+
+type AdminSourceAcquisitionPromotionResponse struct {
+	Outcome   AdminSourceAcquisitionPromotionOutcome `json:"outcome"`
+	Promotion AdminSourceAcquisitionPromotion        `json:"promotion"`
 }

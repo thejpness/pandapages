@@ -170,7 +170,7 @@ WITH runtime_table(name, can_update, can_delete) AS (
     ('story_releases', false, false),
     ('story_contributors', true, true),
     ('story_sections', true, true),
-    ('story_source_versions', true, true),
+    ('story_source_versions', false, false),
     ('story_sources', true, true),
     ('story_segments', true, true),
     ('story_versions', true, true)

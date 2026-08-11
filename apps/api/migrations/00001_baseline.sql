@@ -592,6 +592,8 @@ CREATE TABLE source_acquisition_eligibility_assessments (
     CHECK (assessment_hash ~ '^[0-9a-f]{64}$'),
   CONSTRAINT source_acquisition_eligibility_assessments_hash_key
     UNIQUE (assessment_hash),
+  CONSTRAINT source_acquisition_eligibility_assessments_id_acquisition_key
+    UNIQUE (id, acquisition_id),
   CONSTRAINT source_acquisition_eligibility_assessments_success_check
     CHECK (overall_status = 'eligible' AND us_status = 'eligible' AND uk_status = 'eligible')
 );
@@ -654,6 +656,8 @@ CREATE TABLE story_source_versions (
   rights jsonb NOT NULL DEFAULT '{}'::jsonb,
   source_url text,
   source_text text NOT NULL,
+  source_acquisition_id uuid,
+  source_eligibility_assessment_id uuid,
   snapshot_hash text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
 
@@ -683,11 +687,31 @@ CREATE TABLE story_source_versions (
   CONSTRAINT story_source_versions_snapshot_hash_check
     CHECK (snapshot_hash ~ '^[0-9a-f]{64}$'),
 
+  CONSTRAINT story_source_versions_provenance_pair_check
+    CHECK (
+      (source_acquisition_id IS NULL AND source_eligibility_assessment_id IS NULL)
+      OR
+      (source_acquisition_id IS NOT NULL AND source_eligibility_assessment_id IS NOT NULL)
+    ),
+
+  CONSTRAINT story_source_versions_acquisition_fkey
+    FOREIGN KEY (source_acquisition_id)
+    REFERENCES source_acquisitions(id)
+    ON UPDATE NO ACTION ON DELETE RESTRICT,
+
+  CONSTRAINT story_source_versions_assessment_acquisition_fkey
+    FOREIGN KEY (source_eligibility_assessment_id, source_acquisition_id)
+    REFERENCES source_acquisition_eligibility_assessments(id, acquisition_id)
+    ON UPDATE NO ACTION ON DELETE RESTRICT,
+
   CONSTRAINT story_source_versions_source_version_key
     UNIQUE (source_id, version),
 
   CONSTRAINT story_source_versions_source_snapshot_hash_key
     UNIQUE (source_id, snapshot_hash),
+
+  CONSTRAINT story_source_versions_source_acquisition_key
+    UNIQUE (source_acquisition_id),
 
   CONSTRAINT story_source_versions_id_source_id_key
     UNIQUE (id, source_id)

@@ -168,6 +168,7 @@ function sourceAcquisitionSummary(overrides: Record<string, unknown> = {}) {
     createdAt: timestamp,
     eligibility: sourceEligibility(),
     sourceQuality: { status: 'pending', note: null as string | null, reviewedAt: null as string | null },
+    promotion: null as null | { storySlug: string; storyTitle: string; sourceVersionId: string; sourceVersion: number; promotedAt: string },
     ...overrides,
   }
 }
@@ -431,6 +432,41 @@ class StudioAPI {
         ? { status: 'pending', note: null, reviewedAt: null }
         : { status: update.status, note: String(update.note ?? ''), reviewedAt: timestamp }
       await this.fulfill(route, acquisition)
+      return
+    }
+
+    const acquisitionPromotionMatch = /^\/api\/v1\/admin\/source-acquisitions\/([^/]+)\/promote$/.exec(path)
+    if (acquisitionPromotionMatch && method === "POST") {
+      const acquisition = this.sourceAcquisitions.find((item) => item.id === acquisitionPromotionMatch[1])
+      const target = body as { target?: { mode?: string; title?: string; slug?: string; storySlug?: string } }
+      if (!acquisition) {
+        await this.fail(route, { status: 404, code: "source_acquisition_not_found", message: "source acquisition was not found" })
+        return
+      }
+      if (acquisition.sourceQuality.status !== "approved") {
+        await this.fail(route, { status: 409, code: "source_acquisition_not_ready", message: "source acquisition is not ready for promotion" })
+        return
+      }
+      if (acquisition.promotion) {
+        await this.fulfill(route, { outcome: "reused", promotion: acquisition.promotion })
+        return
+      }
+      const requestTarget = target.target
+      const story = requestTarget?.mode === "new_story"
+        ? { slug: requestTarget.slug ?? "", title: requestTarget.title ?? "" }
+        : this.stories.find((item) => item.slug === requestTarget?.storySlug)
+      if (!story || !story.slug || !story.title) {
+        await this.fail(route, { status: 404, code: "source_acquisition_promotion_target_invalid", message: "promotion target was not found" })
+        return
+      }
+      acquisition.promotion = {
+        storySlug: story.slug,
+        storyTitle: story.title,
+        sourceVersionId: versionThree,
+        sourceVersion: 1,
+        promotedAt: timestamp,
+      }
+      await this.fulfill(route, { outcome: "created", promotion: acquisition.promotion }, 201)
       return
     }
 
@@ -926,8 +962,17 @@ test('global source review validates factual evidence, saves eligible work, and 
   await page.getByLabel('Rationale').fill('Complete, readable text for the intended work.')
   await page.getByRole('button', { name: 'Save source quality review' }).click()
   await expect(page.getByRole('heading', { name: 'Ready for canonical-source promotion' })).toBeVisible()
-  await expect(page.getByText('Canonical-source promotion is not available yet.')).toBeVisible()
-  await expect(page.getByRole('button', { name: /Promote|Create story|Generate editions|Publish/ })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Promote to canonical source' }).click()
+  await expect(page.getByLabel('Story title')).toHaveValue("Alice's Adventures in Wonderland")
+  await expect(page.getByLabel('Story slug')).toHaveValue('alice-s-adventures-in-wonderland')
+  await page.getByRole('button', { name: 'Create story & promote source' }).click()
+  await expect(page.getByRole('heading', { name: 'Promoted to canonical source' })).toBeVisible()
+  await expect(page.getByText('Source quality was locked when this acquisition was promoted.', { exact: true })).toBeVisible()
+  await expect(page.getByLabel('Source quality status')).toBeDisabled()
+  const promotionBody = api.requests.find((request) => request.path.endsWith('/promote'))?.body as Record<string, unknown>
+  expect(promotionBody).toEqual({ target: { mode: 'new_story', title: "Alice's Adventures in Wonderland", slug: 'alice-s-adventures-in-wonderland' } })
+  expect(JSON.stringify(promotionBody)).not.toMatch(/sourceText|snapshotHash|assessmentHash|eligible|providerUrl/)
+  await expect(page.getByRole('button', { name: /Generate editions|Publish|Create release/ })).toHaveCount(0)
   expect(api.count('PUT', `/api/v1/admin/source-acquisitions/${acquisitionID}/source-quality-review`)).toBe(2)
 
   await page.getByRole('tab', { name: 'Find a source' }).click()

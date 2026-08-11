@@ -38,15 +38,27 @@ type AdminStorySourceSummary struct {
 }
 
 type AdminSourceVersionSummary struct {
-	VersionID string         `json:"versionId"`
-	Version   int            `json:"version"`
-	Title     string         `json:"title"`
-	Author    *string        `json:"author"`
-	Language  string         `json:"language"`
-	Rights    map[string]any `json:"rights"`
-	SourceURL *string        `json:"sourceUrl"`
-	CreatedAt string         `json:"createdAt"`
-	IsCurrent bool           `json:"isCurrent"`
+	VersionID  string                 `json:"versionId"`
+	Version    int                    `json:"version"`
+	Title      string                 `json:"title"`
+	Author     *string                `json:"author"`
+	Language   string                 `json:"language"`
+	Rights     map[string]any         `json:"rights"`
+	SourceURL  *string                `json:"sourceUrl"`
+	CreatedAt  string                 `json:"createdAt"`
+	IsCurrent  bool                   `json:"isCurrent"`
+	Provenance *AdminSourceProvenance `json:"provenance,omitempty"`
+}
+
+// AdminSourceProvenance identifies the durable reviewed acquisition that
+// created a provider-promoted canonical source version. Manual versions have
+// nil provenance.
+type AdminSourceProvenance struct {
+	Kind           string `json:"kind"`
+	AcquisitionID  string `json:"acquisitionId"`
+	Provider       string `json:"provider"`
+	ExternalID     string `json:"externalId"`
+	AssessmentHash string `json:"assessmentHash"`
 }
 
 type AdminSourceDetailResponse struct {
@@ -59,17 +71,18 @@ type AdminSourceDetailResponse struct {
 }
 
 type AdminSourceVersionResponse struct {
-	Slug       string         `json:"slug"`
-	VersionID  string         `json:"versionId"`
-	Version    int            `json:"version"`
-	Title      string         `json:"title"`
-	Author     *string        `json:"author"`
-	Language   string         `json:"language"`
-	Rights     map[string]any `json:"rights"`
-	SourceURL  *string        `json:"sourceUrl"`
-	SourceText string         `json:"sourceText"`
-	CreatedAt  string         `json:"createdAt"`
-	IsCurrent  bool           `json:"isCurrent"`
+	Slug       string                 `json:"slug"`
+	VersionID  string                 `json:"versionId"`
+	Version    int                    `json:"version"`
+	Title      string                 `json:"title"`
+	Author     *string                `json:"author"`
+	Language   string                 `json:"language"`
+	Rights     map[string]any         `json:"rights"`
+	SourceURL  *string                `json:"sourceUrl"`
+	SourceText string                 `json:"sourceText"`
+	CreatedAt  string                 `json:"createdAt"`
+	IsCurrent  bool                   `json:"isCurrent"`
+	Provenance *AdminSourceProvenance `json:"provenance,omitempty"`
 }
 
 type AdminSourceUpsertResponse struct {

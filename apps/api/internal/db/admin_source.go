@@ -18,6 +18,15 @@ import (
 
 var errStoredSourceInvalid = errors.New("stored canonical source is invalid")
 
+type canonicalSourceProvenance struct {
+	AcquisitionID           string
+	AcquisitionSnapshotHash string
+	AssessmentID            string
+	Provider                string
+	ExternalID              string
+	AssessmentHash          string
+}
+
 type adminCanonicalSource struct {
 	Title        string
 	Author       *string
@@ -25,6 +34,7 @@ type adminCanonicalSource struct {
 	Rights       map[string]any
 	SourceURL    *string
 	SourceText   string
+	Provenance   *canonicalSourceProvenance
 	SnapshotHash string
 }
 
@@ -42,6 +52,7 @@ type adminSourceSnapshot struct {
 	ID string
 	adminSourceMetadata
 	SourceText   string
+	Provenance   *model.AdminSourceProvenance
 	SnapshotHash string
 }
 
@@ -141,6 +152,21 @@ func canonicalAdminSourceInput(req model.AdminSourceUpsertRequest) (adminCanonic
 	return source, nil
 }
 
+func canonicalSnapshotProvenance(value *canonicalSourceProvenance) *struct {
+	Kind                    string `json:"kind"`
+	AcquisitionSnapshotHash string `json:"acquisitionSnapshotHash"`
+	AssessmentHash          string `json:"assessmentHash"`
+} {
+	if value == nil {
+		return nil
+	}
+	return &struct {
+		Kind                    string `json:"kind"`
+		AcquisitionSnapshotHash string `json:"acquisitionSnapshotHash"`
+		AssessmentHash          string `json:"assessmentHash"`
+	}{Kind: "source_acquisition", AcquisitionSnapshotHash: value.AcquisitionSnapshotHash, AssessmentHash: value.AssessmentHash}
+}
+
 func canonicalSourceSnapshotHash(source adminCanonicalSource) (string, error) {
 	payload := struct {
 		Title      string         `json:"title"`
@@ -149,6 +175,11 @@ func canonicalSourceSnapshotHash(source adminCanonicalSource) (string, error) {
 		Rights     map[string]any `json:"rights"`
 		SourceURL  *string        `json:"sourceUrl"`
 		SourceText string         `json:"sourceText"`
+		Provenance *struct {
+			Kind                    string `json:"kind"`
+			AcquisitionSnapshotHash string `json:"acquisitionSnapshotHash"`
+			AssessmentHash          string `json:"assessmentHash"`
+		} `json:"provenance"`
 	}{
 		Title:      source.Title,
 		Author:     source.Author,
@@ -156,6 +187,7 @@ func canonicalSourceSnapshotHash(source adminCanonicalSource) (string, error) {
 		Rights:     source.Rights,
 		SourceURL:  source.SourceURL,
 		SourceText: source.SourceText,
+		Provenance: canonicalSnapshotProvenance(source.Provenance),
 	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
@@ -294,6 +326,10 @@ func loadAdminSourceVersionSnapshot(
 	if err != nil {
 		return adminSourceSnapshot{}, err
 	}
+	provenance, err := loadCanonicalSourceProvenance(ctx, queryer, id)
+	if err != nil {
+		return adminSourceSnapshot{}, err
+	}
 	canonical := adminCanonicalSource{
 		Title:      metadata.Title,
 		Author:     cloneString(metadata.Author),
@@ -301,6 +337,7 @@ func loadAdminSourceVersionSnapshot(
 		Rights:     cloneJSONMap(metadata.Rights),
 		SourceURL:  cloneString(metadata.SourceURL),
 		SourceText: sourceText,
+		Provenance: provenance,
 	}
 	computed, err := canonicalSourceSnapshotHash(canonical)
 	if err != nil {
@@ -314,6 +351,7 @@ func loadAdminSourceVersionSnapshot(
 		ID:                  id,
 		adminSourceMetadata: metadata,
 		SourceText:          sourceText,
+		Provenance:          sourceProvenanceResponse(provenance),
 		SnapshotHash:        snapshotHash,
 	}, nil
 }
@@ -781,5 +819,6 @@ func (s *Store) AdminGetSourceVersion(
 		SourceText: snapshot.SourceText,
 		CreatedAt:  snapshot.CreatedAt.UTC().Format(time.RFC3339Nano),
 		IsCurrent:  currentVersion.Valid && currentVersion.String == snapshot.ID,
+		Provenance: snapshot.Provenance,
 	}, nil
 }
