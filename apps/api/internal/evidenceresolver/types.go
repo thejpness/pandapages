@@ -30,10 +30,11 @@ const (
 type SourceClass string
 
 const (
-	SourceProjectGutenberg  SourceClass = "project_gutenberg"
-	SourceLibraryOfCongress SourceClass = "library_of_congress"
-	SourceOpenLibrary       SourceClass = "open_library"
-	SourceWikidata          SourceClass = "wikidata"
+	SourceProjectGutenberg              SourceClass = "project_gutenberg"
+	SourceBibliothequeNationaleDeFrance SourceClass = "bibliotheque_nationale_de_france"
+	SourceLibraryOfCongress             SourceClass = "library_of_congress"
+	SourceOpenLibrary                   SourceClass = "open_library"
+	SourceWikidata                      SourceClass = "wikidata"
 )
 
 // PublicationAuthority is Panda Pages' fact-specific trust policy for
@@ -84,14 +85,19 @@ type Contributor struct {
 // relevant contribution is absent. Sources must not represent an edition date
 // as a first-work publication year.
 type BibliographicRecord struct {
-	Source               SourceClass
-	SourceName           string
-	Identifier           string
-	Locator              string
-	Digest               string
-	Title                string
-	WorkID               string
-	EditionID            string
+	Source     SourceClass
+	SourceName string
+	Identifier string
+	Locator    string
+	Digest     string
+	Title      string
+	WorkID     string
+	EditionID  string
+	// ContributorRecordID identifies the source-owned bibliographic work or
+	// edition record whose structured contributor roles were observed. It is
+	// separate from WorkID and EditionID because different providers expose
+	// contributor metadata at different bibliographic levels.
+	ContributorRecordID  string
 	Authors              []Person
 	Contributors         []Contributor
 	FirstPublicationYear *int
@@ -129,6 +135,11 @@ type BibliographicSource interface {
 type ExactSourceContext struct {
 	ProviderEvidence copyrighteligibility.ProviderEvidence
 	SourceText       string
+	// SourceFrontMatter is a bounded, server-owned prefix of the acquired raw
+	// provider text. It is never placed on SourceCandidate or returned to a
+	// browser; it only supports positive contributor inspection before source
+	// normalisation removes the provider wrapper.
+	SourceFrontMatter string
 }
 
 type Diagnostic struct {

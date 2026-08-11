@@ -15,6 +15,9 @@ import (
 
 	"pandapages/api/internal/appidentity"
 	"pandapages/api/internal/db"
+	"pandapages/api/internal/evidenceresolver"
+	"pandapages/api/internal/evidenceresolver/bnf"
+	"pandapages/api/internal/evidenceresolver/openlibrary"
 	"pandapages/api/internal/httpadmin"
 	"pandapages/api/internal/httpapi"
 	"pandapages/api/internal/httpbearer"
@@ -130,7 +133,17 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("configure source providers: %w", err)
 	}
-	sourceEligibility, err := sourceeligibility.New(sourceeligibility.Config{Gateway: sourceDiscovery})
+	evidenceResolver, err := evidenceresolver.New(evidenceresolver.Config{
+		Sources: []evidenceresolver.BibliographicSource{
+			bnf.New(bnf.Config{}),
+			openlibrary.New(openlibrary.Config{}),
+		},
+		Logger: slog.Default(),
+	})
+	if err != nil {
+		return fmt.Errorf("configure copyright evidence resolver: %w", err)
+	}
+	sourceEligibility, err := sourceeligibility.New(sourceeligibility.Config{Gateway: sourceDiscovery, Resolver: evidenceResolver})
 	if err != nil {
 		return fmt.Errorf("configure source eligibility: %w", err)
 	}

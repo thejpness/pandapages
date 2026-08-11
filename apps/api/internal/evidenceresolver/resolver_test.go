@@ -30,6 +30,7 @@ func TestResolveSyntheticCrossSourceFactsCanProduceEligibleUKEvidence(t *testing
 	ol := record(SourceOpenLibrary, "ol:alice", "Carroll, Lewis", &death, &publication)
 	for _, value := range []*BibliographicRecord{&loc, &ol} {
 		value.EditionID = value.Identifier + ":edition"
+		value.ContributorRecordID = value.EditionID
 		value.OriginalLanguages = []string{"en"}
 		value.ContributorRolesObserved = true
 	}
@@ -55,6 +56,7 @@ func TestResolveNegativeFactsRequireExactObservableEvidence(t *testing.T) {
 	publication := 1865
 	exactRecord := record(SourceOpenLibrary, "ol:alice", "Lewis Carroll", &death, &publication)
 	exactRecord.EditionID = "OL123M"
+	exactRecord.ContributorRecordID = exactRecord.EditionID
 	exactRecord.OriginalLanguages = []string{"en"}
 	exactRecord.ContributorRolesObserved = true
 
@@ -65,7 +67,7 @@ func TestResolveNegativeFactsRequireExactObservableEvidence(t *testing.T) {
 	}
 
 	missingEdition := exactRecord
-	missingEdition.EditionID = ""
+	missingEdition.ContributorRecordID = ""
 	resolver = newResolver(t, missingEdition)
 	resolution, err = resolver.Resolve(context.Background(), aliceContext())
 	if err != nil || resolution.Translation.Status != ResolutionInsufficient || resolution.AdditionalTextual.Status != ResolutionInsufficient {
@@ -94,6 +96,7 @@ func TestResolveBibliographicPositiveContributorBlocksAbsence(t *testing.T) {
 	publication := 1865
 	value := record(SourceOpenLibrary, "ol:alice", "Lewis Carroll", &death, &publication)
 	value.EditionID = "OL123M"
+	value.ContributorRecordID = value.EditionID
 	value.OriginalLanguages = []string{"en"}
 	value.ContributorRolesObserved = true
 	value.Contributors = append(value.Contributors, Contributor{Name: "Example Translator", Role: "translator"})
@@ -215,6 +218,7 @@ func TestPublicationAuthorityIsCentralAndFactSpecific(t *testing.T) {
 		want  PublicationAuthority
 	}{
 		{SourceLibraryOfCongress, PublicationAuthorityAuthoritative},
+		{SourceBibliothequeNationaleDeFrance, PublicationAuthorityAuthoritative},
 		{SourceOpenLibrary, PublicationAuthorityCorroborating},
 		{SourceWikidata, PublicationAuthorityCorroborating},
 		{SourceProjectGutenberg, ""},
@@ -232,6 +236,22 @@ func TestResolveSourceFailureIsInsufficientNotFatal(t *testing.T) {
 	}
 	resolution, err := resolver.Resolve(context.Background(), aliceContext())
 	if err != nil || len(resolution.Diagnostics) != 1 || resolution.Diagnostics[0] != (Diagnostic{Source: SourceOpenLibrary, Reason: ReasonSourceUnavailable}) || resolution.WorkCategory.Status != ResolutionInsufficient {
+		t.Fatalf("resolution=%#v err=%v", resolution, err)
+	}
+}
+
+func TestResolveAuthoritativeSourceFailureLeavesPublicationInsufficient(t *testing.T) {
+	death := 1898
+	publication := 1865
+	resolver, err := New(Config{Sources: []BibliographicSource{
+		sourceStub{class: SourceBibliothequeNationaleDeFrance, err: errors.New("provider unavailable")},
+		sourceStub{class: SourceOpenLibrary, records: []BibliographicRecord{record(SourceOpenLibrary, "ol:alice", "Lewis Carroll", &death, &publication)}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolution, err := resolver.Resolve(context.Background(), aliceContext())
+	if err != nil || resolution.FirstPublication.Status != ResolutionInsufficient || len(resolution.Diagnostics) != 1 || resolution.Diagnostics[0] != (Diagnostic{Source: SourceBibliothequeNationaleDeFrance, Reason: ReasonSourceUnavailable}) {
 		t.Fatalf("resolution=%#v err=%v", resolution, err)
 	}
 }
