@@ -195,9 +195,51 @@ psql_as "$application_role" --command="
   );
   UPDATE stories SET title='Runtime Story Updated'
   WHERE id='a1500000-0000-4000-8000-000000000021';
+  INSERT INTO source_acquisitions (
+    id, provider, external_id, title, contributors, languages, landing_url,
+    representation_media_type, representation_provider_url,
+    normalisation_version, retrieved_content_hash, normalised_content_hash,
+    source_text, snapshot_hash
+  ) VALUES (
+    'a1500000-0000-4000-8000-000000000031',
+    'project-gutenberg', '11', 'Runtime acquisition', '[]'::jsonb,
+    jsonb_build_array('en'), 'https://www.gutenberg.org/ebooks/11',
+    'text/plain; charset=utf-8', 'https://www.gutenberg.org/files/11/11-0.txt',
+    'project-gutenberg-plain-text-v1',
+    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    'Runtime source text.',
+    'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+  );
+  INSERT INTO source_acquisition_reviews (
+    acquisition_id, rights_status, rights_note, rights_reviewed_at,
+    editorial_status
+  ) VALUES (
+    'a1500000-0000-4000-8000-000000000031',
+    'approved', 'Initial review rationale.', now(), 'pending'
+  );
+  UPDATE source_acquisition_reviews
+  SET rights_note='Updated review rationale.', rights_reviewed_at=now()
+  WHERE acquisition_id='a1500000-0000-4000-8000-000000000031';
 " >/dev/null
 
 psql_as "$application_role" --command="SELECT count(*) FROM stories;" >/dev/null
+psql_as "$application_role" --command="SELECT count(*) FROM source_acquisitions;" >/dev/null
+
+expect_denied \
+  'application acquisition mutation' \
+  "$application_role" \
+  "UPDATE source_acquisitions SET title='Mutation denied' WHERE id='a1500000-0000-4000-8000-000000000031';"
+
+expect_denied \
+  'application acquisition deletion' \
+  "$application_role" \
+  "DELETE FROM source_acquisitions WHERE id='a1500000-0000-4000-8000-000000000031';"
+
+expect_denied \
+  'application review deletion' \
+  "$application_role" \
+  "DELETE FROM source_acquisition_reviews WHERE acquisition_id='a1500000-0000-4000-8000-000000000031';"
 
 expect_denied \
   'application DDL' \

@@ -308,6 +308,8 @@ WITH runtime_table(name) AS (
     ('profiles'),
     ('reader_story_edition_overrides'),
     ('reading_progress'),
+    ('source_acquisitions'),
+    ('source_acquisition_reviews'),
     ('stories'),
     ('story_editions'),
     ('story_release_editions'),
@@ -332,19 +334,34 @@ WHERE namespace.nspname = 'public'
   AND class.relkind IN ('r', 'p')
 \gexec
 
--- Release history is append-only at the runtime privilege boundary.
-WITH immutable_release_table(name) AS (
-  VALUES ('story_releases'), ('story_release_editions')
+-- Release history and acquisition evidence are immutable at the runtime
+-- privilege boundary. Review state deliberately lives in its own table.
+WITH immutable_runtime_table(name) AS (
+  VALUES ('story_releases'), ('story_release_editions'), ('source_acquisitions')
 )
 SELECT format(
   'REVOKE UPDATE, DELETE ON TABLE public.%I FROM %I',
   class.relname,
   :'application_role'
 )
-FROM immutable_release_table
-JOIN pg_class class ON class.relname = immutable_release_table.name
+FROM immutable_runtime_table
+JOIN pg_class class ON class.relname = immutable_runtime_table.name
 JOIN pg_namespace namespace ON namespace.oid = class.relnamespace
 WHERE namespace.nspname = 'public'
+  AND class.relkind IN ('r', 'p')
+\gexec
+
+-- Review decisions are mutable, but review history is never deleted by the
+-- runtime application role.
+SELECT format(
+  'REVOKE DELETE ON TABLE public.%I FROM %I',
+  class.relname,
+  :'application_role'
+)
+FROM pg_class class
+JOIN pg_namespace namespace ON namespace.oid = class.relnamespace
+WHERE namespace.nspname = 'public'
+  AND class.relname = 'source_acquisition_reviews'
   AND class.relkind IN ('r', 'p')
 \gexec
 

@@ -117,7 +117,9 @@ query() {
 [[ $(query "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='story_segments' AND column_name='locator';") == 0 ]]
 [[ $(query "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='story_segments' AND column_name IN ('segment_kind','heading_level','content_key','content_occurrence','chapter_key','chapter_occurrence');") == 6 ]]
 [[ $(query "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='story_releases' AND column_name='migration_backfill';") == 0 ]]
-[[ $(query "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('story_editions','story_releases','story_release_editions','story_sources','story_source_versions','reader_story_edition_overrides','reading_progress');") == 7 ]]
+[[ $(query "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('story_editions','story_releases','story_release_editions','story_sources','story_source_versions','source_acquisitions','source_acquisition_reviews','reader_story_edition_overrides','reading_progress');") == 9 ]]
+[[ $(query "SELECT count(*) FROM source_acquisitions;") == 0 ]]
+[[ $(query "SELECT count(*) FROM source_acquisition_reviews;") == 0 ]]
 
 published_address=$(docker port "$postgres_container" 5432/tcp)
 published_port=${published_address##*:}
@@ -129,7 +131,7 @@ database_url="postgres://$database_user:$database_password@127.0.0.1:$published_
   PP_READER_STORE_TEST_DISPOSABLE=1 \
     PP_READER_STORE_TEST_DATABASE_URL="$database_url" \
     go test ./internal/db \
-      -run '^(TestReaderStoreIntegration|TestAdminEditionBundleIntegration|TestAdminReleaseIntegration|TestReaderEditionOverrideIntegration|TestReaderResolutionIntegration|TestReaderLibraryIntegration)$' \
+      -run '^(TestReaderStoreIntegration|TestAdminEditionBundleIntegration|TestAdminReleaseIntegration|TestAdminSourceAcquisitionIntegration|TestReaderEditionOverrideIntegration|TestReaderResolutionIntegration|TestReaderLibraryIntegration)$' \
       -count=1
 )
 

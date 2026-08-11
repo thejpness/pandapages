@@ -32,6 +32,12 @@ type Store interface {
 	AdminSourceUpsert(slug string, req model.AdminSourceUpsertRequest) (model.AdminSourceUpsertResponse, error)
 	AdminGetSource(slug string) (model.AdminSourceDetailResponse, error)
 	AdminGetSourceVersion(slug string, versionID string) (model.AdminSourceVersionResponse, error)
+
+	AdminPersistSourceAcquisition(sourceprovider.SourceCandidate) (model.AdminSourceAcquisitionPersistResponse, error)
+	AdminListSourceAcquisitions(limit int) (model.AdminSourceAcquisitionsListResponse, error)
+	AdminGetSourceAcquisition(id string) (model.AdminSourceAcquisitionDetail, error)
+	AdminUpdateSourceAcquisitionRightsReview(id string, req model.AdminSourceAcquisitionReviewUpdateRequest) (model.AdminSourceAcquisitionSummary, error)
+	AdminUpdateSourceAcquisitionEditorialReview(id string, req model.AdminSourceAcquisitionReviewUpdateRequest) (model.AdminSourceAcquisitionSummary, error)
 }
 
 const (
@@ -196,6 +202,88 @@ func New(cfg Config, store Store) http.Handler {
 		out, err := acquisition.Acquire(r.Context(), sourceprovider.ID(strings.TrimSpace(r.PathValue("provider"))), strings.TrimSpace(r.PathValue("externalID")))
 		if err != nil {
 			writeSourceProviderError(w, err, true)
+			return
+		}
+		noStore(w)
+		writeJSON(w, http.StatusOK, out)
+	}))
+
+	mux.HandleFunc("POST /api/v1/admin/source-providers/{provider}/works/{externalID}/acquisitions", withAdmin(func(w http.ResponseWriter, r *http.Request) {
+		if err := requireEmptyBody(w, r); err != nil {
+			writeErr(w, http.StatusBadRequest, "source_acquisition_invalid", "source acquisition request must not include a body")
+			return
+		}
+		if acquisition == nil {
+			writeErr(w, http.StatusServiceUnavailable, "source_provider_unavailable", "source provider is unavailable")
+			return
+		}
+		candidate, err := acquisition.Acquire(r.Context(), sourceprovider.ID(strings.TrimSpace(r.PathValue("provider"))), strings.TrimSpace(r.PathValue("externalID")))
+		if err != nil {
+			writeSourceProviderError(w, err, true)
+			return
+		}
+		out, err := store.AdminPersistSourceAcquisition(candidate)
+		if err != nil {
+			writeSourceAcquisitionError(w, err, false)
+			return
+		}
+		noStore(w)
+		status := http.StatusOK
+		if out.Outcome == model.AdminSourceAcquisitionOutcomeCreated {
+			status = http.StatusCreated
+		}
+		writeJSON(w, status, out)
+	}))
+
+	mux.HandleFunc("GET /api/v1/admin/source-acquisitions", withAdmin(func(w http.ResponseWriter, r *http.Request) {
+		limit, err := sourceAcquisitionLimit(r.URL.Query().Get("limit"))
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "source_acquisition_invalid", "source acquisition list request is invalid")
+			return
+		}
+		out, err := store.AdminListSourceAcquisitions(limit)
+		if err != nil {
+			writeSourceAcquisitionError(w, err, false)
+			return
+		}
+		noStore(w)
+		writeJSON(w, http.StatusOK, out)
+	}))
+
+	mux.HandleFunc("GET /api/v1/admin/source-acquisitions/{acquisitionID}", withAdmin(func(w http.ResponseWriter, r *http.Request) {
+		out, err := store.AdminGetSourceAcquisition(strings.TrimSpace(r.PathValue("acquisitionID")))
+		if err != nil {
+			writeSourceAcquisitionError(w, err, false)
+			return
+		}
+		noStore(w)
+		writeJSON(w, http.StatusOK, out)
+	}))
+
+	mux.HandleFunc("PUT /api/v1/admin/source-acquisitions/{acquisitionID}/rights-review", withAdmin(func(w http.ResponseWriter, r *http.Request) {
+		var body model.AdminSourceAcquisitionReviewUpdateRequest
+		if err := decodeJSON(w, r, &body); err != nil {
+			writeDecodeError(w, err)
+			return
+		}
+		out, err := store.AdminUpdateSourceAcquisitionRightsReview(strings.TrimSpace(r.PathValue("acquisitionID")), body)
+		if err != nil {
+			writeSourceAcquisitionError(w, err, true)
+			return
+		}
+		noStore(w)
+		writeJSON(w, http.StatusOK, out)
+	}))
+
+	mux.HandleFunc("PUT /api/v1/admin/source-acquisitions/{acquisitionID}/editorial-review", withAdmin(func(w http.ResponseWriter, r *http.Request) {
+		var body model.AdminSourceAcquisitionReviewUpdateRequest
+		if err := decodeJSON(w, r, &body); err != nil {
+			writeDecodeError(w, err)
+			return
+		}
+		out, err := store.AdminUpdateSourceAcquisitionEditorialReview(strings.TrimSpace(r.PathValue("acquisitionID")), body)
+		if err != nil {
+			writeSourceAcquisitionError(w, err, true)
 			return
 		}
 		noStore(w)
@@ -412,6 +500,53 @@ func adminKeyOK(got, want string) bool {
 		return false
 	}
 	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}
+
+func sourceAcquisitionLimit(raw string) (int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil
+	}
+	limit, err := strconv.Atoi(raw)
+	if err != nil || limit < 1 || limit > 100 {
+		return 0, errors.New("source acquisition list limit is invalid")
+	}
+	return limit, nil
+}
+
+func writeSourceAcquisitionError(w http.ResponseWriter, err error, review bool) {
+	switch {
+	case errors.Is(err, model.ErrAdminSourceAcquisitionNotFound):
+		writeErr(w, http.StatusNotFound, "source_acquisition_not_found", "source acquisition was not found")
+	default:
+		var validationErr *model.AdminValidationError
+		if errors.As(err, &validationErr) {
+			code := "source_acquisition_invalid"
+			message := "source acquisition is invalid"
+			if review {
+				code = "source_acquisition_review_invalid"
+				message = "source acquisition review is invalid"
+			}
+			writeIssues(w, http.StatusBadRequest, code, message, validationErr.Issues)
+			return
+		}
+		slog.Error("source acquisition operation failed")
+		writeErr(w, http.StatusInternalServerError, "source_acquisition_failed", "source acquisition operation failed")
+	}
+}
+
+func requireEmptyBody(w http.ResponseWriter, r *http.Request) error {
+	r.Body = http.MaxBytesReader(w, r.Body, 1)
+	defer r.Body.Close()
+	var buffer [1]byte
+	_, err := r.Body.Read(buffer[:])
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return errors.New("unexpected request body")
 }
 
 func sourceProviderLimit(raw string) (int, error) {

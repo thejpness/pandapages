@@ -476,6 +476,106 @@ CREATE TABLE reader_story_edition_overrides (
     ON DELETE CASCADE
 );
 
+-- Durable external-provider acquisition evidence. Acquisitions intentionally
+-- exist before any Panda Pages story or canonical source is created.
+CREATE TABLE source_acquisitions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  provider text NOT NULL,
+  external_id text NOT NULL,
+  title text NOT NULL,
+  contributors jsonb NOT NULL,
+  languages jsonb NOT NULL,
+  landing_url text NOT NULL,
+  provider_rights text,
+  representation_label text,
+  representation_media_type text NOT NULL,
+  representation_provider_url text NOT NULL,
+  representation_size_bytes bigint,
+  normalisation_version text NOT NULL,
+  retrieved_content_hash text NOT NULL,
+  normalised_content_hash text NOT NULL,
+  source_text text NOT NULL,
+  snapshot_hash text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+
+  CONSTRAINT source_acquisitions_provider_check
+    CHECK (provider ~ '^[a-z][a-z0-9-]{0,63}$'),
+  CONSTRAINT source_acquisitions_external_id_check
+    CHECK (external_id = btrim(external_id) AND char_length(external_id) BETWEEN 1 AND 128),
+  CONSTRAINT source_acquisitions_title_check
+    CHECK (title = btrim(title) AND char_length(title) BETWEEN 1 AND 1000),
+  CONSTRAINT source_acquisitions_contributors_check
+    CHECK (jsonb_typeof(contributors) = 'array'),
+  CONSTRAINT source_acquisitions_languages_check
+    CHECK (jsonb_typeof(languages) = 'array'),
+  CONSTRAINT source_acquisitions_landing_url_check
+    CHECK (landing_url = btrim(landing_url) AND char_length(landing_url) BETWEEN 1 AND 2048),
+  CONSTRAINT source_acquisitions_provider_rights_check
+    CHECK (provider_rights IS NULL OR (provider_rights = btrim(provider_rights) AND char_length(provider_rights) BETWEEN 1 AND 1000)),
+  CONSTRAINT source_acquisitions_representation_label_check
+    CHECK (representation_label IS NULL OR (representation_label = btrim(representation_label) AND char_length(representation_label) BETWEEN 1 AND 500)),
+  CONSTRAINT source_acquisitions_representation_media_type_check
+    CHECK (representation_media_type = btrim(representation_media_type) AND char_length(representation_media_type) BETWEEN 1 AND 200),
+  CONSTRAINT source_acquisitions_representation_url_check
+    CHECK (representation_provider_url = btrim(representation_provider_url) AND char_length(representation_provider_url) BETWEEN 1 AND 2048),
+  CONSTRAINT source_acquisitions_representation_size_check
+    CHECK (representation_size_bytes IS NULL OR representation_size_bytes > 0),
+  CONSTRAINT source_acquisitions_normalisation_version_check
+    CHECK (normalisation_version = btrim(normalisation_version) AND char_length(normalisation_version) BETWEEN 1 AND 128),
+  CONSTRAINT source_acquisitions_retrieved_hash_check
+    CHECK (retrieved_content_hash ~ '^[0-9a-f]{64}$'),
+  CONSTRAINT source_acquisitions_normalised_hash_check
+    CHECK (normalised_content_hash ~ '^[0-9a-f]{64}$'),
+  CONSTRAINT source_acquisitions_source_text_check
+    CHECK (btrim(source_text) <> ''),
+  CONSTRAINT source_acquisitions_snapshot_hash_check
+    CHECK (snapshot_hash ~ '^[0-9a-f]{64}$'),
+  CONSTRAINT source_acquisitions_snapshot_hash_key
+    UNIQUE (snapshot_hash)
+);
+
+CREATE INDEX source_acquisitions_created_idx
+  ON source_acquisitions(created_at DESC, id DESC);
+
+-- Mutable human review remains separate from immutable acquisition evidence.
+CREATE TABLE source_acquisition_reviews (
+  acquisition_id uuid PRIMARY KEY,
+  rights_status text NOT NULL,
+  rights_note text,
+  rights_reviewed_at timestamptz,
+  editorial_status text NOT NULL,
+  editorial_note text,
+  editorial_reviewed_at timestamptz,
+
+  CONSTRAINT source_acquisition_reviews_acquisition_fkey
+    FOREIGN KEY (acquisition_id) REFERENCES source_acquisitions(id)
+    ON UPDATE NO ACTION ON DELETE RESTRICT,
+  CONSTRAINT source_acquisition_reviews_rights_status_check
+    CHECK (rights_status IN ('pending', 'approved', 'rejected')),
+  CONSTRAINT source_acquisition_reviews_editorial_status_check
+    CHECK (editorial_status IN ('pending', 'approved', 'rejected')),
+  CONSTRAINT source_acquisition_reviews_rights_state_check
+    CHECK (
+      (rights_status = 'pending' AND rights_note IS NULL AND rights_reviewed_at IS NULL)
+      OR
+      (rights_status IN ('approved', 'rejected')
+        AND rights_note IS NOT NULL
+        AND rights_note = btrim(rights_note)
+        AND char_length(rights_note) BETWEEN 1 AND 4000
+        AND rights_reviewed_at IS NOT NULL)
+    ),
+  CONSTRAINT source_acquisition_reviews_editorial_state_check
+    CHECK (
+      (editorial_status = 'pending' AND editorial_note IS NULL AND editorial_reviewed_at IS NULL)
+      OR
+      (editorial_status IN ('approved', 'rejected')
+        AND editorial_note IS NOT NULL
+        AND editorial_note = btrim(editorial_note)
+        AND char_length(editorial_note) BETWEEN 1 AND 4000
+        AND editorial_reviewed_at IS NOT NULL)
+    )
+);
+
 -- Canonical source lifecycle.
 CREATE TABLE story_sources (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -640,6 +740,8 @@ DROP TABLE story_release_editions;
 DROP TABLE story_releases;
 DROP TABLE story_source_versions;
 DROP TABLE story_sources;
+DROP TABLE source_acquisition_reviews;
+DROP TABLE source_acquisitions;
 DROP TABLE reader_story_edition_overrides;
 DROP TABLE reading_progress;
 DROP TABLE story_segments;
