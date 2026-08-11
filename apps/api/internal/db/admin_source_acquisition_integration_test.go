@@ -197,4 +197,61 @@ func TestAdminSourceAcquisitionIntegration(t *testing.T) {
 			t.Fatalf("acquisition list is not newest-first: %#v", list.Items)
 		}
 	}
+
+	t.Run("corrupt immutable snapshot refuses reuse without mutation", func(t *testing.T) {
+		var beforeAcquisitionCount, beforeReviewCount int
+		if err := adminDB.QueryRow(`SELECT count(*) FROM source_acquisitions`).Scan(&beforeAcquisitionCount); err != nil {
+			t.Fatalf("count acquisitions before corruption: %v", err)
+		}
+		if err := adminDB.QueryRow(`SELECT count(*) FROM source_acquisition_reviews`).Scan(&beforeReviewCount); err != nil {
+			t.Fatalf("count reviews before corruption: %v", err)
+		}
+		readReview := func() [6]string {
+			t.Helper()
+			var review [6]string
+			if err := adminDB.QueryRow(`
+				SELECT
+					rights_status,
+					coalesce(rights_note, ''),
+					coalesce(rights_reviewed_at::text, ''),
+					editorial_status,
+					coalesce(editorial_note, ''),
+					coalesce(editorial_reviewed_at::text, '')
+				FROM source_acquisition_reviews
+				WHERE acquisition_id = $1
+			`, first.Acquisition.ID).Scan(
+				&review[0], &review[1], &review[2], &review[3], &review[4], &review[5],
+			); err != nil {
+				t.Fatalf("read review state: %v", err)
+			}
+			return review
+		}
+		beforeReview := readReview()
+
+		const corruptTitle = "Corrupt but syntactically valid title"
+		if _, err := adminDB.Exec(`UPDATE source_acquisitions SET title = $2 WHERE id = $1`, first.Acquisition.ID, corruptTitle); err != nil {
+			t.Fatalf("corrupt immutable acquisition title: %v", err)
+		}
+		if _, err := store.AdminPersistSourceAcquisition(candidate); !errors.Is(err, errStoredSourceAcquisitionInvalid) {
+			t.Fatalf("reuse corrupt acquisition error = %v, want fail-closed integrity error", err)
+		}
+
+		var storedTitle, storedSnapshotHash, storedSourceText string
+		if err := adminDB.QueryRow(`SELECT title, snapshot_hash, source_text FROM source_acquisitions WHERE id = $1`, first.Acquisition.ID).Scan(&storedTitle, &storedSnapshotHash, &storedSourceText); err != nil {
+			t.Fatalf("read corrupt immutable acquisition: %v", err)
+		}
+		if storedTitle != corruptTitle || storedSnapshotHash != first.Acquisition.SnapshotHash || storedSourceText != candidate.SourceText {
+			t.Fatalf("corrupt immutable acquisition was repaired or changed: title=%q snapshot=%q source=%q", storedTitle, storedSnapshotHash, storedSourceText)
+		}
+		var afterAcquisitionCount, afterReviewCount int
+		if err := adminDB.QueryRow(`SELECT count(*) FROM source_acquisitions`).Scan(&afterAcquisitionCount); err != nil {
+			t.Fatalf("count acquisitions after corruption: %v", err)
+		}
+		if err := adminDB.QueryRow(`SELECT count(*) FROM source_acquisition_reviews`).Scan(&afterReviewCount); err != nil {
+			t.Fatalf("count reviews after corruption: %v", err)
+		}
+		if afterAcquisitionCount != beforeAcquisitionCount || afterReviewCount != beforeReviewCount || !reflect.DeepEqual(readReview(), beforeReview) {
+			t.Fatalf("failed reuse changed acquisition/review rows: counts=%d/%d reviews=%#v", afterAcquisitionCount, afterReviewCount, readReview())
+		}
+	})
 }

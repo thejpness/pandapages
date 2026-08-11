@@ -242,9 +242,18 @@ func (s *Store) AdminPersistSourceAcquisition(candidate sourceprovider.SourceCan
 	err = tx.QueryRowContext(ctx, `INSERT INTO source_acquisitions (provider, external_id, title, contributors, languages, landing_url, provider_rights, representation_label, representation_media_type, representation_provider_url, representation_size_bytes, normalisation_version, retrieved_content_hash, normalised_content_hash, source_text, snapshot_hash) VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) ON CONFLICT (snapshot_hash) DO NOTHING RETURNING id`, input.Provider, input.ExternalID, input.Title, string(contributorsJSON), string(languagesJSON), input.LandingURL, input.ProviderRights, input.RepresentationLabel, input.RepresentationMediaType, input.RepresentationProviderURL, input.RepresentationSizeBytes, input.NormalisationVersion, input.RetrievedContentHash, input.NormalisedContentHash, input.SourceText, input.SnapshotHash).Scan(&id)
 	outcome := model.AdminSourceAcquisitionOutcomeCreated
 	if errors.Is(err, sql.ErrNoRows) {
-		if err := tx.QueryRowContext(ctx, `SELECT id FROM source_acquisitions WHERE snapshot_hash = $1`, input.SnapshotHash).Scan(&id); err != nil {
+		stored, err := loadAdminSourceAcquisitionDetailBySnapshotHash(ctx, tx, input.SnapshotHash)
+		if err != nil {
 			return model.AdminSourceAcquisitionPersistResponse{}, err
 		}
+		detail, err := stored.detail()
+		if err != nil {
+			return model.AdminSourceAcquisitionPersistResponse{}, err
+		}
+		if !sourceAcquisitionDetailMatchesInput(detail, input) {
+			return model.AdminSourceAcquisitionPersistResponse{}, errStoredSourceAcquisitionInvalid
+		}
+		id = detail.ID
 		outcome = model.AdminSourceAcquisitionOutcomeReused
 	} else if err != nil {
 		return model.AdminSourceAcquisitionPersistResponse{}, err
@@ -429,6 +438,54 @@ func sourceAcquisitionSelect(includeSourceText bool) string {
 	return `SELECT ` + columns + sourceAcquisitionFrom
 }
 
+func sourceAcquisitionDetailMatchesInput(detail model.AdminSourceAcquisitionDetail, input adminSourceAcquisition) bool {
+	summary := detail.AdminSourceAcquisitionSummary
+	if summary.ID == "" ||
+		summary.Provider != input.Provider ||
+		summary.ExternalID != input.ExternalID ||
+		summary.Title != input.Title ||
+		summary.LandingURL != input.LandingURL ||
+		summary.SelectedRepresentation.MediaType != input.RepresentationMediaType ||
+		summary.SelectedRepresentation.ProviderURL != input.RepresentationProviderURL ||
+		summary.NormalisationVersion != input.NormalisationVersion ||
+		summary.RetrievedContentHash != input.RetrievedContentHash ||
+		summary.NormalisedContentHash != input.NormalisedContentHash ||
+		summary.SnapshotHash != input.SnapshotHash ||
+		detail.SourceText != input.SourceText ||
+		!sameSourceAcquisitionOptionalString(summary.ProviderRights, input.ProviderRights) ||
+		!sameSourceAcquisitionOptionalString(summary.SelectedRepresentation.Label, input.RepresentationLabel) ||
+		!sameSourceAcquisitionOptionalInt64(summary.SelectedRepresentation.SizeBytes, input.RepresentationSizeBytes) ||
+		len(summary.Contributors) != len(input.Contributors) ||
+		len(summary.Languages) != len(input.Languages) {
+		return false
+	}
+	for index, contributor := range input.Contributors {
+		if summary.Contributors[index] != contributor {
+			return false
+		}
+	}
+	for index, language := range input.Languages {
+		if summary.Languages[index] != language {
+			return false
+		}
+	}
+	return true
+}
+
+func sameSourceAcquisitionOptionalString(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return *left == *right
+}
+
+func sameSourceAcquisitionOptionalInt64(left, right *int64) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return *left == *right
+}
+
 func loadAdminSourceAcquisitionSummary(ctx context.Context, queryer interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, id string) (model.AdminSourceAcquisitionSummary, error) {
@@ -442,6 +499,12 @@ func loadAdminSourceAcquisitionDetail(ctx context.Context, queryer interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, id string) (storedSourceAcquisition, error) {
 	return scanStoredSourceAcquisition(queryer.QueryRowContext(ctx, sourceAcquisitionSelect(true)+` WHERE acquisition.id = $1`, id), true)
+}
+
+func loadAdminSourceAcquisitionDetailBySnapshotHash(ctx context.Context, queryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, snapshotHash string) (storedSourceAcquisition, error) {
+	return scanStoredSourceAcquisition(queryer.QueryRowContext(ctx, sourceAcquisitionSelect(true)+` WHERE acquisition.snapshot_hash = $1`, snapshotHash), true)
 }
 
 func scanStoredSourceAcquisition(scanner sourceAcquisitionScanner, includeSourceText bool) (storedSourceAcquisition, error) {
