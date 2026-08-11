@@ -968,7 +968,12 @@ test('global source review validates factual evidence, saves eligible work, and 
   await page.getByRole('button', { name: 'Create story & promote source' }).click()
   await expect(page.getByRole('heading', { name: 'Promoted to canonical source' })).toBeVisible()
   await expect(page.getByText('Source quality was locked when this acquisition was promoted.', { exact: true })).toBeVisible()
-  await expect(page.getByLabel('Source quality status')).toBeDisabled()
+  await expect(page.getByText('Status', { exact: true })).toBeVisible()
+  await expect(page.getByText('approved', { exact: true })).toBeVisible()
+  await expect(page.getByText('Complete, readable text for the intended work.', { exact: true })).toBeVisible()
+  await expect(page.getByLabel('Source quality status')).toHaveCount(0)
+  await expect(page.getByLabel('Rationale')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Save source quality review' })).toHaveCount(0)
   const promotionBody = api.requests.find((request) => request.path.endsWith('/promote'))?.body as Record<string, unknown>
   expect(promotionBody).toEqual({ target: { mode: 'new_story', title: "Alice's Adventures in Wonderland", slug: 'alice-s-adventures-in-wonderland' } })
   expect(JSON.stringify(promotionBody)).not.toMatch(/sourceText|snapshotHash|assessmentHash|eligible|providerUrl/)

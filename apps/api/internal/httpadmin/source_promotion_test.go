@@ -24,10 +24,22 @@ func TestSourceAcquisitionPromotionRouteIsProtectedAndStrict(t *testing.T) {
 		t.Fatalf("promotion=%d/%s/store=%+v", response.Code, response.Body.String(), store)
 	}
 
+	existing := httptest.NewRecorder()
+	handler.ServeHTTP(existing, providerRequest(http.MethodPost, "/api/v1/admin/source-acquisitions/"+id+"/promote", `{"target":{"mode":"existing_story","storySlug":"alice"}}`))
+	if existing.Code != http.StatusCreated || store.promoteSourceAcquisitionCalls != 2 || store.promoteSourceAcquisitionRequest.Target.Mode != model.AdminSourceAcquisitionPromotionTargetExistingStory {
+		t.Fatalf("existing promotion=%d/%s/store=%+v", existing.Code, existing.Body.String(), store)
+	}
+
 	bad := httptest.NewRecorder()
 	handler.ServeHTTP(bad, providerRequest(http.MethodPost, "/api/v1/admin/source-acquisitions/"+id+"/promote", `{"target":{"mode":"new_story","title":"Alice","slug":"alice"},"sourceText":"forged"}`))
-	if bad.Code != http.StatusBadRequest || store.promoteSourceAcquisitionCalls != 1 {
+	if bad.Code != http.StatusBadRequest || store.promoteSourceAcquisitionCalls != 2 {
 		t.Fatalf("authority body=%d/%s calls=%d", bad.Code, bad.Body.String(), store.promoteSourceAcquisitionCalls)
+	}
+	oversized := httptest.NewRecorder()
+	oversizedBody := `{"target":{"mode":"new_story","title":"` + strings.Repeat("a", maxSourcePromotionBody) + `","slug":"alice"}}`
+	handler.ServeHTTP(oversized, providerRequest(http.MethodPost, "/api/v1/admin/source-acquisitions/"+id+"/promote", oversizedBody))
+	if oversized.Code != http.StatusRequestEntityTooLarge || store.promoteSourceAcquisitionCalls != 2 {
+		t.Fatalf("oversized=%d/%s calls=%d", oversized.Code, oversized.Body.String(), store.promoteSourceAcquisitionCalls)
 	}
 }
 

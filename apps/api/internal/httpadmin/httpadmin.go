@@ -49,6 +49,7 @@ const (
 	maxJSONBodyBytes           = 20 << 20 // 20MB
 	sourceProviderMaximumLimit = 20
 	maxSourceEligibilityBody   = 64 << 10
+	maxSourcePromotionBody     = 32 << 10
 )
 
 var errSourceEligibilityInput = errors.New("source eligibility evidence is invalid")
@@ -299,7 +300,7 @@ func New(cfg Config, store Store) http.Handler {
 
 	mux.HandleFunc("POST /api/v1/admin/source-acquisitions/{acquisitionID}/promote", withAdmin(func(w http.ResponseWriter, r *http.Request) {
 		var body model.AdminSourceAcquisitionPromotionRequest
-		if err := decodeJSON(w, r, &body); err != nil {
+		if err := decodeJSONLimit(w, r, &body, maxSourcePromotionBody); err != nil {
 			writeDecodeError(w, err)
 			return
 		}
@@ -840,7 +841,11 @@ func noStore(w http.ResponseWriter) {
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
-	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
+	return decodeJSONLimit(w, r, dst, maxJSONBodyBytes)
+}
+
+func decodeJSONLimit(w http.ResponseWriter, r *http.Request, dst any, limit int64) error {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	defer r.Body.Close()
 
 	raw, err := io.ReadAll(r.Body)

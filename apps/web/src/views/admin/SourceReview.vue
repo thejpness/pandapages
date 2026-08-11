@@ -1082,28 +1082,46 @@ onBeforeUnmount(() => {
             <p v-else>Eligibility: Recheck required.</p>
           </section>
           <section class="studio-panel source-review__quality">
-            <p v-if="sourceQualityLocked">Source quality was locked when this acquisition was promoted.</p>
             <h3>Source quality review</h3>
-            <div class="studio-field">
-              <label for="quality-status">Source quality status</label>
-              <select id="quality-status" v-model="qualityStatus" :disabled="sourceQualityLocked">
-                <option value="pending">Pending</option>
-                <option value="approved">Approved</option>
-                <option value="rejected">Rejected</option>
-              </select>
-            </div>
-            <div v-if="qualityStatus !== 'pending'" class="studio-field">
-              <label for="quality-note">Rationale</label>
-              <textarea id="quality-note" v-model="qualityNote" rows="3" />
-            </div>
-            <button
-              type="button"
-              class="studio-button studio-button--quiet"
-              :disabled="qualitySaving"
-              @click="saveQuality"
-            >
-              Save source quality review
-            </button>
+            <template v-if="sourceQualityLocked">
+              <p>Source quality was locked when this acquisition was promoted.</p>
+              <dl class="source-review__quality-history">
+                <div>
+                  <dt>Status</dt>
+                  <dd>{{ selectedAcquisition.sourceQuality.status }}</dd>
+                </div>
+                <div v-if="selectedAcquisition.sourceQuality.note">
+                  <dt>Rationale</dt>
+                  <dd>{{ selectedAcquisition.sourceQuality.note }}</dd>
+                </div>
+                <div v-if="selectedAcquisition.sourceQuality.reviewedAt">
+                  <dt>Reviewed</dt>
+                  <dd>{{ formatSavedAt(selectedAcquisition.sourceQuality.reviewedAt) }}</dd>
+                </div>
+              </dl>
+            </template>
+            <template v-else>
+              <div class="studio-field">
+                <label for="quality-status">Source quality status</label>
+                <select id="quality-status" v-model="qualityStatus">
+                  <option value="pending">Pending</option>
+                  <option value="approved">Approved</option>
+                  <option value="rejected">Rejected</option>
+                </select>
+              </div>
+              <div v-if="qualityStatus !== 'pending'" class="studio-field">
+                <label for="quality-note">Rationale</label>
+                <textarea id="quality-note" v-model="qualityNote" rows="3" />
+              </div>
+              <button
+                type="button"
+                class="studio-button studio-button--quiet"
+                :disabled="qualitySaving"
+                @click="saveQuality"
+              >
+                Save source quality review
+              </button>
+            </template>
           </section>
           <details class="studio-panel source-review__provenance">
             <summary>Source provenance</summary>
