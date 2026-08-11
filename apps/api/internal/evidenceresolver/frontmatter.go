@@ -13,8 +13,8 @@ const maxFrontMatterBytes = 64 << 10
 
 var (
 	gutenbergStartMarker = regexp.MustCompile(`(?im)^\*{3}\s*START OF (?:THE |THIS )?PROJECT GUTENBERG EBOOK\b.*$`)
-	translatorLine       = regexp.MustCompile(`(?im)^\s*(?:translated|translation)\s+by\s*[:,-]?\s*(.{1,500})\s*$`)
-	textualLine          = regexp.MustCompile(`(?im)^\s*(edited|editor|introduction|preface|notes|annotated|adapted|compiled)\s+by\s*[:,-]?\s*(.{1,500})\s*$`)
+	translatorLine       = regexp.MustCompile(`(?im)^\s*(?:translated|translation)\s+by\s*[:,-]?\s*(.{1,500})\s*$|^\s*translator\s*:\s*(.{1,500})\s*$`)
+	textualLine          = regexp.MustCompile(`(?im)^\s*(edited|editor|introduction|preface|notes|annotated|adapted|compiled)\s+by\s*[:,-]?\s*(.{1,500})\s*$|^\s*(editor|introduction|preface|notes|annotator|adapter|compiler)\s*:\s*(.{1,500})\s*$`)
 )
 
 type FrontMatterContributor struct {
@@ -25,6 +25,7 @@ type FrontMatterContributor struct {
 // FrontMatter contains only positive, bounded signals from the provider wrapper.
 // Lack of a signal is never an assertion that a contribution is absent.
 type FrontMatter struct {
+	Inspected           bool
 	Digest              string
 	Translators         []string
 	TextualContributors []FrontMatterContributor
@@ -45,15 +46,16 @@ func ExtractFrontMatter(source string) FrontMatter {
 	}
 	front := source[:marker[0]]
 	sum := sha256.Sum256([]byte(front))
-	result := FrontMatter{Digest: hex.EncodeToString(sum[:])}
+	result := FrontMatter{Inspected: true, Digest: hex.EncodeToString(sum[:])}
 	for _, match := range translatorLine.FindAllStringSubmatch(front, -1) {
-		if value := boundedContributor(match[1]); value != "" {
+		if value := boundedContributor(firstNonEmpty(match[1:]...)); value != "" {
 			result.Translators = append(result.Translators, value)
 		}
 	}
 	for _, match := range textualLine.FindAllStringSubmatch(front, -1) {
-		if name := boundedContributor(match[2]); name != "" {
-			result.TextualContributors = append(result.TextualContributors, FrontMatterContributor{Role: strings.ToLower(match[1]), Name: name})
+		role, name := firstNonEmpty(match[1], match[3]), firstNonEmpty(match[2], match[4])
+		if name = boundedContributor(name); name != "" {
+			result.TextualContributors = append(result.TextualContributors, FrontMatterContributor{Role: strings.ToLower(role), Name: name})
 		}
 	}
 	result.Translators = uniqueStrings(result.Translators)
@@ -64,6 +66,15 @@ func ExtractFrontMatter(source string) FrontMatter {
 		return result.TextualContributors[i].Name < result.TextualContributors[j].Name
 	})
 	return result
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func boundedContributor(value string) string {

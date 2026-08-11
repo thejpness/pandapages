@@ -85,8 +85,12 @@ func (s *Service) Resolve(ctx context.Context, exact ExactSourceContext) (Resolu
 		FirstPublication:  resolveFirstPublication(records),
 		Translation:       resolveTranslation(exact.ProviderEvidence, records, front),
 		AdditionalTextual: resolveAdditionalTextual(exact.ProviderEvidence, records, front),
-		SpecialCategory:   ResolvedFact{Status: ResolutionInsufficient, State: copyrighteligibility.FactUnknown, Reason: ReasonSpecialCategoryNotAutoResolved},
-		Diagnostics:       diagnostics,
+		// Policy v1's SpecialCategory is a generic legal catch-all. The
+		// observable provider/bibliographic facts collected here cannot prove
+		// its absence, so changing this result would require a policy-model
+		// revision rather than an adapter inference.
+		SpecialCategory: ResolvedFact{Status: ResolutionInsufficient, State: copyrighteligibility.FactUnknown, Reason: ReasonSpecialCategoryNotAutoResolved},
+		Diagnostics:     diagnostics,
 	}
 	resolution.Author = resolveAuthor(exact.ProviderEvidence, records, resolution.Authorship)
 	resolution.UnpublishedAtEnd1988 = resolveUnpublishedAtEnd1988(resolution.FirstPublication)
@@ -133,6 +137,11 @@ func validRecord(record BibliographicRecord) bool {
 			return false
 		}
 	}
+	for _, contributor := range record.Contributors {
+		if strings.TrimSpace(contributor.Name) == "" || strings.TrimSpace(contributor.Role) == "" {
+			return false
+		}
+	}
 	return true
 }
 
@@ -157,22 +166,28 @@ func recordReference(record BibliographicRecord, fact string) EvidenceItem {
 func resolveWorkCategory(records []BibliographicRecord) ResolvedWorkCategory {
 	values := make([]BibliographicRecord, 0, len(records))
 	for _, record := range records {
-		if record.WorkCategory != copyrighteligibility.WorkCategoryUnknown {
+		if hasOrdinaryLiteraryMaterial(record) {
 			values = append(values, record)
 		}
 	}
 	if len(values) == 0 {
 		return ResolvedWorkCategory{Status: ResolutionInsufficient, Value: copyrighteligibility.WorkCategoryUnknown, Reason: ReasonEvidenceInsufficient}
 	}
-	for _, record := range values[1:] {
-		if record.WorkCategory != values[0].WorkCategory {
-			return ResolvedWorkCategory{Status: ResolutionConflicting, Value: copyrighteligibility.WorkCategoryUnknown, Reason: ReasonEvidenceConflict, Evidence: recordReferences(values, "Bibliographic records disagree about material category.")}
+	if len(distinctClasses(values)) < 2 {
+		return ResolvedWorkCategory{Status: ResolutionInsufficient, Value: copyrighteligibility.WorkCategoryUnknown, Reason: ReasonEvidenceInsufficient, Evidence: recordReferences(values, "One bibliographic source class supplies literary material-type evidence.")}
+	}
+	return ResolvedWorkCategory{Status: ResolutionEstablished, Value: copyrighteligibility.WorkCategoryOrdinaryLiterary, Reason: ReasonEstablished, Evidence: recordReferences(values, "Independent bibliographic records describe an ordinary literary material type.")}
+}
+
+func hasOrdinaryLiteraryMaterial(record BibliographicRecord) bool {
+	values := append(append([]string(nil), record.Subjects...), record.MaterialTypes...)
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if strings.Contains(value, "fiction") || strings.Contains(value, "novel") || strings.Contains(value, "short stor") || strings.Contains(value, "poetry") || strings.Contains(value, "literature") {
+			return true
 		}
 	}
-	if len(distinctClasses(values)) < 2 {
-		return ResolvedWorkCategory{Status: ResolutionInsufficient, Value: copyrighteligibility.WorkCategoryUnknown, Reason: ReasonEvidenceInsufficient, Evidence: recordReferences(values, "One bibliographic source class identifies the material category.")}
-	}
-	return ResolvedWorkCategory{Status: ResolutionEstablished, Value: values[0].WorkCategory, Reason: ReasonEstablished, Evidence: recordReferences(values, "Independent bibliographic records identify the material category.")}
+	return false
 }
 
 func resolveAuthorship(provider copyrighteligibility.ProviderEvidence, records []BibliographicRecord) ResolvedAuthorship {
@@ -265,7 +280,10 @@ func resolveTranslation(provider copyrighteligibility.ProviderEvidence, records 
 	if len(front.Translators) > 0 {
 		return ResolvedFact{Status: ResolutionEstablished, State: copyrighteligibility.FactPresent, Reason: ReasonFrontMatterContributorPresent, Evidence: []EvidenceItem{{Class: SourceProjectGutenberg, Source: "Project Gutenberg source front matter", Digest: front.Digest, Fact: "Provider front matter identifies a translator."}}}
 	}
-	return resolveBibliographicFact(records, func(record BibliographicRecord) copyrighteligibility.FactState { return record.Translation }, "translation")
+	if record, ok := firstBibliographicContributor(records, "translator"); ok {
+		return ResolvedFact{Status: ResolutionEstablished, State: copyrighteligibility.FactPresent, Reason: ReasonProviderContributorPresent, Evidence: []EvidenceItem{recordReference(record, "Structured bibliographic contributor data identifies a translator.")}}
+	}
+	return resolveTranslationAbsence(provider, records, front)
 }
 
 func resolveAdditionalTextual(provider copyrighteligibility.ProviderEvidence, records []BibliographicRecord, front FrontMatter) ResolvedFact {
@@ -275,28 +293,109 @@ func resolveAdditionalTextual(provider copyrighteligibility.ProviderEvidence, re
 	if len(front.TextualContributors) > 0 {
 		return ResolvedFact{Status: ResolutionEstablished, State: copyrighteligibility.FactPresent, Reason: ReasonFrontMatterContributorPresent, Evidence: []EvidenceItem{{Class: SourceProjectGutenberg, Source: "Project Gutenberg source front matter", Digest: front.Digest, Fact: "Provider front matter identifies an additional textual contributor."}}}
 	}
-	return resolveBibliographicFact(records, func(record BibliographicRecord) copyrighteligibility.FactState { return record.AdditionalTextual }, "additional textual contribution")
+	if record, ok := firstBibliographicTextualContributor(records); ok {
+		return ResolvedFact{Status: ResolutionEstablished, State: copyrighteligibility.FactPresent, Reason: ReasonProviderContributorPresent, Evidence: []EvidenceItem{recordReference(record, "Structured bibliographic contributor data identifies an additional textual contributor.")}}
+	}
+	return resolveAdditionalTextualAbsence(provider, records, front)
 }
 
-func resolveBibliographicFact(records []BibliographicRecord, value func(BibliographicRecord) copyrighteligibility.FactState, label string) ResolvedFact {
-	known := make([]BibliographicRecord, 0, len(records))
-	for _, record := range records {
-		if state := value(record); state == copyrighteligibility.FactPresent || state == copyrighteligibility.FactNoneConfirmed {
-			known = append(known, record)
-		}
-	}
-	if len(known) == 0 {
+// resolveTranslationAbsence requires three independent, observable conditions:
+// a bounded exact-source wrapper with no translator signal, no Gutenberg RDF
+// translator, and an exact-edition bibliographic record that reports a
+// contributor-role list with no translator while its original language agrees
+// with the acquired source language. Missing any condition remains unknown.
+func resolveTranslationAbsence(provider copyrighteligibility.ProviderEvidence, records []BibliographicRecord, front FrontMatter) ResolvedFact {
+	if !front.Inspected || !hasSingleLanguage(provider.Languages) {
 		return ResolvedFact{Status: ResolutionInsufficient, State: copyrighteligibility.FactUnknown, Reason: ReasonEvidenceInsufficient}
 	}
-	for _, record := range known[1:] {
-		if value(record) != value(known[0]) {
-			return ResolvedFact{Status: ResolutionConflicting, State: copyrighteligibility.FactUnknown, Reason: ReasonEvidenceConflict, Evidence: recordReferences(known, "Bibliographic records disagree about "+label+".")}
+	values := make([]BibliographicRecord, 0, len(records))
+	for _, record := range records {
+		if record.EditionID != "" && record.ContributorRolesObserved && singleLanguageAgreement(provider.Languages, record.OriginalLanguages) && !hasContributorRole(record, "translator") {
+			values = append(values, record)
 		}
 	}
-	if len(distinctClasses(known)) < 2 {
-		return ResolvedFact{Status: ResolutionInsufficient, State: copyrighteligibility.FactUnknown, Reason: ReasonEvidenceInsufficient, Evidence: recordReferences(known, "One bibliographic source class addresses "+label+".")}
+	if len(values) == 0 {
+		return ResolvedFact{Status: ResolutionInsufficient, State: copyrighteligibility.FactUnknown, Reason: ReasonEvidenceInsufficient}
 	}
-	return ResolvedFact{Status: ResolutionEstablished, State: value(known[0]), Reason: ReasonEstablished, Evidence: recordReferences(known, "Independent bibliographic records address "+label+".")}
+	evidence := []EvidenceItem{
+		providerReference(provider, "Project Gutenberg RDF contains no recognised translator role."),
+		{Class: SourceProjectGutenberg, Source: "Project Gutenberg source front matter", Digest: front.Digest, Fact: "Bounded provider front matter contains no translator signal."},
+	}
+	evidence = append(evidence, recordReferences(values, "An exact-edition bibliographic record has matching original/source language and no translator role.")...)
+	return ResolvedFact{Status: ResolutionEstablished, State: copyrighteligibility.FactNoneConfirmed, Reason: ReasonEstablished, Evidence: evidence}
+}
+
+// resolveAdditionalTextualAbsence requires a bounded exact-source wrapper
+// without a contributor signal, no recognised Gutenberg textual contributor,
+// and an exact-edition structured contributor-role list without a relevant
+// textual role. It never treats a missing upstream field as an absence fact.
+func resolveAdditionalTextualAbsence(provider copyrighteligibility.ProviderEvidence, records []BibliographicRecord, front FrontMatter) ResolvedFact {
+	if !front.Inspected {
+		return ResolvedFact{Status: ResolutionInsufficient, State: copyrighteligibility.FactUnknown, Reason: ReasonEvidenceInsufficient}
+	}
+	values := make([]BibliographicRecord, 0, len(records))
+	for _, record := range records {
+		if record.EditionID != "" && record.ContributorRolesObserved && !hasTextualContributor(record) {
+			values = append(values, record)
+		}
+	}
+	if len(values) == 0 {
+		return ResolvedFact{Status: ResolutionInsufficient, State: copyrighteligibility.FactUnknown, Reason: ReasonEvidenceInsufficient}
+	}
+	evidence := []EvidenceItem{
+		providerReference(provider, "Project Gutenberg RDF contains no recognised additional textual contributor role."),
+		{Class: SourceProjectGutenberg, Source: "Project Gutenberg source front matter", Digest: front.Digest, Fact: "Bounded provider front matter contains no additional textual-contributor signal."},
+	}
+	evidence = append(evidence, recordReferences(values, "An exact-edition bibliographic record has no relevant textual contributor role.")...)
+	return ResolvedFact{Status: ResolutionEstablished, State: copyrighteligibility.FactNoneConfirmed, Reason: ReasonEstablished, Evidence: evidence}
+}
+
+func firstBibliographicContributor(records []BibliographicRecord, role string) (BibliographicRecord, bool) {
+	for _, record := range records {
+		if hasContributorRole(record, role) {
+			return record, true
+		}
+	}
+	return BibliographicRecord{}, false
+}
+
+func firstBibliographicTextualContributor(records []BibliographicRecord) (BibliographicRecord, bool) {
+	for _, record := range records {
+		if hasTextualContributor(record) {
+			return record, true
+		}
+	}
+	return BibliographicRecord{}, false
+}
+
+func hasContributorRole(record BibliographicRecord, role string) bool {
+	for _, contributor := range record.Contributors {
+		if strings.EqualFold(strings.TrimSpace(contributor.Role), role) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasTextualContributor(record BibliographicRecord) bool {
+	for _, contributor := range record.Contributors {
+		switch strings.ToLower(strings.TrimSpace(contributor.Role)) {
+		case "adapter", "annotator", "compiler", "introduction_author", "introduction", "editor", "preface_author", "preface", "contributor", "notes_author", "notes":
+			return true
+		}
+	}
+	return false
+}
+
+func singleLanguageAgreement(source, original []string) bool {
+	if len(source) != 1 || len(original) != 1 {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(source[0]), strings.TrimSpace(original[0])) && strings.TrimSpace(source[0]) != ""
+}
+
+func hasSingleLanguage(values []string) bool {
+	return len(values) == 1 && strings.TrimSpace(values[0]) != ""
 }
 
 func resolveUnpublishedAtEnd1988(publication ResolvedYear) ResolvedFact {
@@ -389,7 +488,33 @@ func canonicalRecord(record BibliographicRecord) BibliographicRecord {
 			return record.Authors[i].Identifiers[a].Value < record.Authors[i].Identifiers[b].Value
 		})
 	}
+	record.Contributors = append([]Contributor(nil), record.Contributors...)
+	for i := range record.Contributors {
+		record.Contributors[i].Identifiers = append([]Identifier(nil), record.Contributors[i].Identifiers...)
+		sort.Slice(record.Contributors[i].Identifiers, func(a, b int) bool {
+			if record.Contributors[i].Identifiers[a].Source != record.Contributors[i].Identifiers[b].Source {
+				return record.Contributors[i].Identifiers[a].Source < record.Contributors[i].Identifiers[b].Source
+			}
+			return record.Contributors[i].Identifiers[a].Value < record.Contributors[i].Identifiers[b].Value
+		})
+	}
+	sort.Slice(record.Contributors, func(i, j int) bool {
+		if record.Contributors[i].Role != record.Contributors[j].Role {
+			return record.Contributors[i].Role < record.Contributors[j].Role
+		}
+		return record.Contributors[i].Name < record.Contributors[j].Name
+	})
+	record.Languages = canonicalStrings(record.Languages)
+	record.OriginalLanguages = canonicalStrings(record.OriginalLanguages)
+	record.Subjects = canonicalStrings(record.Subjects)
+	record.MaterialTypes = canonicalStrings(record.MaterialTypes)
 	return record
+}
+
+func canonicalStrings(values []string) []string {
+	result := append([]string(nil), values...)
+	sort.Strings(result)
+	return result
 }
 
 func canonicalRecords(records []BibliographicRecord) {

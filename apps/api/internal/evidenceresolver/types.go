@@ -60,9 +60,19 @@ type Person struct {
 	DeathYear   *int
 }
 
+// Contributor is a bibliographic observation about a person and their role in
+// a work or edition. Roles are source data, never a policy conclusion.
+type Contributor struct {
+	Name        string
+	Role        string
+	Identifiers []Identifier
+}
+
 // BibliographicRecord is an extracted, bounded record rather than a retained
-// upstream payload. Sources must not represent an edition date as a first-work
-// publication year.
+// upstream payload. It contains observable bibliographic facts only: adapters
+// must not classify a work under Panda Pages policy or assert that a legally
+// relevant contribution is absent. Sources must not represent an edition date
+// as a first-work publication year.
 type BibliographicRecord struct {
 	Source               SourceClass
 	SourceName           string
@@ -70,11 +80,20 @@ type BibliographicRecord struct {
 	Locator              string
 	Digest               string
 	Title                string
+	WorkID               string
+	EditionID            string
 	Authors              []Person
+	Contributors         []Contributor
 	FirstPublicationYear *int
-	WorkCategory         copyrighteligibility.WorkCategory
-	Translation          copyrighteligibility.FactState
-	AdditionalTextual    copyrighteligibility.FactState
+	Languages            []string
+	OriginalLanguages    []string
+	Subjects             []string
+	MaterialTypes        []string
+	// ContributorRolesObserved means the source supplied a structured
+	// contributor-role list for the identified edition. An empty list is an
+	// observable result, not an adapter assertion that a contribution cannot
+	// exist outside the record.
+	ContributorRolesObserved bool
 }
 
 // Query contains only server-owned exact-work metadata. It does not contain a

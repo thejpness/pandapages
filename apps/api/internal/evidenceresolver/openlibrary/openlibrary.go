@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"mime"
 	"net/http"
 	"net/url"
@@ -20,13 +21,12 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"pandapages/api/internal/copyrighteligibility"
 	"pandapages/api/internal/evidenceresolver"
 )
 
 const (
 	host             = "openlibrary.org"
-	userAgent        = "PandaPages/1.0 (+https://www.panda-pages.com)"
+	productUserAgent = "PandaPages/1.0"
 	requestTimeout   = 8 * time.Second
 	maxResponseBytes = 512 << 10
 )
@@ -34,6 +34,7 @@ const (
 var (
 	authorKeyPattern = regexp.MustCompile(`^OL[0-9]+A$`)
 	workKeyPattern   = regexp.MustCompile(`^/works/OL[0-9]+W$`)
+	yearPattern      = regexp.MustCompile(`^([1-2][0-9]{3})$`)
 )
 
 var (
@@ -42,11 +43,13 @@ var (
 )
 
 type Config struct {
-	HTTPClient *http.Client
+	HTTPClient          *http.Client
+	ContactEmailOrPhone string
 }
 
 type Adapter struct {
-	client *http.Client
+	client    *http.Client
+	userAgent string
 }
 
 func New(cfg Config) *Adapter {
@@ -59,7 +62,7 @@ func New(cfg Config) *Adapter {
 	copyClient := *client
 	copyClient.Timeout = requestTimeout
 	copyClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
-	return &Adapter{client: &copyClient}
+	return &Adapter{client: &copyClient, userAgent: configuredUserAgent(cfg.ContactEmailOrPhone)}
 }
 
 func (*Adapter) SourceClass() evidenceresolver.SourceClass { return evidenceresolver.SourceOpenLibrary }
@@ -96,11 +99,12 @@ func (a *Adapter) Lookup(ctx context.Context, query evidenceresolver.Query) ([]e
 	if err := json.Unmarshal(authorBody, &author); err != nil {
 		return nil, ErrInvalid
 	}
-	deathYear, ok := parseYear(author.DeathDate)
-	if !ok || canonicalName(author.Name) != canonicalName(document.AuthorNames[0]) {
+	deathYear, _ := parseYear(author.DeathDate)
+	if canonicalName(author.Name) != canonicalName(document.AuthorNames[0]) {
 		return nil, nil
 	}
 	firstPublication, _ := parseYear(document.FirstPublishYear)
+	authorIdentity := evidenceresolver.Identifier{Source: evidenceresolver.SourceOpenLibrary, Value: authorKey}
 	record := evidenceresolver.BibliographicRecord{
 		Source:               evidenceresolver.SourceOpenLibrary,
 		SourceName:           "Open Library",
@@ -108,11 +112,12 @@ func (a *Adapter) Lookup(ctx context.Context, query evidenceresolver.Query) ([]e
 		Locator:              "https://openlibrary.org" + document.Key,
 		Digest:               digest(append(body, authorBody...)),
 		Title:                document.Title,
-		Authors:              []evidenceresolver.Person{{Name: author.Name, Identifiers: []evidenceresolver.Identifier{{Source: evidenceresolver.SourceOpenLibrary, Value: authorKey}}, DeathYear: deathYear}},
+		WorkID:               document.Key,
+		Authors:              []evidenceresolver.Person{{Name: author.Name, Identifiers: []evidenceresolver.Identifier{authorIdentity}, DeathYear: deathYear}},
+		Contributors:         []evidenceresolver.Contributor{{Name: author.Name, Role: "author", Identifiers: []evidenceresolver.Identifier{authorIdentity}}},
 		FirstPublicationYear: firstPublication,
-		WorkCategory:         workCategory(document.Subjects),
-		Translation:          copyrighteligibility.FactUnknown,
-		AdditionalTextual:    copyrighteligibility.FactUnknown,
+		Languages:            append([]string(nil), document.Languages...),
+		Subjects:             append([]string(nil), document.Subjects...),
 	}
 	return []evidenceresolver.BibliographicRecord{record}, nil
 }
@@ -126,7 +131,8 @@ type searchDocument struct {
 	Title            string   `json:"title"`
 	AuthorNames      []string `json:"author_name"`
 	AuthorKeys       []string `json:"author_key"`
-	FirstPublishYear int      `json:"first_publish_year"`
+	FirstPublishYear any      `json:"first_publish_year"`
+	Languages        []string `json:"language"`
 	Subjects         []string `json:"subject"`
 }
 
@@ -153,7 +159,7 @@ func searchURL(query evidenceresolver.Query) string {
 	values := endpoint.Query()
 	values.Set("title", query.Title)
 	values.Set("author", query.Authors[0].Name)
-	values.Set("fields", "key,title,author_name,author_key,first_publish_year,subject")
+	values.Set("fields", "key,title,author_name,author_key,first_publish_year,language,subject")
 	values.Set("limit", "5")
 	endpoint.RawQuery = values.Encode()
 	return endpoint.String()
@@ -169,7 +175,7 @@ func (a *Adapter) fetch(ctx context.Context, rawURL string) ([]byte, error) {
 		return nil, ErrUnavailable
 	}
 	request.Header.Set("Accept", "application/json")
-	request.Header.Set("User-Agent", userAgent)
+	request.Header.Set("User-Agent", a.userAgent)
 	response, err := a.client.Do(request)
 	if err != nil {
 		if errors.Is(ctx.Err(), context.Canceled) {
@@ -196,33 +202,51 @@ func (a *Adapter) fetch(ctx context.Context, rawURL string) ([]byte, error) {
 }
 
 func parseYear(value interface{}) (*int, bool) {
-	var raw string
 	switch value := value.(type) {
 	case int:
-		raw = strconv.Itoa(value)
+		return boundedYear(value)
+	case float64:
+		if math.IsNaN(value) || math.IsInf(value, 0) || math.Trunc(value) != value || value < 1000 || value > 2099 {
+			return nil, false
+		}
+		return boundedYear(int(value))
 	case string:
-		raw = strings.TrimSpace(value)
+		return parseStringYear(strings.TrimSpace(value))
 	default:
 		return nil, false
 	}
-	if len(raw) < 4 || len(raw) > 10 {
-		return nil, false
+}
+
+func parseStringYear(raw string) (*int, bool) {
+	if matches := yearPattern.FindStringSubmatch(raw); len(matches) == 2 {
+		year, err := strconv.Atoi(matches[1])
+		if err != nil {
+			return nil, false
+		}
+		return boundedYear(year)
 	}
-	year, err := strconv.Atoi(raw[:4])
-	if err != nil || year < 1 || year > 9999 {
+	for _, layout := range []string{"2006-01-02", "2 January 2006", "January 2, 2006"} {
+		parsed, err := time.Parse(layout, raw)
+		if err == nil {
+			return boundedYear(parsed.Year())
+		}
+	}
+	return nil, false
+}
+
+func boundedYear(year int) (*int, bool) {
+	if year < 1000 || year > 2099 {
 		return nil, false
 	}
 	return &year, true
 }
 
-func workCategory(subjects []string) copyrighteligibility.WorkCategory {
-	for _, subject := range subjects {
-		value := strings.ToLower(subject)
-		if strings.Contains(value, "fiction") || strings.Contains(value, "novel") || strings.Contains(value, "poetry") || strings.Contains(value, "short stories") {
-			return copyrighteligibility.WorkCategoryOrdinaryLiterary
-		}
+func configuredUserAgent(contact string) string {
+	contact = strings.TrimSpace(contact)
+	if contact == "" || len(contact) > 254 || strings.ContainsAny(contact, "\r\n") {
+		return productUserAgent
 	}
-	return copyrighteligibility.WorkCategoryUnknown
+	return productUserAgent + " (" + contact + ")"
 }
 
 func canonicalName(value string) string {

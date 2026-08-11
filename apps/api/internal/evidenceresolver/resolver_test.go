@@ -21,18 +21,27 @@ func (s sourceStub) Lookup(context.Context, Query) ([]BibliographicRecord, error
 	return s.records, s.err
 }
 
-func TestResolveAliceLikeFactsRemainFailClosedForSpecialCategory(t *testing.T) {
+// This test exercises synthetic cross-source reconciliation rules only. It is
+// not a claim that a production adapter supplies Library of Congress evidence.
+func TestResolveSyntheticCrossSourceFactsRemainFailClosedForSpecialCategory(t *testing.T) {
 	death := 1898
 	publication := 1865
+	loc := record(SourceLibraryOfCongress, "loc:alice", "Lewis Carroll", &death, &publication)
+	ol := record(SourceOpenLibrary, "ol:alice", "Carroll, Lewis", &death, &publication)
+	for _, value := range []*BibliographicRecord{&loc, &ol} {
+		value.EditionID = value.Identifier + ":edition"
+		value.OriginalLanguages = []string{"en"}
+		value.ContributorRolesObserved = true
+	}
 	resolver := newResolver(t,
-		record(SourceLibraryOfCongress, "loc:alice", "Lewis Carroll", &death, &publication),
-		record(SourceOpenLibrary, "ol:alice", "Carroll, Lewis", &death, &publication),
+		loc,
+		ol,
 	)
 	resolution, err := resolver.Resolve(context.Background(), aliceContext())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolution.WorkCategory.Status != ResolutionEstablished || resolution.Authorship.Value != copyrighteligibility.AuthorshipSingleKnown || resolution.Author.DeathYear != 1898 || resolution.FirstPublication.Year != 1865 || resolution.Translation.State != copyrighteligibility.FactNoneConfirmed || resolution.AdditionalTextual.State != copyrighteligibility.FactNoneConfirmed || resolution.UnpublishedAtEnd1988.State != copyrighteligibility.FactNoneConfirmed {
+	if resolution.WorkCategory.Status != ResolutionEstablished || resolution.Authorship.Value != copyrighteligibility.AuthorshipSingleKnown || resolution.Author.DeathYear != 1898 || resolution.FirstPublication.Year != 1865 || resolution.UnpublishedAtEnd1988.State != copyrighteligibility.FactNoneConfirmed {
 		t.Fatalf("resolution=%#v", resolution)
 	}
 	if resolution.SpecialCategory.Status != ResolutionInsufficient || resolution.SpecialCategory.Reason != ReasonSpecialCategoryNotAutoResolved {
@@ -41,6 +50,67 @@ func TestResolveAliceLikeFactsRemainFailClosedForSpecialCategory(t *testing.T) {
 	assessment := copyrighteligibility.Evaluate(copyrighteligibility.Input{EvaluationDate: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), UK: ToUKEvidence(resolution)})
 	if assessment.UK.Status != copyrighteligibility.JurisdictionIndeterminate || assessment.UK.Reason != copyrighteligibility.ReasonUKSpecialCategoryUnsupported {
 		t.Fatalf("assessment=%#v", assessment)
+	}
+}
+
+func TestResolveNegativeFactsRequireExactObservableEvidence(t *testing.T) {
+	death := 1898
+	publication := 1865
+	exactRecord := record(SourceOpenLibrary, "ol:alice", "Lewis Carroll", &death, &publication)
+	exactRecord.EditionID = "OL123M"
+	exactRecord.OriginalLanguages = []string{"en"}
+	exactRecord.ContributorRolesObserved = true
+
+	resolver := newResolver(t, exactRecord)
+	resolution, err := resolver.Resolve(context.Background(), aliceContext())
+	if err != nil || resolution.Translation.State != copyrighteligibility.FactNoneConfirmed || resolution.AdditionalTextual.State != copyrighteligibility.FactNoneConfirmed {
+		t.Fatalf("resolution=%#v err=%v", resolution, err)
+	}
+
+	missingEdition := exactRecord
+	missingEdition.EditionID = ""
+	resolver = newResolver(t, missingEdition)
+	resolution, err = resolver.Resolve(context.Background(), aliceContext())
+	if err != nil || resolution.Translation.Status != ResolutionInsufficient || resolution.AdditionalTextual.Status != ResolutionInsufficient {
+		t.Fatalf("missing edition resolution=%#v err=%v", resolution, err)
+	}
+
+	wrongLanguage := exactRecord
+	wrongLanguage.OriginalLanguages = []string{"fr"}
+	resolver = newResolver(t, wrongLanguage)
+	resolution, err = resolver.Resolve(context.Background(), aliceContext())
+	if err != nil || resolution.Translation.Status != ResolutionInsufficient {
+		t.Fatalf("language mismatch resolution=%#v err=%v", resolution, err)
+	}
+
+	frontMissing := aliceContext()
+	frontMissing.SourceText = "provider wrapper without a marker"
+	resolver = newResolver(t, exactRecord)
+	resolution, err = resolver.Resolve(context.Background(), frontMissing)
+	if err != nil || resolution.Translation.Status != ResolutionInsufficient || resolution.AdditionalTextual.Status != ResolutionInsufficient {
+		t.Fatalf("front matter resolution=%#v err=%v", resolution, err)
+	}
+}
+
+func TestResolveBibliographicPositiveContributorBlocksAbsence(t *testing.T) {
+	death := 1898
+	publication := 1865
+	value := record(SourceOpenLibrary, "ol:alice", "Lewis Carroll", &death, &publication)
+	value.EditionID = "OL123M"
+	value.OriginalLanguages = []string{"en"}
+	value.ContributorRolesObserved = true
+	value.Contributors = append(value.Contributors, Contributor{Name: "Example Translator", Role: "translator"})
+	resolver := newResolver(t, value)
+	resolution, err := resolver.Resolve(context.Background(), aliceContext())
+	if err != nil || resolution.Translation.Status != ResolutionEstablished || resolution.Translation.State != copyrighteligibility.FactPresent {
+		t.Fatalf("resolution=%#v err=%v", resolution, err)
+	}
+
+	value.Contributors = []Contributor{{Name: "Lewis Carroll", Role: "author"}, {Name: "Example Editor", Role: "editor"}}
+	resolver = newResolver(t, value)
+	resolution, err = resolver.Resolve(context.Background(), aliceContext())
+	if err != nil || resolution.AdditionalTextual.Status != ResolutionEstablished || resolution.AdditionalTextual.State != copyrighteligibility.FactPresent {
+		t.Fatalf("resolution=%#v err=%v", resolution, err)
 	}
 }
 
@@ -165,7 +235,8 @@ func newResolver(t *testing.T, values ...BibliographicRecord) *Service {
 }
 
 func record(class SourceClass, identifier, author string, death, publication *int) BibliographicRecord {
-	return BibliographicRecord{Source: class, SourceName: string(class), Identifier: identifier, Locator: "https://example.invalid/" + identifier, Digest: strings.Repeat("a", 64), Title: "Alice's Adventures in Wonderland", Authors: []Person{{Name: author, Identifiers: []Identifier{{Source: class, Value: identifier + ":author"}}, DeathYear: death}}, FirstPublicationYear: publication, WorkCategory: copyrighteligibility.WorkCategoryOrdinaryLiterary, Translation: copyrighteligibility.FactNoneConfirmed, AdditionalTextual: copyrighteligibility.FactNoneConfirmed}
+	authorID := Identifier{Source: class, Value: identifier + ":author"}
+	return BibliographicRecord{Source: class, SourceName: string(class), Identifier: identifier, Locator: "https://example.invalid/" + identifier, Digest: strings.Repeat("a", 64), Title: "Alice's Adventures in Wonderland", WorkID: identifier, Authors: []Person{{Name: author, Identifiers: []Identifier{authorID}, DeathYear: death}}, Contributors: []Contributor{{Name: author, Role: "author", Identifiers: []Identifier{authorID}}}, FirstPublicationYear: publication, Subjects: []string{"Fiction"}}
 }
 
 func aliceContext() ExactSourceContext {
@@ -174,5 +245,5 @@ func aliceContext() ExactSourceContext {
 }
 
 func exactContext(id, title string, contributors []copyrighteligibility.ContributorEvidence) ExactSourceContext {
-	return ExactSourceContext{ProviderEvidence: copyrighteligibility.ProviderEvidence{Provider: "project-gutenberg", ExternalID: id, Title: title, Contributors: contributors, EvidenceDigest: strings.Repeat("b", 64)}}
+	return ExactSourceContext{ProviderEvidence: copyrighteligibility.ProviderEvidence{Provider: "project-gutenberg", ExternalID: id, Title: title, Contributors: contributors, Languages: []string{"en"}, EvidenceDigest: strings.Repeat("b", 64)}, SourceText: "Project Gutenberg metadata\n*** START OF THE PROJECT GUTENBERG EBOOK EXAMPLE ***\n"}
 }
