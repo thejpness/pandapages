@@ -26,6 +26,13 @@ func TestEvaluateUKOrdinaryLiteraryLifePlusSeventyBoundary(t *testing.T) {
 	}
 }
 
+func TestEvaluateReportsPolicyVersionV2(t *testing.T) {
+	assessment := Evaluate(Input{EvaluationDate: time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC), UK: ordinaryLiteraryEvidence(1898)})
+	if assessment.PolicyVersion != "panda-pages-copyright-v2" {
+		t.Fatalf("policy version=%q", assessment.PolicyVersion)
+	}
+}
+
 func TestEvaluateUKRequiresEvidenceForEachConfirmedAbsence(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -34,7 +41,6 @@ func TestEvaluateUKRequiresEvidenceForEachConfirmedAbsence(t *testing.T) {
 	}{
 		{"translation", func(e *UKEvidence) { e.Translation.References = nil }, ReasonUKTranslationEvidenceMissing},
 		{"additional textual contribution", func(e *UKEvidence) { e.AdditionalTextualContribution.References = nil }, ReasonUKAdditionalContributionEvidenceMissing},
-		{"special category", func(e *UKEvidence) { e.SpecialCategory.References = nil }, ReasonUKSpecialCategoryEvidenceMissing},
 		{"unpublished history", func(e *UKEvidence) { e.UnpublishedAtEnd1988.References = nil }, ReasonUKUnpublishedHistoryEvidenceMissing},
 	}
 	for _, test := range tests {
@@ -59,9 +65,6 @@ func TestEvaluateUKConfirmedAbsencesWithEvidenceSupportEligiblePath(t *testing.T
 		}},
 		{"additional textual contribution", func(e *UKEvidence) {
 			e.AdditionalTextualContribution = confirmedAbsence("No separately protected textual contribution appears in the acquired source.")
-		}},
-		{"special category", func(e *UKEvidence) {
-			e.SpecialCategory = confirmedAbsence("No special statutory category applies to the work.")
 		}},
 		{"unpublished history", func(e *UKEvidence) {
 			e.UnpublishedAtEnd1988 = confirmedAbsence("The work was not unpublished at the end of 1988.")
@@ -115,7 +118,6 @@ func TestEvaluateUKFailsClosedOutsideOrdinarySupportedSubset(t *testing.T) {
 		{"joint authorship", func(e *UKEvidence) { e.Authorship = AuthorshipJoint }, JurisdictionIndeterminate, ReasonUKJointAuthorshipUnsupported},
 		{"anonymous authorship", func(e *UKEvidence) { e.Authorship = AuthorshipAnonymous }, JurisdictionIndeterminate, ReasonUKAnonymousAuthorshipUnsupported},
 		{"pseudonymous authorship", func(e *UKEvidence) { e.Authorship = AuthorshipPseudonymous }, JurisdictionIndeterminate, ReasonUKPseudonymousAuthorshipUnsupported},
-		{"special category", func(e *UKEvidence) { e.SpecialCategory = FactEvidence{State: FactPresent} }, JurisdictionIndeterminate, ReasonUKSpecialCategoryUnsupported},
 		{"possible unpublished history", func(e *UKEvidence) { e.UnpublishedAtEnd1988 = FactEvidence{State: FactUnknown} }, JurisdictionIndeterminate, ReasonUKUnpublishedHistoryUnsupported},
 		{"unsupported work category", func(e *UKEvidence) { e.WorkCategory = WorkCategoryUnknown }, JurisdictionIndeterminate, ReasonUKWorkCategoryUnsupported},
 	}
@@ -178,6 +180,7 @@ func TestOverallRequiresBothJurisdictionsToBeEligible(t *testing.T) {
 
 func ordinaryLiteraryEvidence(deathYear int) UKEvidence {
 	return UKEvidence{
+		WorkTitle:              "Alice's Adventures in Wonderland",
 		WorkCategory:           WorkCategoryOrdinaryLiterary,
 		Authorship:             AuthorshipSingleKnown,
 		WorkCategoryReferences: []EvidenceReference{{Source: "Bibliographic record", Fact: "The acquired work is an ordinary literary work."}},
@@ -199,8 +202,50 @@ func ordinaryLiteraryEvidence(deathYear int) UKEvidence {
 		},
 		Translation:                   confirmedAbsence("No translation appears in the acquired source."),
 		AdditionalTextualContribution: confirmedAbsence("No separately protected textual contribution appears in the acquired source."),
-		SpecialCategory:               confirmedAbsence("No special statutory category applies to the work."),
 		UnpublishedAtEnd1988:          confirmedAbsence("The work was not unpublished at the end of 1988."),
+	}
+}
+
+func TestEvaluateUKKnownExceptionsBlockSupportedPath(t *testing.T) {
+	tests := []struct {
+		name   string
+		title  string
+		author string
+		reason ReasonCode
+	}{
+		{"Peter Pan uses normalized title and Barrie identity", "PETER—PAN", "Barrie, J. M. (James Matthew), 1860-1937", ReasonUKKnownExceptionPeterPan},
+		{"King James Bible title alias", "The King James Bible", "", ReasonUKKnownExceptionKingJamesBible},
+		{"Authorized Version title alias", "AUTHORIZED VERSION", "", ReasonUKKnownExceptionKingJamesBible},
+		{"Book of Common Prayer title alias", "The Book of Common Prayer", "", ReasonUKKnownExceptionBookOfCommonPrayer},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			evidence := ordinaryLiteraryEvidence(1898)
+			evidence.WorkTitle = test.title
+			evidence.Author.Name = test.author
+			assessment := Evaluate(Input{EvaluationDate: time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC), UK: evidence})
+			if assessment.UK.Status != JurisdictionIndeterminate || assessment.UK.Reason != test.reason {
+				t.Fatalf("UK=%+v", assessment.UK)
+			}
+		})
+	}
+}
+
+func TestKnownUKExceptionDoesNotFuzzyMatch(t *testing.T) {
+	tests := []struct {
+		title  string
+		author string
+	}{
+		{"", "J. M. Barrie"},
+		{"Peter Pan", "Lewis Carroll"},
+		{"Peter Pan and Wendy", "J. M. Barrie"},
+		{"A King James Bible Commentary", ""},
+		{"A Book of Common Prayers", ""},
+	}
+	for _, test := range tests {
+		if got := knownUKException(test.title, test.author); got != UKKnownExceptionNone {
+			t.Fatalf("knownUKException(%q, %q)=%q", test.title, test.author, got)
+		}
 	}
 }
 

@@ -131,6 +131,11 @@ func TestEligibleSaveAcceptsOnlyHumanFactsAndPersistsEvaluation(t *testing.T) {
 	if bad.Code != http.StatusBadRequest || !strings.Contains(bad.Body.String(), `"code":"source_eligibility_invalid"`) {
 		t.Fatalf("authority body=%d/%s", bad.Code, bad.Body.String())
 	}
+	obsolete := httptest.NewRecorder()
+	sourceProviderHandler(t, ownerStore(), eligibilityDiscovery()).ServeHTTP(obsolete, providerRequest(http.MethodPost, "/api/v1/admin/source-providers/project-gutenberg/works/11/acquisitions", `{"specialCategory":{"state":"none_confirmed","references":[]}}`))
+	if obsolete.Code != http.StatusBadRequest || !strings.Contains(obsolete.Body.String(), `"code":"source_eligibility_invalid"`) {
+		t.Fatalf("obsolete special category body=%d/%s", obsolete.Code, obsolete.Body.String())
+	}
 }
 
 func TestBlockedSaveDoesNotCallStoreAndProviderFactsCannotBeOverridden(t *testing.T) {
@@ -230,5 +235,5 @@ func eligibilityDiscovery() *discoveryStub {
 }
 
 func eligibleHumanFactsJSON() string {
-	return `{"workCategory":"ordinary_literary","workCategoryReferences":[{"source":"Catalogue","fact":"ordinary literary work"}],"firstPublicationYear":1865,"firstPublicationReferences":[{"source":"Catalogue","fact":"published in 1865"}],"translation":{"state":"none_confirmed","references":[{"source":"Catalogue","fact":"no translation in acquired text"}]},"additionalTextualContribution":{"state":"none_confirmed","references":[{"source":"Catalogue","fact":"no additional textual content"}]},"specialCategory":{"state":"none_confirmed","references":[{"source":"Catalogue","fact":"not a special category"}]},"unpublishedAtEnd1988":{"state":"none_confirmed","references":[{"source":"Catalogue","fact":"published before 1988"}]}}`
+	return `{"workCategory":"ordinary_literary","workCategoryReferences":[{"source":"Catalogue","fact":"ordinary literary work"}],"firstPublicationYear":1865,"firstPublicationReferences":[{"source":"Catalogue","fact":"published in 1865"}],"translation":{"state":"none_confirmed","references":[{"source":"Catalogue","fact":"no translation in acquired text"}]},"additionalTextualContribution":{"state":"none_confirmed","references":[{"source":"Catalogue","fact":"no additional textual content"}]},"unpublishedAtEnd1988":{"state":"none_confirmed","references":[{"source":"Catalogue","fact":"published before 1988"}]}}`
 }

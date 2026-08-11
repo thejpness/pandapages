@@ -80,17 +80,13 @@ func (s *Service) Resolve(ctx context.Context, exact ExactSourceContext) (Resolu
 	canonicalRecords(records)
 	front := ExtractFrontMatter(exact.SourceText)
 	resolution := Resolution{
+		WorkTitle:         strings.TrimSpace(exact.ProviderEvidence.Title),
 		WorkCategory:      resolveWorkCategory(records),
 		Authorship:        resolveAuthorship(exact.ProviderEvidence, records),
 		FirstPublication:  resolveFirstPublication(records),
 		Translation:       resolveTranslation(exact.ProviderEvidence, records, front),
 		AdditionalTextual: resolveAdditionalTextual(exact.ProviderEvidence, records, front),
-		// Policy v1's SpecialCategory is a generic legal catch-all. The
-		// observable provider/bibliographic facts collected here cannot prove
-		// its absence, so changing this result would require a policy-model
-		// revision rather than an adapter inference.
-		SpecialCategory: ResolvedFact{Status: ResolutionInsufficient, State: copyrighteligibility.FactUnknown, Reason: ReasonSpecialCategoryNotAutoResolved},
-		Diagnostics:     diagnostics,
+		Diagnostics:       diagnostics,
 	}
 	resolution.Author = resolveAuthor(exact.ProviderEvidence, records, resolution.Authorship)
 	resolution.UnpublishedAtEnd1988 = resolveUnpublishedAtEnd1988(resolution.FirstPublication)
@@ -555,7 +551,6 @@ func canonicalResolution(value Resolution) Resolution {
 	value.FirstPublication.Evidence = canonicalEvidence(value.FirstPublication.Evidence)
 	value.Translation.Evidence = canonicalEvidence(value.Translation.Evidence)
 	value.AdditionalTextual.Evidence = canonicalEvidence(value.AdditionalTextual.Evidence)
-	value.SpecialCategory.Evidence = canonicalEvidence(value.SpecialCategory.Evidence)
 	value.UnpublishedAtEnd1988.Evidence = canonicalEvidence(value.UnpublishedAtEnd1988.Evidence)
 	sort.Slice(value.Diagnostics, func(i, j int) bool {
 		if value.Diagnostics[i].Source != value.Diagnostics[j].Source {

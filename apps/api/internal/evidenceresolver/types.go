@@ -17,15 +17,14 @@ const (
 type ReasonCode string
 
 const (
-	ReasonEstablished                    ReasonCode = "established"
-	ReasonSourceUnavailable              ReasonCode = "source_unavailable"
-	ReasonSourceInvalid                  ReasonCode = "source_invalid"
-	ReasonEvidenceConflict               ReasonCode = "evidence_conflict"
-	ReasonEvidenceInsufficient           ReasonCode = "evidence_insufficient"
-	ReasonProviderContributorPresent     ReasonCode = "provider_contributor_present"
-	ReasonFrontMatterContributorPresent  ReasonCode = "front_matter_contributor_present"
-	ReasonPublicationDerivedBefore1989   ReasonCode = "publication_before_1989"
-	ReasonSpecialCategoryNotAutoResolved ReasonCode = "special_category_not_auto_resolved"
+	ReasonEstablished                   ReasonCode = "established"
+	ReasonSourceUnavailable             ReasonCode = "source_unavailable"
+	ReasonSourceInvalid                 ReasonCode = "source_invalid"
+	ReasonEvidenceConflict              ReasonCode = "evidence_conflict"
+	ReasonEvidenceInsufficient          ReasonCode = "evidence_insufficient"
+	ReasonProviderContributorPresent    ReasonCode = "provider_contributor_present"
+	ReasonFrontMatterContributorPresent ReasonCode = "front_matter_contributor_present"
+	ReasonPublicationDerivedBefore1989  ReasonCode = "publication_before_1989"
 )
 
 type SourceClass string
@@ -177,13 +176,13 @@ type ResolvedFact struct {
 // Callers may map it to UKEvidence and invoke copyrighteligibility.Evaluate;
 // this package never emits an eligibility decision itself.
 type Resolution struct {
+	WorkTitle            string
 	WorkCategory         ResolvedWorkCategory
 	Authorship           ResolvedAuthorship
 	Author               ResolvedAuthor
 	FirstPublication     ResolvedYear
 	Translation          ResolvedFact
 	AdditionalTextual    ResolvedFact
-	SpecialCategory      ResolvedFact
 	UnpublishedAtEnd1988 ResolvedFact
 	Diagnostics          []Diagnostic
 }

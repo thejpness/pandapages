@@ -242,7 +242,7 @@ func TestRuntimeOpenLibraryOutputLeavesAliceLikeDossierBlocked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolution.Authorship.Status != evidenceresolver.ResolutionEstablished || resolution.Author.Status != evidenceresolver.ResolutionEstablished || resolution.WorkCategory.Status != evidenceresolver.ResolutionInsufficient || resolution.FirstPublication.Status != evidenceresolver.ResolutionInsufficient || resolution.Translation.Status != evidenceresolver.ResolutionInsufficient || resolution.AdditionalTextual.Status != evidenceresolver.ResolutionInsufficient || resolution.SpecialCategory.Status != evidenceresolver.ResolutionInsufficient || resolution.UnpublishedAtEnd1988.Status != evidenceresolver.ResolutionInsufficient {
+	if resolution.Authorship.Status != evidenceresolver.ResolutionEstablished || resolution.Author.Status != evidenceresolver.ResolutionEstablished || resolution.WorkCategory.Status != evidenceresolver.ResolutionInsufficient || resolution.FirstPublication.Status != evidenceresolver.ResolutionInsufficient || resolution.Translation.Status != evidenceresolver.ResolutionInsufficient || resolution.AdditionalTextual.Status != evidenceresolver.ResolutionInsufficient || resolution.UnpublishedAtEnd1988.Status != evidenceresolver.ResolutionInsufficient {
 		t.Fatalf("resolution=%#v", resolution)
 	}
 	assessment := copyrighteligibility.Evaluate(copyrighteligibility.Input{EvaluationDate: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), UK: evidenceresolver.ToUKEvidence(resolution)})

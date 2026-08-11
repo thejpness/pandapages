@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// Evaluate applies Panda Pages copyright policy v1 to supplied factual
+// Evaluate applies Panda Pages copyright policy v2 to supplied factual
 // evidence. It is pure and deterministic: it performs no I/O and does not
 // inspect the wall clock.
 func Evaluate(input Input) Assessment {
@@ -58,6 +58,9 @@ func evaluateUK(evaluationDate time.Time, evidence UKEvidence) JurisdictionAsses
 	if date.IsZero() || date.Year() < 1 {
 		return JurisdictionAssessment{Status: JurisdictionIndeterminate, Reason: ReasonUKEvaluationDateInvalid}
 	}
+	if exception := knownUKException(evidence.WorkTitle, evidence.Author.Name); exception != UKKnownExceptionNone {
+		return JurisdictionAssessment{Status: JurisdictionIndeterminate, Reason: knownExceptionReason(exception)}
+	}
 	evaluationYear := date.Year()
 	if evidence.WorkCategory != WorkCategoryOrdinaryLiterary {
 		return JurisdictionAssessment{Status: JurisdictionIndeterminate, Reason: ReasonUKWorkCategoryUnsupported}
@@ -98,9 +101,6 @@ func evaluateUK(evaluationDate time.Time, evidence UKEvidence) JurisdictionAsses
 		return result
 	}
 	if result, ok := evaluateAbsenceFact(evidence.AdditionalTextualContribution, ReasonUKAdditionalContributionPresent, ReasonUKAdditionalContributionUnknown, ReasonUKAdditionalContributionEvidenceMissing); ok {
-		return result
-	}
-	if result, ok := evaluateAbsenceFact(evidence.SpecialCategory, ReasonUKSpecialCategoryUnsupported, ReasonUKSpecialCategoryUnsupported, ReasonUKSpecialCategoryEvidenceMissing); ok {
 		return result
 	}
 	if result, ok := evaluateAbsenceFact(evidence.UnpublishedAtEnd1988, ReasonUKUnpublishedHistoryUnsupported, ReasonUKUnpublishedHistoryUnsupported, ReasonUKUnpublishedHistoryEvidenceMissing); ok {

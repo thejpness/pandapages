@@ -72,14 +72,12 @@ const authorDeathYear = ref<number | undefined>();
 const firstPublicationYear = ref<number | undefined>();
 const translation = ref<AdminCopyrightFactState>("unknown");
 const additionalTextual = ref<AdminCopyrightFactState>("unknown");
-const specialCategory = ref<AdminCopyrightFactState>("unknown");
 const unpublishedAtEnd1988 = ref<AdminCopyrightFactState>("unknown");
 const workCategoryEvidence = ref(newEvidenceInput());
 const authorDeathEvidence = ref(newEvidenceInput());
 const firstPublicationEvidence = ref(newEvidenceInput());
 const translationEvidence = ref(newEvidenceInput());
 const additionalTextualEvidence = ref(newEvidenceInput());
-const specialCategoryEvidence = ref(newEvidenceInput());
 const unpublishedEvidence = ref(newEvidenceInput());
 
 let searchController: AbortController | null = null;
@@ -166,10 +164,6 @@ function humanEvidence(): AdminSourceEligibilityHumanEvidence {
     additionalTextualContribution: {
       state: additionalTextual.value,
       references: evidenceReferences(additionalTextualEvidence.value),
-    },
-    specialCategory: {
-      state: specialCategory.value,
-      references: evidenceReferences(specialCategoryEvidence.value),
     },
     unpublishedAtEnd1988: {
       state: unpublishedAtEnd1988.value,
@@ -886,25 +880,6 @@ onBeforeUnmount(() => {
                 @update:model-value="invalidateAssessment"
               />
             </template>
-
-            <div class="studio-field">
-              <label for="special">Special category</label>
-              <select
-                id="special"
-                v-model="specialCategory"
-                @change="invalidateAssessment"
-              >
-                <option value="none_confirmed">None confirmed</option>
-                <option value="present">Present</option>
-                <option value="unknown">Unknown</option>
-              </select>
-            </div>
-            <SourceEvidenceReferenceFields
-              v-model="specialCategoryEvidence"
-              label="Special category"
-              id-prefix="special"
-              @update:model-value="invalidateAssessment"
-            />
 
             <div class="studio-field">
               <label for="unpublished">Unpublished at end of 1988</label>

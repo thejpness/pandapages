@@ -179,7 +179,7 @@ function sourceEvidenceReference(fact: string) {
 
 function sourceEligibility(overrides: Record<string, unknown> = {}) {
   return {
-    policyVersion: 'panda-pages-copyright-v1',
+    policyVersion: 'panda-pages-copyright-v2',
     evaluationDate: '2026-07-20',
     evaluatedAt: timestamp,
     us: { status: 'eligible', reason: 'us_provider_public_domain_confirmed' },
@@ -193,6 +193,7 @@ function sourceEligibility(overrides: Record<string, unknown> = {}) {
     contributors: [{ name: 'Lewis Carroll', role: 'author', deathYear: 1898 }],
     rdfDigest: sourceHash,
     effectiveUkEvidence: {
+      workTitle: "Alice's Adventures in Wonderland",
       workCategory: 'ordinary_literary',
       workCategoryReferences: sourceEvidenceReference('ordinary literary work'),
       authorship: 'single_known',
@@ -204,7 +205,6 @@ function sourceEligibility(overrides: Record<string, unknown> = {}) {
       firstPublicationReferences: sourceEvidenceReference('first published in 1865'),
       translation: { state: 'none_confirmed', references: sourceEvidenceReference('no translation') },
       additionalTextualContribution: { state: 'none_confirmed', references: sourceEvidenceReference('no additional textual contribution') },
-      specialCategory: { state: 'none_confirmed', references: sourceEvidenceReference('not a special category') },
       unpublishedAtEnd1988: { state: 'none_confirmed', references: sourceEvidenceReference('published before 1988') },
     },
     ...overrides,
@@ -923,6 +923,7 @@ test('global source review validates factual evidence, saves eligible work, and 
   await expect(page.getByText('United States:')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Validate & save for source review' })).toBeVisible()
   await expect(page.getByRole('button', { name: /Preview source|Approve preview|Accept candidate/ })).toHaveCount(0)
+  await expect(page.getByLabel('Special category', { exact: true })).toHaveCount(0)
   await page.getByLabel('Work type evidence source').fill('Title-page record')
   await page.getByLabel('Work type observed fact').fill('The title page identifies this as an ordinary literary work.')
   await page.getByLabel('First publication year').fill('1865')
@@ -935,9 +936,6 @@ test('global source review validates factual evidence, saves eligible work, and 
   await page.getByLabel('Additional textual contribution', { exact: true }).selectOption('none_confirmed')
   await page.getByLabel('Additional textual contribution evidence source').fill('Edition inspection')
   await page.getByLabel('Additional textual contribution observed fact').fill('No additional textual contribution appears in this acquired text.')
-  await page.getByLabel('Special category', { exact: true }).selectOption('none_confirmed')
-  await page.getByLabel('Special category evidence source').fill('Catalogue record')
-  await page.getByLabel('Special category observed fact').fill('The catalogue identifies no Crown or special category.')
   await page.getByLabel('Unpublished at end of 1988', { exact: true }).selectOption('none_confirmed')
   await page.getByLabel('Unpublished-at-end-of-1988 evidence source').fill('Publication record')
   await page.getByLabel('Unpublished-at-end-of-1988 observed fact').fill('The work was published before the end of 1988.')

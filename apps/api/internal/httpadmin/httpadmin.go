@@ -640,7 +640,7 @@ func sourceEligibilityResponse(evaluation sourceeligibility.Evaluation) model.Ad
 }
 
 func sourceEligibilityEffectiveUK(value copyrighteligibility.UKEvidence) model.AdminSourceEligibilityEffectiveUKEvidence {
-	return model.AdminSourceEligibilityEffectiveUKEvidence{WorkCategory: string(value.WorkCategory), WorkCategoryReferences: sourceEligibilityResponseReferences(value.WorkCategoryReferences), Authorship: string(value.Authorship), AuthorshipReferences: sourceEligibilityResponseReferences(value.AuthorshipReferences), AuthorName: value.Author.Name, AuthorDeathYear: value.Author.DeathYear, AuthorReferences: sourceEligibilityResponseReferences(value.Author.References), FirstPublicationYear: value.FirstPublication.Year, FirstPublicationRefs: sourceEligibilityResponseReferences(value.FirstPublication.References), Translation: sourceEligibilityResponseFact(value.Translation), AdditionalTextual: sourceEligibilityResponseFact(value.AdditionalTextualContribution), SpecialCategory: sourceEligibilityResponseFact(value.SpecialCategory), UnpublishedAtEnd1988: sourceEligibilityResponseFact(value.UnpublishedAtEnd1988)}
+	return model.AdminSourceEligibilityEffectiveUKEvidence{WorkTitle: value.WorkTitle, WorkCategory: string(value.WorkCategory), WorkCategoryReferences: sourceEligibilityResponseReferences(value.WorkCategoryReferences), Authorship: string(value.Authorship), AuthorshipReferences: sourceEligibilityResponseReferences(value.AuthorshipReferences), AuthorName: value.Author.Name, AuthorDeathYear: value.Author.DeathYear, AuthorReferences: sourceEligibilityResponseReferences(value.Author.References), FirstPublicationYear: value.FirstPublication.Year, FirstPublicationRefs: sourceEligibilityResponseReferences(value.FirstPublication.References), Translation: sourceEligibilityResponseFact(value.Translation), AdditionalTextual: sourceEligibilityResponseFact(value.AdditionalTextualContribution), UnpublishedAtEnd1988: sourceEligibilityResponseFact(value.UnpublishedAtEnd1988)}
 }
 
 func sourceEligibilityResponseFact(value copyrighteligibility.FactEvidence) model.AdminCopyrightFactEvidence {
@@ -727,10 +727,6 @@ func sourceEligibilityHumanEvidence(body model.AdminSourceEligibilityHumanEviden
 	if err != nil {
 		return sourceeligibility.HumanUKEvidence{}, err
 	}
-	special, err := sourceEligibilityFactEvidence(body.SpecialCategory)
-	if err != nil {
-		return sourceeligibility.HumanUKEvidence{}, err
-	}
 	unpublished, err := sourceEligibilityFactEvidence(body.UnpublishedAtEnd1988)
 	if err != nil {
 		return sourceeligibility.HumanUKEvidence{}, err
@@ -738,7 +734,7 @@ func sourceEligibilityHumanEvidence(body model.AdminSourceEligibilityHumanEviden
 	if (body.AuthorDeathYear != nil && (*body.AuthorDeathYear < -9999 || *body.AuthorDeathYear > 9999)) || body.FirstPublicationYear < -9999 || body.FirstPublicationYear > 9999 {
 		return sourceeligibility.HumanUKEvidence{}, errSourceEligibilityInput
 	}
-	return sourceeligibility.HumanUKEvidence{WorkCategory: workCategory, WorkCategoryReferences: workCategoryReferences, AuthorDeathYear: body.AuthorDeathYear, AuthorDeathReferences: authorDeathReferences, FirstPublication: copyrighteligibility.PublicationEvidence{Year: body.FirstPublicationYear, References: publicationReferences}, Translation: translation, AdditionalTextual: additional, SpecialCategory: special, UnpublishedAtEnd1988: unpublished}, nil
+	return sourceeligibility.HumanUKEvidence{WorkCategory: workCategory, WorkCategoryReferences: workCategoryReferences, AuthorDeathYear: body.AuthorDeathYear, AuthorDeathReferences: authorDeathReferences, FirstPublication: copyrighteligibility.PublicationEvidence{Year: body.FirstPublicationYear, References: publicationReferences}, Translation: translation, AdditionalTextual: additional, UnpublishedAtEnd1988: unpublished}, nil
 }
 
 func sourceEligibilityFactEvidence(body model.AdminCopyrightFactEvidence) (copyrighteligibility.FactEvidence, error) {

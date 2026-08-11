@@ -18,16 +18,16 @@ function reference(fact) { return [{ source: 'Catalogue record', fact }] }
 
 function eligibility(overrides = {}) {
   return {
-    policyVersion: 'panda-pages-copyright-v1', evaluationDate: '2026-08-11', evaluatedAt: timestamp,
+    policyVersion: 'panda-pages-copyright-v2', evaluationDate: '2026-08-11', evaluatedAt: timestamp,
     us: { status: 'eligible', reason: 'us_provider_public_domain_confirmed' },
     uk: { status: 'eligible', reason: 'uk_ordinary_literary_term_expired' }, overall: 'eligible', overallReason: 'overall_eligible',
     opdsRights: 'public_domain', rdfRights: 'public_domain', headerRights: 'public_domain',
     providerTitle: "Alice's Adventures in Wonderland", contributors: [{ name: 'Lewis Carroll', role: 'author', deathYear: 1898 }], rdfDigest: hash,
     effectiveUkEvidence: {
-      workCategory: 'ordinary_literary', workCategoryReferences: reference('ordinary literary work'), authorship: 'single_known', authorshipReferences: reference('one author'),
+      workTitle: "Alice's Adventures in Wonderland", workCategory: 'ordinary_literary', workCategoryReferences: reference('ordinary literary work'), authorship: 'single_known', authorshipReferences: reference('one author'),
       authorName: 'Lewis Carroll', authorDeathYear: 1898, authorReferences: reference('died in 1898'), firstPublicationYear: 1865, firstPublicationReferences: reference('first published in 1865'),
       translation: { state: 'none_confirmed', references: reference('no translation') }, additionalTextualContribution: { state: 'none_confirmed', references: reference('no additional textual contribution') },
-      specialCategory: { state: 'none_confirmed', references: reference('not a special category') }, unpublishedAtEnd1988: { state: 'none_confirmed', references: reference('published before 1988') },
+      unpublishedAtEnd1988: { state: 'none_confirmed', references: reference('published before 1988') },
     },
     ...overrides,
   }
@@ -83,7 +83,7 @@ test('source review wrappers submit only factual UK evidence and keep source tex
   assert.ok(requests.every(({ init }) => init.credentials === 'omit'))
   assert.equal(api.parseAdminEligibility(eligibility({
     us: { status: 'indeterminate', reason: 'us_provider_rights_missing' }, uk: { status: 'indeterminate', reason: 'uk_work_category_unsupported' }, overall: 'blocked', overallReason: 'overall_blocked',
-    effectiveUkEvidence: { workCategory: 'unknown', workCategoryReferences: [], authorship: 'unknown', authorshipReferences: [], authorName: '', authorDeathYear: 0, authorReferences: [], firstPublicationYear: 0, firstPublicationReferences: [], translation: { state: 'unknown', references: [] }, additionalTextualContribution: { state: 'unknown', references: [] }, specialCategory: { state: 'unknown', references: [] }, unpublishedAtEnd1988: { state: 'unknown', references: [] } },
+    effectiveUkEvidence: { workTitle: "Alice's Adventures in Wonderland", workCategory: 'unknown', workCategoryReferences: [], authorship: 'unknown', authorshipReferences: [], authorName: '', authorDeathYear: 0, authorReferences: [], firstPublicationYear: 0, firstPublicationReferences: [], translation: { state: 'unknown', references: [] }, additionalTextualContribution: { state: 'unknown', references: [] }, unpublishedAtEnd1988: { state: 'unknown', references: [] } },
   })).overall, 'blocked')
   assert.throws(() => api.parseAdminSourceAcquisitionListResponse({ items: [{ ...acquisitionSummary(), sourceText: 'must not leak' }] }), /Invalid admin response/)
 })
