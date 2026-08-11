@@ -22,6 +22,11 @@ var (
 	ErrContentTooLarge           = errors.New("source provider content is too large")
 	ErrContentInvalid            = errors.New("source provider content is invalid")
 	ErrNormalisationFailed       = errors.New("source provider content could not be normalised")
+	ErrEvidenceUnavailable       = errors.New("source provider evidence is unavailable")
+	ErrEvidenceInvalid           = errors.New("source provider evidence is invalid")
+	ErrEvidenceTooLarge          = errors.New("source provider evidence is too large")
+	ErrEvidenceIdentityMismatch  = errors.New("source provider evidence identity does not match the requested work")
+	ErrEvidenceTimeout           = errors.New("source provider evidence request timed out")
 )
 
 type ID string
