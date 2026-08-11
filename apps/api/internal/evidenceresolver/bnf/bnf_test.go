@@ -2,6 +2,7 @@ package bnf
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -83,7 +84,7 @@ func TestLookupUsesOnlyFixedBoundedBNFSPARQLEndpoint(t *testing.T) {
 			t.Fatalf("request=%q", request.URL.String())
 		}
 		query := request.URL.Query().Get("query")
-		if !strings.Contains(query, "bnf:firstYear") || !strings.Contains(query, "dcterms:contributor") || !strings.Contains(query, `LCASE("Alice's Adventures in Wonderland")`) || !strings.Contains(query, "LIMIT 50") {
+		if !strings.Contains(query, "bnf:firstYear") || strings.Contains(query, "dcterms:contributor") || !strings.Contains(query, `LCASE("Alice's Adventures in Wonderland")`) || !strings.Contains(query, "LIMIT 51") {
 			t.Fatalf("query=%q", query)
 		}
 		w.Header().Set("Content-Type", "application/sparql-results+json; charset=utf-8")
@@ -96,7 +97,7 @@ func TestLookupUsesOnlyFixedBoundedBNFSPARQLEndpoint(t *testing.T) {
 		t.Fatalf("records=%#v err=%v", records, err)
 	}
 	record := records[0]
-	if record.Source != evidenceresolver.SourceBibliothequeNationaleDeFrance || record.Identifier != "ark:/12148/cb12011248f" || record.WorkID != record.Identifier || record.EditionID != "" || record.ContributorRecordID != record.Identifier || record.Locator != "https://data.bnf.fr/ark:/12148/cb12011248f" || record.FirstPublicationYear == nil || *record.FirstPublicationYear != 1865 || len(record.Authors) != 1 || record.Authors[0].Name != "Lewis Carroll" || len(record.OriginalLanguages) != 1 || record.OriginalLanguages[0] != "eng" || len(record.Subjects) != 1 || record.Subjects[0] != "Littératures" || len(record.Contributors) != 1 || record.Contributors[0].Role != "author" || !record.ContributorRolesObserved || record.Digest == "" {
+	if record.Source != evidenceresolver.SourceBibliothequeNationaleDeFrance || record.Identifier != "ark:/12148/cb12011248f" || record.WorkID != record.Identifier || record.EditionID != "" || record.Locator != "https://data.bnf.fr/ark:/12148/cb12011248f" || record.FirstPublicationYear == nil || *record.FirstPublicationYear != 1865 || len(record.Authors) != 1 || record.Authors[0].Name != "Lewis Carroll" || len(record.OriginalLanguages) != 1 || record.OriginalLanguages[0] != "eng" || len(record.Subjects) != 1 || record.Subjects[0] != "Littératures" || len(record.Contributors) != 1 || record.Contributors[0].Role != "author" || record.ContributorRolesObserved || record.Digest == "" {
 		t.Fatalf("record=%#v", record)
 	}
 	requests := transport.requests()
@@ -105,7 +106,7 @@ func TestLookupUsesOnlyFixedBoundedBNFSPARQLEndpoint(t *testing.T) {
 	}
 }
 
-func TestLookupPreservesObservedStructuredContributor(t *testing.T) {
+func TestLookupDoesNotTreatWorkLevelGenericContributorAsRoleEvidence(t *testing.T) {
 	fixture := strings.Replace(aliceFixture, `"language": {`, `"contributor": {"type": "uri", "value": "http://data.bnf.fr/ark:/12148/cb11926193t#about"},
     "contributorName": {"type": "literal", "value": "Example Editor"},
     "language": {`, 1)
@@ -116,8 +117,31 @@ func TestLookupPreservesObservedStructuredContributor(t *testing.T) {
 	defer server.Close()
 	adapter, _ := adapterForServer(server)
 	records, err := adapter.Lookup(context.Background(), exactQuery())
-	if err != nil || len(records) != 1 || len(records[0].Contributors) != 2 || records[0].Contributors[1].Name != "Example Editor" || records[0].Contributors[1].Role != "contributor" {
+	if err != nil || len(records) != 1 || len(records[0].Contributors) != 1 || records[0].Contributors[0].Role != "author" || records[0].ContributorRolesObserved {
 		t.Fatalf("records=%#v err=%v", records, err)
+	}
+}
+
+func TestLookupRejectsResultSentinel(t *testing.T) {
+	var response selectResponse
+	if err := json.Unmarshal([]byte(aliceFixture), &response); err != nil {
+		t.Fatal(err)
+	}
+	for len(response.Results.Bindings) < resultSentinel {
+		response.Results.Bindings = append(response.Results.Bindings, response.Results.Bindings[0])
+	}
+	body, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/sparql-results+json")
+		_, _ = w.Write(body)
+	}))
+	defer server.Close()
+	adapter, _ := adapterForServer(server)
+	if _, err := adapter.Lookup(context.Background(), exactQuery()); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("error=%v", err)
 	}
 }
 

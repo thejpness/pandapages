@@ -30,7 +30,6 @@ func TestResolveSyntheticCrossSourceFactsCanProduceEligibleUKEvidence(t *testing
 	ol := record(SourceOpenLibrary, "ol:alice", "Carroll, Lewis", &death, &publication)
 	for _, value := range []*BibliographicRecord{&loc, &ol} {
 		value.EditionID = value.Identifier + ":edition"
-		value.ContributorRecordID = value.EditionID
 		value.OriginalLanguages = []string{"en"}
 		value.ContributorRolesObserved = true
 	}
@@ -56,7 +55,6 @@ func TestResolveNegativeFactsRequireExactObservableEvidence(t *testing.T) {
 	publication := 1865
 	exactRecord := record(SourceOpenLibrary, "ol:alice", "Lewis Carroll", &death, &publication)
 	exactRecord.EditionID = "OL123M"
-	exactRecord.ContributorRecordID = exactRecord.EditionID
 	exactRecord.OriginalLanguages = []string{"en"}
 	exactRecord.ContributorRolesObserved = true
 
@@ -67,7 +65,7 @@ func TestResolveNegativeFactsRequireExactObservableEvidence(t *testing.T) {
 	}
 
 	missingEdition := exactRecord
-	missingEdition.ContributorRecordID = ""
+	missingEdition.EditionID = ""
 	resolver = newResolver(t, missingEdition)
 	resolution, err = resolver.Resolve(context.Background(), aliceContext())
 	if err != nil || resolution.Translation.Status != ResolutionInsufficient || resolution.AdditionalTextual.Status != ResolutionInsufficient {
@@ -91,12 +89,28 @@ func TestResolveNegativeFactsRequireExactObservableEvidence(t *testing.T) {
 	}
 }
 
+func TestResolveBNFWorkRecordCannotEstablishNegativeContributorFacts(t *testing.T) {
+	death := 1898
+	publication := 1865
+	workRecord := record(SourceBibliothequeNationaleDeFrance, "ark:/12148/cb12011248f", "Lewis Carroll", &death, &publication)
+	workRecord.WorkID = workRecord.Identifier
+	workRecord.OriginalLanguages = []string{"eng"}
+	// A work record can identify the underlying work and original language, but
+	// cannot identify the exact acquired expression/edition. Even an adapter
+	// bug setting this flag must not bypass the exact-edition requirement.
+	workRecord.ContributorRolesObserved = true
+
+	resolution, err := newResolver(t, workRecord).Resolve(context.Background(), aliceContext())
+	if err != nil || resolution.Translation.Status != ResolutionInsufficient || resolution.Translation.State != copyrighteligibility.FactUnknown || resolution.AdditionalTextual.Status != ResolutionInsufficient || resolution.AdditionalTextual.State != copyrighteligibility.FactUnknown {
+		t.Fatalf("resolution=%#v err=%v", resolution, err)
+	}
+}
+
 func TestResolveBibliographicPositiveContributorBlocksAbsence(t *testing.T) {
 	death := 1898
 	publication := 1865
 	value := record(SourceOpenLibrary, "ol:alice", "Lewis Carroll", &death, &publication)
 	value.EditionID = "OL123M"
-	value.ContributorRecordID = value.EditionID
 	value.OriginalLanguages = []string{"en"}
 	value.ContributorRolesObserved = true
 	value.Contributors = append(value.Contributors, Contributor{Name: "Example Translator", Role: "translator"})

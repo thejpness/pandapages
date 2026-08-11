@@ -312,8 +312,8 @@ func resolveAdditionalTextual(provider copyrighteligibility.ProviderEvidence, re
 
 // resolveTranslationAbsence requires three independent, observable conditions:
 // a bounded exact-source wrapper with no translator signal, no Gutenberg RDF
-// translator, and a structured bibliographic contributor record that reports
-// no translator while its original language agrees
+// translator, and an exact-edition bibliographic contributor record that
+// reports no translator while its original language agrees
 // with the acquired source language. Missing any condition remains unknown.
 func resolveTranslationAbsence(provider copyrighteligibility.ProviderEvidence, records []BibliographicRecord, front FrontMatter) ResolvedFact {
 	if !front.Inspected || !hasSingleLanguage(provider.Languages) {
@@ -321,7 +321,7 @@ func resolveTranslationAbsence(provider copyrighteligibility.ProviderEvidence, r
 	}
 	values := make([]BibliographicRecord, 0, len(records))
 	for _, record := range records {
-		if record.ContributorRecordID != "" && record.ContributorRolesObserved && singleLanguageAgreement(provider.Languages, record.OriginalLanguages) && !hasContributorRole(record, "translator") {
+		if record.EditionID != "" && record.ContributorRolesObserved && singleLanguageAgreement(provider.Languages, record.OriginalLanguages) && !hasContributorRole(record, "translator") {
 			values = append(values, record)
 		}
 	}
@@ -332,21 +332,21 @@ func resolveTranslationAbsence(provider copyrighteligibility.ProviderEvidence, r
 		providerReference(provider, "Project Gutenberg RDF contains no recognised translator role."),
 		{Class: SourceProjectGutenberg, Source: "Project Gutenberg source front matter", Digest: front.Digest, Fact: "Bounded provider front matter contains no translator signal."},
 	}
-	evidence = append(evidence, recordReferences(values, "A structured bibliographic contributor record has matching original/source language and no translator role.")...)
+	evidence = append(evidence, recordReferences(values, "An exact-edition bibliographic contributor record has matching original/source language and no translator role.")...)
 	return ResolvedFact{Status: ResolutionEstablished, State: copyrighteligibility.FactNoneConfirmed, Reason: ReasonEstablished, Evidence: evidence}
 }
 
 // resolveAdditionalTextualAbsence requires a bounded exact-source wrapper
 // without a contributor signal, no recognised Gutenberg textual contributor,
-// and a structured contributor-role list without a relevant textual role. It
-// never treats a missing upstream field as an absence fact.
+// and an exact-edition structured contributor-role list without a relevant
+// textual role. It never treats a missing upstream field as an absence fact.
 func resolveAdditionalTextualAbsence(provider copyrighteligibility.ProviderEvidence, records []BibliographicRecord, front FrontMatter) ResolvedFact {
 	if !front.Inspected {
 		return ResolvedFact{Status: ResolutionInsufficient, State: copyrighteligibility.FactUnknown, Reason: ReasonEvidenceInsufficient}
 	}
 	values := make([]BibliographicRecord, 0, len(records))
 	for _, record := range records {
-		if record.ContributorRecordID != "" && record.ContributorRolesObserved && !hasTextualContributor(record) {
+		if record.EditionID != "" && record.ContributorRolesObserved && !hasTextualContributor(record) {
 			values = append(values, record)
 		}
 	}
@@ -357,7 +357,7 @@ func resolveAdditionalTextualAbsence(provider copyrighteligibility.ProviderEvide
 		providerReference(provider, "Project Gutenberg RDF contains no recognised additional textual contributor role."),
 		{Class: SourceProjectGutenberg, Source: "Project Gutenberg source front matter", Digest: front.Digest, Fact: "Bounded provider front matter contains no additional textual-contributor signal."},
 	}
-	evidence = append(evidence, recordReferences(values, "A structured bibliographic contributor record has no relevant textual contributor role.")...)
+	evidence = append(evidence, recordReferences(values, "An exact-edition bibliographic contributor record has no relevant textual contributor role.")...)
 	return ResolvedFact{Status: ResolutionEstablished, State: copyrighteligibility.FactNoneConfirmed, Reason: ReasonEstablished, Evidence: evidence}
 }
 

@@ -27,7 +27,8 @@ const (
 	productUserAgent = "PandaPages/1.0"
 	requestTimeout   = 15 * time.Second
 	maxResponseBytes = 512 << 10
-	maxResultRows    = 50
+	maxAcceptedRows  = 50
+	resultSentinel   = maxAcceptedRows + 1
 )
 
 var (
@@ -78,7 +79,11 @@ func (a *Adapter) Lookup(ctx context.Context, query evidenceresolver.Query) ([]e
 	if err := json.Unmarshal(body, &response); err != nil {
 		return nil, ErrInvalid
 	}
-	if len(response.Results.Bindings) > maxResultRows {
+	// The query requests one sentinel row beyond the maximum accepted result
+	// count. Seeing it means the result set may have been truncated, so no
+	// selection is safe without pagination (which this adapter intentionally
+	// does not perform).
+	if len(response.Results.Bindings) >= resultSentinel {
 		return nil, ErrInvalid
 	}
 	record, ok := exactRecord(response.Results.Bindings, query, body)
@@ -95,15 +100,13 @@ type selectResponse struct {
 }
 
 type binding struct {
-	Work            term `json:"work"`
-	Title           term `json:"title"`
-	FirstYear       term `json:"firstYear"`
-	Creator         term `json:"creator"`
-	Name            term `json:"creatorName"`
-	Contributor     term `json:"contributor"`
-	ContributorName term `json:"contributorName"`
-	Language        term `json:"language"`
-	Subject         term `json:"subject"`
+	Work      term `json:"work"`
+	Title     term `json:"title"`
+	FirstYear term `json:"firstYear"`
+	Creator   term `json:"creator"`
+	Name      term `json:"creatorName"`
+	Language  term `json:"language"`
+	Subject   term `json:"subject"`
 }
 
 type term struct {
@@ -112,15 +115,14 @@ type term struct {
 }
 
 type workCandidate struct {
-	workURI      string
-	title        string
-	year         int
-	creatorURI   string
-	creator      string
-	contributors map[string]evidenceresolver.Contributor
-	languages    map[string]struct{}
-	subjects     map[string]struct{}
-	invalid      bool
+	workURI    string
+	title      string
+	year       int
+	creatorURI string
+	creator    string
+	languages  map[string]struct{}
+	subjects   map[string]struct{}
+	invalid    bool
 }
 
 func exactRecord(bindings []binding, query evidenceresolver.Query, body []byte) (evidenceresolver.BibliographicRecord, bool) {
@@ -137,14 +139,13 @@ func exactRecord(bindings []binding, query evidenceresolver.Query, body []byte) 
 				continue
 			}
 			candidate = &workCandidate{
-				workURI:      workURI,
-				title:        strings.TrimSpace(value.Title.Value),
-				year:         year,
-				creatorURI:   strings.TrimSpace(value.Creator.Value),
-				creator:      strings.TrimSpace(value.Name.Value),
-				contributors: make(map[string]evidenceresolver.Contributor),
-				languages:    make(map[string]struct{}),
-				subjects:     make(map[string]struct{}),
+				workURI:    workURI,
+				title:      strings.TrimSpace(value.Title.Value),
+				year:       year,
+				creatorURI: strings.TrimSpace(value.Creator.Value),
+				creator:    strings.TrimSpace(value.Name.Value),
+				languages:  make(map[string]struct{}),
+				subjects:   make(map[string]struct{}),
 			}
 			candidates[workURI] = candidate
 		} else if candidate.title != strings.TrimSpace(value.Title.Value) || candidate.creatorURI != strings.TrimSpace(value.Creator.Value) || candidate.creator != strings.TrimSpace(value.Name.Value) || candidate.yearString() != strings.TrimSpace(value.FirstYear.Value) {
@@ -152,18 +153,6 @@ func exactRecord(bindings []binding, query evidenceresolver.Query, body []byte) 
 		}
 		if language, ok := languageCode(value.Language); ok {
 			candidate.languages[language] = struct{}{}
-		}
-		if value.Contributor.Value != "" || value.ContributorName.Value != "" {
-			identifier, _, ok := authorityIdentifier(value.Contributor.Value)
-			if value.Contributor.Type != "uri" || !ok || !validText(value.ContributorName.Value, 200) {
-				candidate.invalid = true
-			} else {
-				candidate.contributors[identifier] = evidenceresolver.Contributor{
-					Name:        strings.TrimSpace(value.ContributorName.Value),
-					Role:        "contributor",
-					Identifiers: []evidenceresolver.Identifier{{Source: evidenceresolver.SourceBibliothequeNationaleDeFrance, Value: identifier}},
-				}
-			}
 		}
 		if subject := strings.TrimSpace(value.Subject.Value); subject != "" && len([]rune(subject)) <= 300 {
 			candidate.subjects[subject] = struct{}{}
@@ -194,33 +183,20 @@ func exactRecord(bindings []binding, query evidenceresolver.Query, body []byte) 
 		Name:        candidate.creator,
 		Identifiers: []evidenceresolver.Identifier{{Source: evidenceresolver.SourceBibliothequeNationaleDeFrance, Value: creatorID}},
 	}
-	contributors := make([]evidenceresolver.Contributor, 0, len(candidate.contributors)+1)
-	contributors = append(contributors, evidenceresolver.Contributor{Name: author.Name, Role: "author", Identifiers: author.Identifiers})
-	for _, contributor := range candidate.contributors {
-		contributors = append(contributors, contributor)
-	}
-	sort.Slice(contributors, func(i, j int) bool {
-		if contributors[i].Role != contributors[j].Role {
-			return contributors[i].Role < contributors[j].Role
-		}
-		return contributors[i].Name < contributors[j].Name
-	})
 	return evidenceresolver.BibliographicRecord{
-		Source:                   evidenceresolver.SourceBibliothequeNationaleDeFrance,
-		SourceName:               "Bibliothèque nationale de France data.bnf.fr",
-		Identifier:               workID,
-		Locator:                  locator,
-		Digest:                   digest(body),
-		Title:                    candidate.title,
-		WorkID:                   workID,
-		ContributorRecordID:      workID,
-		Authors:                  []evidenceresolver.Person{author},
-		Contributors:             contributors,
-		FirstPublicationYear:     &year,
-		Languages:                sortedKeys(candidate.languages),
-		OriginalLanguages:        sortedKeys(candidate.languages),
-		Subjects:                 sortedKeys(candidate.subjects),
-		ContributorRolesObserved: true,
+		Source:               evidenceresolver.SourceBibliothequeNationaleDeFrance,
+		SourceName:           "Bibliothèque nationale de France data.bnf.fr",
+		Identifier:           workID,
+		Locator:              locator,
+		Digest:               digest(body),
+		Title:                candidate.title,
+		WorkID:               workID,
+		Authors:              []evidenceresolver.Person{author},
+		Contributors:         []evidenceresolver.Contributor{{Name: author.Name, Role: "author", Identifiers: author.Identifiers}},
+		FirstPublicationYear: &year,
+		Languages:            sortedKeys(candidate.languages),
+		OriginalLanguages:    sortedKeys(candidate.languages),
+		Subjects:             sortedKeys(candidate.subjects),
 	}, true
 }
 
@@ -256,14 +232,13 @@ func lookupQuery(title string) string {
 	return "PREFIX bnf: <http://data.bnf.fr/ontology/bnf-onto/>\n" +
 		"PREFIX dcterms: <http://purl.org/dc/terms/>\n" +
 		"PREFIX foaf: <http://xmlns.com/foaf/0.1/>\n" +
-		"SELECT ?work ?title ?firstYear ?creator ?creatorName ?contributor ?contributorName ?language ?subject WHERE {\n" +
+		"SELECT ?work ?title ?firstYear ?creator ?creatorName ?language ?subject WHERE {\n" +
 		"  ?work bnf:firstYear ?firstYear ; dcterms:title ?title ; dcterms:creator ?creator .\n" +
 		"  ?creator foaf:name ?creatorName .\n" +
-		"  OPTIONAL { ?work dcterms:contributor ?contributor . ?contributor foaf:name ?contributorName . }\n" +
 		"  OPTIONAL { ?work dcterms:language ?language . }\n" +
 		"  OPTIONAL { ?work bnf:subject ?subject . }\n" +
 		"  FILTER(LCASE(STR(?title)) = LCASE(" + sparqlLiteral(title) + "))\n" +
-		"}\nLIMIT 50"
+		"}\nLIMIT 51"
 }
 
 func sparqlLiteral(value string) string {

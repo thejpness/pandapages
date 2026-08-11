@@ -85,19 +85,14 @@ type Contributor struct {
 // relevant contribution is absent. Sources must not represent an edition date
 // as a first-work publication year.
 type BibliographicRecord struct {
-	Source     SourceClass
-	SourceName string
-	Identifier string
-	Locator    string
-	Digest     string
-	Title      string
-	WorkID     string
-	EditionID  string
-	// ContributorRecordID identifies the source-owned bibliographic work or
-	// edition record whose structured contributor roles were observed. It is
-	// separate from WorkID and EditionID because different providers expose
-	// contributor metadata at different bibliographic levels.
-	ContributorRecordID  string
+	Source               SourceClass
+	SourceName           string
+	Identifier           string
+	Locator              string
+	Digest               string
+	Title                string
+	WorkID               string
+	EditionID            string
 	Authors              []Person
 	Contributors         []Contributor
 	FirstPublicationYear *int
@@ -106,8 +101,8 @@ type BibliographicRecord struct {
 	Subjects             []string
 	MaterialTypes        []string
 	// ContributorRolesObserved means the source supplied a structured
-	// contributor-role list for the identified edition. An empty list is an
-	// observable result, not an adapter assertion that a contribution cannot
+	// contributor-role list for the identified exact edition. An empty list is
+	// an observable result, not an adapter assertion that a contribution cannot
 	// exist outside the record.
 	ContributorRolesObserved bool
 }

@@ -7,4 +7,10 @@
 // query shape, a 15-second timeout, no proxy, no redirects, a 512 KiB response
 // limit, and no pagination. It supplies bibliographic facts only. Panda Pages'
 // resolver centrally classifies the source as authoritative for this one fact.
+//
+// BnF models role-specific contributions on expressions (for example,
+// bnfroles:r680 for translator), not as complete work-level contributor data.
+// Current Gutenberg evidence cannot conservatively bind a BnF expression to
+// the acquired text, so this work-only adapter never uses expression silence
+// to establish absence of a translator or textual contributor.
 package bnf

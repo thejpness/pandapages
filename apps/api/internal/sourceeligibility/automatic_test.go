@@ -66,7 +66,7 @@ func (t *automaticTransport) requestCount() int {
 	return len(t.requests)
 }
 
-func TestEvaluateAliceAutomaticallyWithRuntimeBibliographicAdapters(t *testing.T) {
+func TestEvaluateAliceWithRuntimeBibliographicAdaptersPreservesContributorBoundary(t *testing.T) {
 	transport := &automaticTransport{}
 	client := &http.Client{Transport: transport}
 	resolver, err := evidenceresolver.New(evidenceresolver.Config{Sources: []evidenceresolver.BibliographicSource{
@@ -113,10 +113,10 @@ func TestEvaluateAliceAutomaticallyWithRuntimeBibliographicAdapters(t *testing.T
 	if transport.requestCount() != 3 {
 		t.Fatalf("request count=%d want=3", transport.requestCount())
 	}
-	if evaluation.EffectiveUKEvidence.WorkCategory != copyrighteligibility.WorkCategoryOrdinaryLiterary || evaluation.EffectiveUKEvidence.FirstPublication.Year != 1865 || evaluation.EffectiveUKEvidence.Translation.State != copyrighteligibility.FactNoneConfirmed || evaluation.EffectiveUKEvidence.AdditionalTextualContribution.State != copyrighteligibility.FactNoneConfirmed || evaluation.EffectiveUKEvidence.UnpublishedAtEnd1988.State != copyrighteligibility.FactNoneConfirmed {
+	if evaluation.EffectiveUKEvidence.WorkCategory != copyrighteligibility.WorkCategoryOrdinaryLiterary || evaluation.EffectiveUKEvidence.FirstPublication.Year != 1865 || evaluation.EffectiveUKEvidence.Translation.State != copyrighteligibility.FactUnknown || evaluation.EffectiveUKEvidence.AdditionalTextualContribution.State != copyrighteligibility.FactUnknown || evaluation.EffectiveUKEvidence.UnpublishedAtEnd1988.State != copyrighteligibility.FactNoneConfirmed {
 		t.Fatalf("automatic UK evidence=%#v", evaluation.EffectiveUKEvidence)
 	}
-	if evaluation.Assessment.PolicyVersion != copyrighteligibility.PolicyVersion || evaluation.Assessment.US.Status != copyrighteligibility.JurisdictionEligible || evaluation.Assessment.UK.Status != copyrighteligibility.JurisdictionEligible || evaluation.Assessment.UK.Reason != copyrighteligibility.ReasonUKOrdinaryLiteraryTermExpired || evaluation.Assessment.Overall != copyrighteligibility.OverallEligible {
+	if evaluation.Assessment.PolicyVersion != copyrighteligibility.PolicyVersion || evaluation.Assessment.US.Status != copyrighteligibility.JurisdictionEligible || evaluation.Assessment.UK.Status != copyrighteligibility.JurisdictionIndeterminate || evaluation.Assessment.UK.Reason != copyrighteligibility.ReasonUKTranslationUnknown || evaluation.Assessment.Overall != copyrighteligibility.OverallBlocked {
 		t.Fatalf("assessment=%#v", evaluation.Assessment)
 	}
 	if _, err := service.Evaluate(context.Background(), sourceprovider.ProjectGutenberg, "11", HumanUKEvidence{FirstPublication: copyrighteligibility.PublicationEvidence{Year: 1866}}); !errors.Is(err, ErrHumanEvidenceConflict) {
@@ -124,7 +124,7 @@ func TestEvaluateAliceAutomaticallyWithRuntimeBibliographicAdapters(t *testing.T
 	}
 }
 
-func TestLiveAliceAutomaticallyEligible(t *testing.T) {
+func TestLiveAliceEmptyHumanEvidencePreservesContributorBoundary(t *testing.T) {
 	if os.Getenv("PP_LIVE_EVIDENCE_SMOKE") != "1" {
 		t.Skip("set PP_LIVE_EVIDENCE_SMOKE=1 to run the bounded live Project Gutenberg Alice evidence smoke test")
 	}
@@ -149,7 +149,7 @@ func TestLiveAliceAutomaticallyEligible(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if evaluation.Assessment.PolicyVersion != copyrighteligibility.PolicyVersion || evaluation.Assessment.US.Status != copyrighteligibility.JurisdictionEligible || evaluation.Assessment.UK.Status != copyrighteligibility.JurisdictionEligible || evaluation.Assessment.UK.Reason != copyrighteligibility.ReasonUKOrdinaryLiteraryTermExpired || evaluation.Assessment.Overall != copyrighteligibility.OverallEligible {
+	if evaluation.Assessment.PolicyVersion != copyrighteligibility.PolicyVersion || evaluation.Assessment.US.Status != copyrighteligibility.JurisdictionEligible || evaluation.Assessment.UK.Status != copyrighteligibility.JurisdictionIndeterminate || evaluation.Assessment.UK.Reason != copyrighteligibility.ReasonUKTranslationUnknown || evaluation.Assessment.Overall != copyrighteligibility.OverallBlocked || evaluation.EffectiveUKEvidence.Translation.State != copyrighteligibility.FactUnknown || evaluation.EffectiveUKEvidence.AdditionalTextualContribution.State != copyrighteligibility.FactUnknown {
 		t.Fatalf("assessment=%#v evidence=%#v", evaluation.Assessment, evaluation.EffectiveUKEvidence)
 	}
 }
