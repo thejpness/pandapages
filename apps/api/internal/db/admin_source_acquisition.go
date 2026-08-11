@@ -712,6 +712,7 @@ type sourceEligibilityAssessmentInput struct {
 func sourceEligibilityAssessmentInputFor(acquisitionID string, acquisition adminSourceAcquisition, evaluation sourceeligibility.Evaluation) (sourceEligibilityAssessmentInput, error) {
 	if evaluation.Candidate.Provider != sourceprovider.ID(acquisition.Provider) || evaluation.Candidate.ExternalID != acquisition.ExternalID ||
 		evaluation.ProviderEvidence.Provider != acquisition.Provider || evaluation.ProviderEvidence.ExternalID != acquisition.ExternalID ||
+		strings.TrimSpace(evaluation.EffectiveUKEvidence.WorkTitle) != strings.TrimSpace(evaluation.ProviderEvidence.Title) ||
 		evaluation.Assessment.PolicyVersion != copyrighteligibility.PolicyVersion ||
 		evaluation.Assessment.Overall != copyrighteligibility.OverallEligible ||
 		evaluation.Assessment.US.Status != copyrighteligibility.JurisdictionEligible ||
@@ -849,7 +850,7 @@ func (stored storedSourceEligibilityAssessment) matches(input sourceEligibilityA
 func (stored storedSourceEligibilityAssessment) eligibility() (*model.AdminSourceEligibility, error) {
 	effective := model.AdminSourceEligibilityEffectiveUKEvidence{}
 	provider := sourceEligibilityProviderSnapshot{}
-	if json.Unmarshal([]byte(stored.EffectiveUKJSON), &effective) != nil || json.Unmarshal([]byte(stored.ProviderEvidenceJSON), &provider) != nil {
+	if decodeStoredSourceEligibilityJSON(stored.EffectiveUKJSON, &effective) != nil || decodeStoredSourceEligibilityJSON(stored.ProviderEvidenceJSON, &provider) != nil {
 		return nil, errStoredSourceAcquisitionInvalid
 	}
 	result := model.AdminSourceEligibility{
@@ -882,8 +883,20 @@ func (stored storedSourceAcquisition) eligibility() (*model.AdminSourceEligibili
 	return (storedSourceEligibilityAssessment{AcquisitionID: stored.ID, AcquisitionSnapshot: stored.SnapshotHash, Provider: stored.Provider, ExternalID: stored.ExternalID, PolicyVersion: stored.AssessmentPolicyVersion.String, EvaluationDate: stored.AssessmentEvaluationDate.Time, EvaluatedAt: stored.AssessmentEvaluatedAt.Time, USStatus: stored.AssessmentUSStatus.String, USReason: stored.AssessmentUSReason.String, OPDSRights: stored.AssessmentOPDSRights.String, RDFRights: stored.AssessmentRDFRights.String, HeaderRights: stored.AssessmentHeaderRights.String, UKStatus: stored.AssessmentUKStatus.String, UKReason: stored.AssessmentUKReason.String, EffectiveUKJSON: stored.AssessmentEffectiveUKJSON.String, ProviderEvidenceJSON: stored.AssessmentProviderJSON.String, OverallStatus: stored.AssessmentOverallStatus.String, OverallReason: stored.AssessmentOverallReason.String, AssessmentHash: stored.AssessmentHash.String}).eligibility()
 }
 
+func decodeStoredSourceEligibilityJSON(value string, destination any) error {
+	decoder := json.NewDecoder(strings.NewReader(value))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(destination); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return err
+	}
+	return nil
+}
+
 func modelEffectiveUKEvidence(value copyrighteligibility.UKEvidence) model.AdminSourceEligibilityEffectiveUKEvidence {
-	return model.AdminSourceEligibilityEffectiveUKEvidence{WorkCategory: string(value.WorkCategory), WorkCategoryReferences: modelEvidenceReferences(value.WorkCategoryReferences), Authorship: string(value.Authorship), AuthorshipReferences: modelEvidenceReferences(value.AuthorshipReferences), AuthorName: value.Author.Name, AuthorDeathYear: value.Author.DeathYear, AuthorReferences: modelEvidenceReferences(value.Author.References), FirstPublicationYear: value.FirstPublication.Year, FirstPublicationRefs: modelEvidenceReferences(value.FirstPublication.References), Translation: modelFactEvidence(value.Translation), AdditionalTextual: modelFactEvidence(value.AdditionalTextualContribution), SpecialCategory: modelFactEvidence(value.SpecialCategory), UnpublishedAtEnd1988: modelFactEvidence(value.UnpublishedAtEnd1988)}
+	return model.AdminSourceEligibilityEffectiveUKEvidence{WorkTitle: value.WorkTitle, WorkCategory: string(value.WorkCategory), WorkCategoryReferences: modelEvidenceReferences(value.WorkCategoryReferences), Authorship: string(value.Authorship), AuthorshipReferences: modelEvidenceReferences(value.AuthorshipReferences), AuthorName: value.Author.Name, AuthorDeathYear: value.Author.DeathYear, AuthorReferences: modelEvidenceReferences(value.Author.References), FirstPublicationYear: value.FirstPublication.Year, FirstPublicationRefs: modelEvidenceReferences(value.FirstPublication.References), Translation: modelFactEvidence(value.Translation), AdditionalTextual: modelFactEvidence(value.AdditionalTextualContribution), UnpublishedAtEnd1988: modelFactEvidence(value.UnpublishedAtEnd1988)}
 }
 
 func modelFactEvidence(value copyrighteligibility.FactEvidence) model.AdminCopyrightFactEvidence {
@@ -907,7 +920,7 @@ func sourceAcquisitionOptionalString(value string) *string {
 }
 
 func validateSourceEligibility(value model.AdminSourceEligibility) bool {
-	if value.PolicyVersion != copyrighteligibility.PolicyVersion || value.EvaluationDate == "" || value.EvaluatedAt == "" || !sourceAcquisitionHashPattern.MatchString(value.RDFDigest) || value.ProviderTitle == "" || !copyrighteligibility.IsJurisdictionStatus(copyrighteligibility.JurisdictionStatus(value.US.Status)) || !copyrighteligibility.IsReasonCode(copyrighteligibility.ReasonCode(value.US.Reason)) || !copyrighteligibility.IsJurisdictionStatus(copyrighteligibility.JurisdictionStatus(value.UK.Status)) || !copyrighteligibility.IsReasonCode(copyrighteligibility.ReasonCode(value.UK.Reason)) || !copyrighteligibility.IsOverallStatus(copyrighteligibility.OverallStatus(value.Overall)) || !copyrighteligibility.IsReasonCode(copyrighteligibility.ReasonCode(value.OverallReason)) {
+	if value.PolicyVersion != copyrighteligibility.PolicyVersion || value.EvaluationDate == "" || value.EvaluatedAt == "" || !sourceAcquisitionHashPattern.MatchString(value.RDFDigest) || value.ProviderTitle == "" || strings.TrimSpace(value.EffectiveUK.WorkTitle) != strings.TrimSpace(value.ProviderTitle) || !copyrighteligibility.IsJurisdictionStatus(copyrighteligibility.JurisdictionStatus(value.US.Status)) || !copyrighteligibility.IsReasonCode(copyrighteligibility.ReasonCode(value.US.Reason)) || !copyrighteligibility.IsJurisdictionStatus(copyrighteligibility.JurisdictionStatus(value.UK.Status)) || !copyrighteligibility.IsReasonCode(copyrighteligibility.ReasonCode(value.UK.Reason)) || !copyrighteligibility.IsOverallStatus(copyrighteligibility.OverallStatus(value.Overall)) || !copyrighteligibility.IsReasonCode(copyrighteligibility.ReasonCode(value.OverallReason)) {
 		return false
 	}
 	if _, err := time.Parse("2006-01-02", value.EvaluationDate); err != nil {
@@ -930,7 +943,7 @@ func validateSourceEligibility(value model.AdminSourceEligibility) bool {
 	return sourceEligibilityMatchesPolicy(value)
 }
 
-// sourceEligibilityMatchesPolicy independently reconstructs policy v1 from
+// sourceEligibilityMatchesPolicy independently reconstructs policy v2 from
 // stored evidence. Database rows are evidence, not inherently trustworthy:
 // malformed or internally contradictory assessment data fails closed.
 func sourceEligibilityMatchesPolicy(value model.AdminSourceEligibility) bool {
@@ -969,6 +982,7 @@ func policyUKEvidence(value model.AdminSourceEligibilityEffectiveUKEvidence) (co
 		return copyrighteligibility.FactEvidence{State: copyrighteligibility.FactState(fact.State), References: convertReferences(fact.References)}
 	}
 	return copyrighteligibility.UKEvidence{
+		WorkTitle:                     value.WorkTitle,
 		WorkCategory:                  copyrighteligibility.WorkCategory(value.WorkCategory),
 		WorkCategoryReferences:        convertReferences(value.WorkCategoryReferences),
 		Authorship:                    copyrighteligibility.AuthorshipCategory(value.Authorship),
@@ -977,7 +991,6 @@ func policyUKEvidence(value model.AdminSourceEligibilityEffectiveUKEvidence) (co
 		FirstPublication:              copyrighteligibility.PublicationEvidence{Year: value.FirstPublicationYear, References: convertReferences(value.FirstPublicationRefs)},
 		Translation:                   convertFact(value.Translation),
 		AdditionalTextualContribution: convertFact(value.AdditionalTextual),
-		SpecialCategory:               convertFact(value.SpecialCategory),
 		UnpublishedAtEnd1988:          convertFact(value.UnpublishedAtEnd1988),
 	}, true
 }
@@ -997,10 +1010,10 @@ func validHeaderRights(value string) bool {
 }
 
 func validEffectiveUKEvidence(value model.AdminSourceEligibilityEffectiveUKEvidence) bool {
-	if value.WorkCategory != string(copyrighteligibility.WorkCategoryOrdinaryLiterary) || value.Authorship != string(copyrighteligibility.AuthorshipSingleKnown) || !validSourceAcquisitionText(value.AuthorName, 500) || value.AuthorDeathYear < 1 || value.FirstPublicationYear < 1 || !validEvidenceReferences(value.WorkCategoryReferences) || !validEvidenceReferences(value.AuthorshipReferences) || !validEvidenceReferences(value.AuthorReferences) || !validEvidenceReferences(value.FirstPublicationRefs) {
+	if !validSourceAcquisitionText(value.WorkTitle, 500) || value.WorkCategory != string(copyrighteligibility.WorkCategoryOrdinaryLiterary) || value.Authorship != string(copyrighteligibility.AuthorshipSingleKnown) || !validSourceAcquisitionText(value.AuthorName, 500) || value.AuthorDeathYear < 1 || value.FirstPublicationYear < 1 || !validEvidenceReferences(value.WorkCategoryReferences) || !validEvidenceReferences(value.AuthorshipReferences) || !validEvidenceReferences(value.AuthorReferences) || !validEvidenceReferences(value.FirstPublicationRefs) {
 		return false
 	}
-	return validFactEvidence(value.Translation) && validFactEvidence(value.AdditionalTextual) && validFactEvidence(value.SpecialCategory) && validFactEvidence(value.UnpublishedAtEnd1988)
+	return validFactEvidence(value.Translation) && validFactEvidence(value.AdditionalTextual) && validFactEvidence(value.UnpublishedAtEnd1988)
 }
 
 func validFactEvidence(value model.AdminCopyrightFactEvidence) bool {

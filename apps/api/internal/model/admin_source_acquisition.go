@@ -67,7 +67,6 @@ type AdminSourceEligibilityHumanEvidence struct {
 	FirstPublicationRefs   []AdminCopyrightEvidenceReference `json:"firstPublicationReferences"`
 	Translation            AdminCopyrightFactEvidence        `json:"translation"`
 	AdditionalTextual      AdminCopyrightFactEvidence        `json:"additionalTextualContribution"`
-	SpecialCategory        AdminCopyrightFactEvidence        `json:"specialCategory"`
 	UnpublishedAtEnd1988   AdminCopyrightFactEvidence        `json:"unpublishedAtEnd1988"`
 }
 
@@ -75,6 +74,7 @@ type AdminSourceEligibilityHumanEvidence struct {
 // actually evaluated after provider facts have been bound server-side. It is
 // immutable assessment evidence, not browser input.
 type AdminSourceEligibilityEffectiveUKEvidence struct {
+	WorkTitle              string                            `json:"workTitle"`
 	WorkCategory           string                            `json:"workCategory"`
 	WorkCategoryReferences []AdminCopyrightEvidenceReference `json:"workCategoryReferences"`
 	Authorship             string                            `json:"authorship"`
@@ -86,7 +86,6 @@ type AdminSourceEligibilityEffectiveUKEvidence struct {
 	FirstPublicationRefs   []AdminCopyrightEvidenceReference `json:"firstPublicationReferences"`
 	Translation            AdminCopyrightFactEvidence        `json:"translation"`
 	AdditionalTextual      AdminCopyrightFactEvidence        `json:"additionalTextualContribution"`
-	SpecialCategory        AdminCopyrightFactEvidence        `json:"specialCategory"`
 	UnpublishedAtEnd1988   AdminCopyrightFactEvidence        `json:"unpublishedAtEnd1988"`
 }
 

@@ -23,7 +23,7 @@ func (s sourceStub) Lookup(context.Context, Query) ([]BibliographicRecord, error
 
 // This test exercises synthetic cross-source reconciliation rules only. It is
 // not a claim that a production adapter supplies Library of Congress evidence.
-func TestResolveSyntheticCrossSourceFactsRemainFailClosedForSpecialCategory(t *testing.T) {
+func TestResolveSyntheticCrossSourceFactsCanProduceEligibleUKEvidence(t *testing.T) {
 	death := 1898
 	publication := 1865
 	loc := record(SourceLibraryOfCongress, "loc:alice", "Lewis Carroll", &death, &publication)
@@ -44,11 +44,8 @@ func TestResolveSyntheticCrossSourceFactsRemainFailClosedForSpecialCategory(t *t
 	if resolution.WorkCategory.Status != ResolutionEstablished || resolution.Authorship.Value != copyrighteligibility.AuthorshipSingleKnown || resolution.Author.DeathYear != 1898 || resolution.FirstPublication.Year != 1865 || resolution.UnpublishedAtEnd1988.State != copyrighteligibility.FactNoneConfirmed {
 		t.Fatalf("resolution=%#v", resolution)
 	}
-	if resolution.SpecialCategory.Status != ResolutionInsufficient || resolution.SpecialCategory.Reason != ReasonSpecialCategoryNotAutoResolved {
-		t.Fatalf("special=%#v", resolution.SpecialCategory)
-	}
 	assessment := copyrighteligibility.Evaluate(copyrighteligibility.Input{EvaluationDate: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), UK: ToUKEvidence(resolution)})
-	if assessment.UK.Status != copyrighteligibility.JurisdictionIndeterminate || assessment.UK.Reason != copyrighteligibility.ReasonUKSpecialCategoryUnsupported {
+	if assessment.UK.Status != copyrighteligibility.JurisdictionEligible || assessment.UK.Reason != copyrighteligibility.ReasonUKOrdinaryLiteraryTermExpired {
 		t.Fatalf("assessment=%#v", assessment)
 	}
 }

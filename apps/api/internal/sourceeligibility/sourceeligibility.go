@@ -39,7 +39,6 @@ type HumanUKEvidence struct {
 	FirstPublication       copyrighteligibility.PublicationEvidence
 	Translation            copyrighteligibility.FactEvidence
 	AdditionalTextual      copyrighteligibility.FactEvidence
-	SpecialCategory        copyrighteligibility.FactEvidence
 	UnpublishedAtEnd1988   copyrighteligibility.FactEvidence
 }
 
@@ -128,6 +127,7 @@ func bindGutenbergUKEvidence(provider copyrighteligibility.ProviderEvidence, hum
 		return copyrighteligibility.UKEvidence{}, ErrProviderEvidenceInvalid
 	}
 	result := copyrighteligibility.UKEvidence{
+		WorkTitle:              strings.TrimSpace(provider.Title),
 		WorkCategory:           human.WorkCategory,
 		WorkCategoryReferences: canonicalReferences(human.WorkCategoryReferences),
 		FirstPublication: copyrighteligibility.PublicationEvidence{
@@ -136,7 +136,6 @@ func bindGutenbergUKEvidence(provider copyrighteligibility.ProviderEvidence, hum
 		},
 		Translation:                   canonicalFactEvidence(human.Translation),
 		AdditionalTextualContribution: canonicalFactEvidence(human.AdditionalTextual),
-		SpecialCategory:               canonicalFactEvidence(human.SpecialCategory),
 		UnpublishedAtEnd1988:          canonicalFactEvidence(human.UnpublishedAtEnd1988),
 	}
 
@@ -225,13 +224,13 @@ func canonicalProviderEvidence(value copyrighteligibility.ProviderEvidence) copy
 }
 
 func canonicalUKEvidence(value copyrighteligibility.UKEvidence) copyrighteligibility.UKEvidence {
+	value.WorkTitle = strings.TrimSpace(value.WorkTitle)
 	value.WorkCategoryReferences = canonicalReferences(value.WorkCategoryReferences)
 	value.AuthorshipReferences = canonicalReferences(value.AuthorshipReferences)
 	value.Author.References = canonicalReferences(value.Author.References)
 	value.FirstPublication.References = canonicalReferences(value.FirstPublication.References)
 	value.Translation = canonicalFactEvidence(value.Translation)
 	value.AdditionalTextualContribution = canonicalFactEvidence(value.AdditionalTextualContribution)
-	value.SpecialCategory = canonicalFactEvidence(value.SpecialCategory)
 	value.UnpublishedAtEnd1988 = canonicalFactEvidence(value.UnpublishedAtEnd1988)
 	return value
 }

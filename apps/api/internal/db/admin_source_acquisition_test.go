@@ -96,6 +96,14 @@ func TestSourceEligibilityAssessmentHashUsesSemanticEvidenceNotTimestamp(t *test
 	}
 }
 
+func TestDecodeStoredSourceEligibilityJSONRejectsRemovedSpecialCategory(t *testing.T) {
+	var effective model.AdminSourceEligibilityEffectiveUKEvidence
+	err := decodeStoredSourceEligibilityJSON(`{"workTitle":"Alice's Adventures in Wonderland","specialCategory":{"state":"none_confirmed","references":[]}}`, &effective)
+	if err == nil {
+		t.Fatal("removed specialCategory was accepted in stored assessment evidence")
+	}
+}
+
 func TestCanonicalSourceAcquisitionQualityReview(t *testing.T) {
 	tests := []struct {
 		name       string

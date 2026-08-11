@@ -7,11 +7,11 @@ import "pandapages/api/internal/copyrighteligibility"
 // policy's unknown/unsupported zero values.
 func ToUKEvidence(resolution Resolution) copyrighteligibility.UKEvidence {
 	result := copyrighteligibility.UKEvidence{
+		WorkTitle:                     resolution.WorkTitle,
 		WorkCategory:                  copyrighteligibility.WorkCategoryUnknown,
 		Authorship:                    copyrighteligibility.AuthorshipUnknown,
 		Translation:                   copyrighteligibility.FactEvidence{State: copyrighteligibility.FactUnknown},
 		AdditionalTextualContribution: copyrighteligibility.FactEvidence{State: copyrighteligibility.FactUnknown},
-		SpecialCategory:               copyrighteligibility.FactEvidence{State: copyrighteligibility.FactUnknown},
 		UnpublishedAtEnd1988:          copyrighteligibility.FactEvidence{State: copyrighteligibility.FactUnknown},
 	}
 	if resolution.WorkCategory.Status == ResolutionEstablished {
@@ -30,7 +30,6 @@ func ToUKEvidence(resolution Resolution) copyrighteligibility.UKEvidence {
 	}
 	result.Translation = policyFact(resolution.Translation)
 	result.AdditionalTextualContribution = policyFact(resolution.AdditionalTextual)
-	result.SpecialCategory = policyFact(resolution.SpecialCategory)
 	result.UnpublishedAtEnd1988 = policyFact(resolution.UnpublishedAtEnd1988)
 	return result
 }

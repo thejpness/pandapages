@@ -9,7 +9,7 @@ import "time"
 // PolicyVersion identifies the deliberately narrow Panda Pages policy used to
 // derive an assessment. It is stable application policy, not a source-control
 // revision or a claim of legal certainty.
-const PolicyVersion = "panda-pages-copyright-v1"
+const PolicyVersion = "panda-pages-copyright-v2"
 
 type JurisdictionStatus string
 
@@ -57,8 +57,9 @@ const (
 	ReasonUKAdditionalContributionPresent         ReasonCode = "uk_additional_contribution_present"
 	ReasonUKAdditionalContributionUnknown         ReasonCode = "uk_additional_contribution_unknown"
 	ReasonUKAdditionalContributionEvidenceMissing ReasonCode = "uk_additional_contribution_evidence_missing"
-	ReasonUKSpecialCategoryUnsupported            ReasonCode = "uk_special_category_unsupported"
-	ReasonUKSpecialCategoryEvidenceMissing        ReasonCode = "uk_special_category_evidence_missing"
+	ReasonUKKnownExceptionPeterPan                ReasonCode = "uk_known_exception_peter_pan"
+	ReasonUKKnownExceptionKingJamesBible          ReasonCode = "uk_known_exception_king_james_bible"
+	ReasonUKKnownExceptionBookOfCommonPrayer      ReasonCode = "uk_known_exception_book_of_common_prayer"
 	ReasonUKUnpublishedHistoryUnsupported         ReasonCode = "uk_unpublished_history_unsupported"
 	ReasonUKUnpublishedHistoryEvidenceMissing     ReasonCode = "uk_unpublished_history_evidence_missing"
 	ReasonUKAuthorDeathInvalid                    ReasonCode = "uk_author_death_invalid"
@@ -174,9 +175,10 @@ type FactEvidence struct {
 }
 
 // UKEvidence deliberately represents only the ordinary published literary
-// work subset supported by policy v1. Unsupported categories remain explicit
+// work subset supported by policy v2. Unsupported categories remain explicit
 // rather than being approximated by zero values or prose.
 type UKEvidence struct {
+	WorkTitle                     string
 	WorkCategory                  WorkCategory
 	Authorship                    AuthorshipCategory
 	WorkCategoryReferences        []EvidenceReference
@@ -185,7 +187,6 @@ type UKEvidence struct {
 	FirstPublication              PublicationEvidence
 	Translation                   FactEvidence
 	AdditionalTextualContribution FactEvidence
-	SpecialCategory               FactEvidence
 	UnpublishedAtEnd1988          FactEvidence
 }
 
@@ -222,7 +223,7 @@ func IsOverallStatus(value OverallStatus) bool {
 	return value == OverallEligible || value == OverallBlocked
 }
 
-// IsReasonCode reports whether value is a reason emitted by policy v1.
+// IsReasonCode reports whether value is a reason emitted by policy v2.
 func IsReasonCode(value ReasonCode) bool {
 	switch value {
 	case ReasonUSProviderPublicDomainConfirmed, ReasonUSProviderRestricted,
@@ -238,8 +239,9 @@ func IsReasonCode(value ReasonCode) bool {
 		ReasonUKPublicationPosthumousUnsupported, ReasonUKTranslationPresent,
 		ReasonUKTranslationUnknown, ReasonUKTranslationEvidenceMissing,
 		ReasonUKAdditionalContributionPresent, ReasonUKAdditionalContributionUnknown,
-		ReasonUKAdditionalContributionEvidenceMissing, ReasonUKSpecialCategoryUnsupported,
-		ReasonUKSpecialCategoryEvidenceMissing, ReasonUKUnpublishedHistoryUnsupported,
+		ReasonUKAdditionalContributionEvidenceMissing, ReasonUKKnownExceptionPeterPan,
+		ReasonUKKnownExceptionKingJamesBible, ReasonUKKnownExceptionBookOfCommonPrayer,
+		ReasonUKUnpublishedHistoryUnsupported,
 		ReasonUKUnpublishedHistoryEvidenceMissing, ReasonUKAuthorDeathInvalid,
 		ReasonUKAuthorDeathFuture, ReasonUKPublicationYearInvalid,
 		ReasonUKPublicationYearFuture, ReasonOverallEligible, ReasonOverallBlocked:
