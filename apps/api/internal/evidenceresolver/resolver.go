@@ -248,10 +248,12 @@ func matchingExternalAuthors(provider Person, records []BibliographicRecord) ([]
 	return matches, false
 }
 
-// resolveFirstPublication applies the v1 source-priority rule: a publication
-// year is established only when a Library of Congress record and at least one
-// independent structured source agree. A corroborating-only record is never
-// enough, and any observed disagreement remains conflicting.
+// resolveFirstPublication applies Panda Pages' publication-evidence policy. A
+// year is established only when an authoritative bibliographic source class
+// and an independent source class agree. The algorithm is provider-neutral;
+// the publicationAuthority table centrally assigns the current source classes.
+// Corroborating-only evidence is never enough, and disagreement remains
+// conflicting regardless of source authority.
 func resolveFirstPublication(records []BibliographicRecord) ResolvedYear {
 	values := make([]BibliographicRecord, 0, len(records))
 	for _, record := range records {
@@ -267,10 +269,14 @@ func resolveFirstPublication(records []BibliographicRecord) ResolvedYear {
 			return ResolvedYear{Status: ResolutionConflicting, Reason: ReasonEvidenceConflict, Evidence: recordReferences(values, "Bibliographic records disagree about first publication year.")}
 		}
 	}
-	if !hasAuthorityAndCorroboration(values) {
-		return ResolvedYear{Status: ResolutionInsufficient, Reason: ReasonEvidenceInsufficient, Evidence: recordReferences(values, "Publication year requires Library of Congress evidence and an independent corroborating record.")}
+	classes := distinctClasses(values)
+	if !hasAuthoritativePublicationClass(classes) {
+		return ResolvedYear{Status: ResolutionInsufficient, Reason: ReasonEvidenceInsufficient, Evidence: recordReferences(values, "Publication year requires authoritative bibliographic evidence and an independent corroborating source.")}
 	}
-	return ResolvedYear{Status: ResolutionEstablished, Year: *values[0].FirstPublicationYear, Reason: ReasonEstablished, Evidence: recordReferences(values, "Library of Congress and an independent bibliographic source agree on first publication year.")}
+	if len(classes) < 2 {
+		return ResolvedYear{Status: ResolutionInsufficient, Reason: ReasonEvidenceInsufficient, Evidence: recordReferences(values, "Authoritative publication evidence requires an independent bibliographic source class to corroborate it.")}
+	}
+	return ResolvedYear{Status: ResolutionEstablished, Year: *values[0].FirstPublicationYear, Reason: ReasonEstablished, Evidence: recordReferences(values, "An authoritative bibliographic source and an independent source agree on first publication year.")}
 }
 
 func resolveTranslation(provider copyrighteligibility.ProviderEvidence, records []BibliographicRecord, front FrontMatter) ResolvedFact {
@@ -434,12 +440,28 @@ func distinctClasses(records []BibliographicRecord) map[SourceClass]struct{} {
 	return result
 }
 
-func hasAuthorityAndCorroboration(records []BibliographicRecord) bool {
-	classes := distinctClasses(records)
-	if _, ok := classes[SourceLibraryOfCongress]; !ok {
-		return false
+// publicationAuthority is the central Panda Pages policy for this one fact.
+// Library of Congress is currently the only authoritative class; Open Library
+// and Wikidata are corroborating. Adding another authority requires updating
+// this table alongside its source class and adapter, never this algorithm.
+func publicationAuthority(class SourceClass) PublicationAuthority {
+	switch class {
+	case SourceLibraryOfCongress:
+		return PublicationAuthorityAuthoritative
+	case SourceOpenLibrary, SourceWikidata:
+		return PublicationAuthorityCorroborating
+	default:
+		return ""
 	}
-	return len(classes) >= 2
+}
+
+func hasAuthoritativePublicationClass(classes map[SourceClass]struct{}) bool {
+	for class := range classes {
+		if publicationAuthority(class) == PublicationAuthorityAuthoritative {
+			return true
+		}
+	}
+	return false
 }
 
 func recordReferences(records []BibliographicRecord, fact string) []EvidenceItem {

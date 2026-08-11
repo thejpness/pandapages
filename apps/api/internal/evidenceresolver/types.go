@@ -37,6 +37,17 @@ const (
 	SourceWikidata          SourceClass = "wikidata"
 )
 
+// PublicationAuthority is Panda Pages' fact-specific trust policy for
+// original-work first-publication evidence. It is not a universal statement
+// about a source's authority for author identity, edition identity, or another
+// fact type.
+type PublicationAuthority string
+
+const (
+	PublicationAuthorityAuthoritative PublicationAuthority = "authoritative"
+	PublicationAuthorityCorroborating PublicationAuthority = "corroborating"
+)
+
 // EvidenceItem is bounded factual provenance. Locator is descriptive only; no
 // resolver path ever fetches a locator from this value.
 type EvidenceItem struct {

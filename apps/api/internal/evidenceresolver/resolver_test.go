@@ -150,24 +150,81 @@ func TestResolveConflictingAndMissingPublicationCannotPass(t *testing.T) {
 	}
 }
 
-func TestResolveUsesDeterministicAuthorityAndCorroborationRules(t *testing.T) {
+func TestResolveFirstPublicationRequiresAuthoritativeIndependentEvidence(t *testing.T) {
 	death := 1898
 	publication := 1865
-	resolver := newResolver(t, record(SourceOpenLibrary, "ol:alice", "Lewis Carroll", &death, &publication))
-	resolution, err := resolver.Resolve(context.Background(), aliceContext())
-	if err != nil || resolution.FirstPublication.Status != ResolutionInsufficient {
-		t.Fatalf("open-library-only=%#v err=%v", resolution.FirstPublication, err)
-	}
-	resolver = newResolver(t, record(SourceLibraryOfCongress, "loc:alice", "Lewis Carroll", &death, &publication), record(SourceOpenLibrary, "ol:alice", "Lewis Carroll", &death, &publication))
-	resolution, err = resolver.Resolve(context.Background(), aliceContext())
-	if err != nil || resolution.FirstPublication.Status != ResolutionEstablished {
-		t.Fatalf("corroborated=%#v err=%v", resolution.FirstPublication, err)
-	}
 	publicationConflict := 1866
-	resolver = newResolver(t, record(SourceLibraryOfCongress, "loc:alice", "Lewis Carroll", &death, &publication), record(SourceWikidata, "wd:alice", "Lewis Carroll", &death, &publicationConflict))
-	resolution, err = resolver.Resolve(context.Background(), aliceContext())
-	if err != nil || resolution.FirstPublication.Status != ResolutionConflicting {
-		t.Fatalf("strong-source-conflict=%#v err=%v", resolution.FirstPublication, err)
+	for _, test := range []struct {
+		name     string
+		records  []BibliographicRecord
+		status   ResolutionStatus
+		year     int
+		evidence int
+	}{
+		{
+			name:     "authoritative plus corroborator",
+			records:  []BibliographicRecord{record(SourceLibraryOfCongress, "loc:alice", "Lewis Carroll", &death, &publication), record(SourceOpenLibrary, "ol:alice", "Lewis Carroll", &death, &publication)},
+			status:   ResolutionEstablished,
+			year:     publication,
+			evidence: 2,
+		},
+		{
+			name:     "two corroborators",
+			records:  []BibliographicRecord{record(SourceOpenLibrary, "ol:alice", "Lewis Carroll", &death, &publication), record(SourceWikidata, "wd:alice", "Lewis Carroll", &death, &publication)},
+			status:   ResolutionInsufficient,
+			evidence: 2,
+		},
+		{
+			name:     "authoritative alone",
+			records:  []BibliographicRecord{record(SourceLibraryOfCongress, "loc:alice", "Lewis Carroll", &death, &publication)},
+			status:   ResolutionInsufficient,
+			evidence: 1,
+		},
+		{
+			name:     "authoritative and corroborator conflict",
+			records:  []BibliographicRecord{record(SourceLibraryOfCongress, "loc:alice", "Lewis Carroll", &death, &publication), record(SourceOpenLibrary, "ol:alice", "Lewis Carroll", &death, &publicationConflict)},
+			status:   ResolutionConflicting,
+			evidence: 2,
+		},
+		{
+			name:     "duplicate authoritative class",
+			records:  []BibliographicRecord{record(SourceLibraryOfCongress, "loc:alice:one", "Lewis Carroll", &death, &publication), record(SourceLibraryOfCongress, "loc:alice:two", "Lewis Carroll", &death, &publication)},
+			status:   ResolutionInsufficient,
+			evidence: 2,
+		},
+		{
+			name:     "duplicate corroborating class",
+			records:  []BibliographicRecord{record(SourceOpenLibrary, "ol:alice:one", "Lewis Carroll", &death, &publication), record(SourceOpenLibrary, "ol:alice:two", "Lewis Carroll", &death, &publication)},
+			status:   ResolutionInsufficient,
+			evidence: 2,
+		},
+		{
+			name:   "no publication evidence",
+			status: ResolutionInsufficient,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolution := resolveFirstPublication(test.records)
+			if resolution.Status != test.status || resolution.Year != test.year || len(resolution.Evidence) != test.evidence {
+				t.Fatalf("resolution=%#v", resolution)
+			}
+		})
+	}
+}
+
+func TestPublicationAuthorityIsCentralAndFactSpecific(t *testing.T) {
+	for _, test := range []struct {
+		class SourceClass
+		want  PublicationAuthority
+	}{
+		{SourceLibraryOfCongress, PublicationAuthorityAuthoritative},
+		{SourceOpenLibrary, PublicationAuthorityCorroborating},
+		{SourceWikidata, PublicationAuthorityCorroborating},
+		{SourceProjectGutenberg, ""},
+	} {
+		if got := publicationAuthority(test.class); got != test.want {
+			t.Fatalf("publicationAuthority(%q)=%q want=%q", test.class, got, test.want)
+		}
 	}
 }
 
