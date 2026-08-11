@@ -39,6 +39,7 @@ type Store interface {
 	AdminPersistEligibleSourceAcquisition(sourceeligibility.Evaluation) (model.AdminSourceAcquisitionPersistResponse, error)
 	AdminListSourceAcquisitions(limit int) (model.AdminSourceAcquisitionsListResponse, error)
 	AdminGetSourceAcquisition(id string) (model.AdminSourceAcquisitionDetail, error)
+	AdminPromoteSourceAcquisition(id string, req model.AdminSourceAcquisitionPromotionRequest) (model.AdminSourceAcquisitionPromotionResponse, error)
 	AdminUpdateSourceAcquisitionSourceQualityReview(id string, req model.AdminSourceQualityReviewUpdateRequest) (model.AdminSourceAcquisitionSummary, error)
 }
 
@@ -48,6 +49,7 @@ const (
 	maxJSONBodyBytes           = 20 << 20 // 20MB
 	sourceProviderMaximumLimit = 20
 	maxSourceEligibilityBody   = 64 << 10
+	maxSourcePromotionBody     = 32 << 10
 )
 
 var errSourceEligibilityInput = errors.New("source eligibility evidence is invalid")
@@ -296,6 +298,25 @@ func New(cfg Config, store Store) http.Handler {
 		writeJSON(w, http.StatusOK, out)
 	}))
 
+	mux.HandleFunc("POST /api/v1/admin/source-acquisitions/{acquisitionID}/promote", withAdmin(func(w http.ResponseWriter, r *http.Request) {
+		var body model.AdminSourceAcquisitionPromotionRequest
+		if err := decodeJSONLimit(w, r, &body, maxSourcePromotionBody); err != nil {
+			writeDecodeError(w, err)
+			return
+		}
+		out, err := store.AdminPromoteSourceAcquisition(strings.TrimSpace(r.PathValue("acquisitionID")), body)
+		if err != nil {
+			writeSourceAcquisitionError(w, err, false)
+			return
+		}
+		noStore(w)
+		status := http.StatusOK
+		if out.Outcome == model.AdminSourceAcquisitionPromotionCreated {
+			status = http.StatusCreated
+		}
+		writeJSON(w, status, out)
+	}))
+
 	mux.HandleFunc("PUT /api/v1/admin/source-acquisitions/{acquisitionID}/source-quality-review", withAdmin(func(w http.ResponseWriter, r *http.Request) {
 		var body model.AdminSourceQualityReviewUpdateRequest
 		if err := decodeJSON(w, r, &body); err != nil {
@@ -539,6 +560,14 @@ func writeSourceAcquisitionError(w http.ResponseWriter, err error, review bool) 
 	switch {
 	case errors.Is(err, model.ErrAdminSourceAcquisitionNotFound):
 		writeErr(w, http.StatusNotFound, "source_acquisition_not_found", "source acquisition was not found")
+	case errors.Is(err, model.ErrAdminSourceAcquisitionNotReady):
+		writeErr(w, http.StatusConflict, "source_acquisition_not_ready", "source acquisition is not ready for promotion")
+	case errors.Is(err, model.ErrAdminSourceAcquisitionAlreadyPromoted):
+		writeErr(w, http.StatusConflict, "source_acquisition_already_promoted", "source acquisition is already promoted to another story")
+	case errors.Is(err, model.ErrAdminSourceAcquisitionPromotionTarget):
+		writeErr(w, http.StatusNotFound, "source_acquisition_promotion_target_not_found", "promotion target was not found")
+	case errors.Is(err, model.ErrAdminSourceAcquisitionPromotionConflict):
+		writeErr(w, http.StatusConflict, "source_acquisition_promotion_conflict", "source acquisition promotion conflicts")
 	default:
 		var validationErr *model.AdminValidationError
 		if errors.As(err, &validationErr) {
@@ -812,7 +841,11 @@ func noStore(w http.ResponseWriter) {
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
-	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
+	return decodeJSONLimit(w, r, dst, maxJSONBodyBytes)
+}
+
+func decodeJSONLimit(w http.ResponseWriter, r *http.Request, dst any, limit int64) error {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	defer r.Body.Close()
 
 	raw, err := io.ReadAll(r.Body)

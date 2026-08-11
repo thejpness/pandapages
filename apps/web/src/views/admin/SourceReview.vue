@@ -7,6 +7,8 @@ import SourceEvidenceReferenceFields, {
 import StoryStudioState from "@/components/admin/story-studio/StoryStudioState.vue";
 import {
   adminCheckSourceEligibility,
+  adminListStories,
+  adminPromoteSourceAcquisition,
   adminGetSourceAcquisition,
   adminGetSourceProviderWork,
   adminListSourceAcquisitions,
@@ -24,6 +26,8 @@ import {
   type AdminSourceEligibilityHumanEvidence,
   type AdminSourceProviderWork,
   type AdminSourceQualityStatus,
+  type AdminSourceAcquisitionPromotionTarget,
+  type AdminStoryListItem,
 } from "@/lib/api";
 
 type WorkspacePanel = "find" | "saved";
@@ -53,6 +57,13 @@ const detailLoading = ref(false);
 const qualityStatus = ref<AdminSourceQualityStatus>("pending");
 const qualityNote = ref("");
 const qualitySaving = ref(false);
+const promoting = ref(false);
+const promotionMode = ref<"new_story" | "existing_story">("new_story");
+const promotionTitle = ref("");
+const promotionSlug = ref("");
+const promotionStorySlug = ref("");
+const publicStories = ref<AdminStoryListItem[]>([]);
+const promotionFormOpen = ref(false);
 const error = ref("");
 const message = ref("");
 
@@ -79,9 +90,11 @@ let eligibilityController: AbortController | null = null;
 
 const readyForPromotion = computed(
   () =>
+    selectedAcquisition.value?.promotion === null &&
     selectedAcquisition.value?.eligibility?.overall === "eligible" &&
     selectedAcquisition.value.sourceQuality.status === "approved",
 );
+const sourceQualityLocked = computed(() => selectedAcquisition.value?.promotion !== null);
 const providerAuthorDeathYear = computed(() => {
   const authors =
     providerEvidence.value?.contributors.filter(
@@ -251,6 +264,10 @@ async function showError(caught: unknown) {
       "That Project Gutenberg work is no longer available.",
     source_provider_unavailable: "Project Gutenberg is unavailable right now.",
     source_acquisition_not_found: "That saved source could not be found.",
+    source_acquisition_not_ready: "This saved source is not ready for canonical-source promotion.",
+    source_acquisition_already_promoted: "This source was already promoted to another story.",
+    source_acquisition_promotion_target_not_found: "Choose an existing public Story Studio story.",
+    source_acquisition_promotion_conflict: "That new story slug is already in use.",
   };
   error.value =
     typeof code === "string" && messages[code]
@@ -468,6 +485,53 @@ async function saveQuality() {
     await showError(caught);
   } finally {
     qualitySaving.value = false;
+  }
+}
+
+function suggestedPromotionSlug(title: string) {
+  return title
+    .toLowerCase()
+    .normalize("NFKD")
+    .replaceAll(/[^a-z0-9]+/g, "-")
+    .replaceAll(/^-+|-+$/g, "")
+}
+
+async function openPromotionForm() {
+  const detail = selectedAcquisition.value;
+  if (!detail) return;
+  promotionTitle.value = detail.title;
+  promotionSlug.value = suggestedPromotionSlug(detail.title);
+  promotionMode.value = "new_story";
+  promotionStorySlug.value = "";
+  promotionFormOpen.value = true;
+  try {
+    publicStories.value = (await adminListStories()).items;
+  } catch (caught) {
+    await showError(caught);
+  }
+}
+
+async function promoteSource() {
+  const detail = selectedAcquisition.value;
+  if (!detail || promoting.value) return;
+  const target: AdminSourceAcquisitionPromotionTarget =
+    promotionMode.value === "new_story"
+      ? { mode: "new_story", title: promotionTitle.value.trim(), slug: promotionSlug.value.trim() }
+      : { mode: "existing_story", storySlug: promotionStorySlug.value };
+  clearFeedback();
+  promoting.value = true;
+  try {
+    const result = await adminPromoteSourceAcquisition(detail.id, target);
+    message.value = result.outcome === "created"
+      ? "Source promoted to canonical source."
+      : "This source was already promoted. Opening its canonical destination.";
+    promotionFormOpen.value = false;
+    await loadSaved();
+    await openSaved(detail.id, true);
+  } catch (caught) {
+    await showError(caught);
+  } finally {
+    promoting.value = false;
   }
 }
 
@@ -936,12 +1000,54 @@ onBeforeUnmount(() => {
               >Provider page</a
             >
           </header>
-          <section v-if="readyForPromotion" class="source-review__ready">
-            <h3>Ready for canonical-source promotion</h3>
+          <section v-if="selectedAcquisition.promotion" class="source-review__ready">
+            <h3>Promoted to canonical source</h3>
             <p>
-              This source has completed review. Canonical-source promotion is
-              not available yet.
+              {{ selectedAcquisition.promotion.storyTitle }} is now the canonical-source destination.
+              Source quality was locked when this acquisition was promoted.
             </p>
+          </section>
+          <section v-else-if="readyForPromotion" class="source-review__ready">
+            <h3>Ready for canonical-source promotion</h3>
+            <p>Promotion creates a canonical source revision. It does not create editions or publish the story.</p>
+            <button type="button" class="studio-button studio-button--primary" @click="openPromotionForm">
+              Promote to canonical source
+            </button>
+            <form v-if="promotionFormOpen" class="source-review__promotion" @submit.prevent="promoteSource">
+              <fieldset>
+                <legend>Promotion target</legend>
+                <label>
+                  <input v-model="promotionMode" type="radio" value="new_story" />
+                  Create new story
+                </label>
+                <label>
+                  <input v-model="promotionMode" type="radio" value="existing_story" />
+                  Existing public story
+                </label>
+              </fieldset>
+              <template v-if="promotionMode === 'new_story'">
+                <div class="studio-field">
+                  <label for="promotion-title">Story title</label>
+                  <input id="promotion-title" v-model="promotionTitle" />
+                </div>
+                <div class="studio-field">
+                  <label for="promotion-slug">Story slug</label>
+                  <input id="promotion-slug" v-model="promotionSlug" />
+                </div>
+              </template>
+              <div v-else class="studio-field">
+                <label for="promotion-story">Existing public story</label>
+                <select id="promotion-story" v-model="promotionStorySlug">
+                  <option value="">Select a story</option>
+                  <option v-for="story in publicStories" :key="story.slug" :value="story.slug">
+                    {{ story.title }} ({{ story.slug }})
+                  </option>
+                </select>
+              </div>
+              <button type="submit" class="studio-button studio-button--primary" :disabled="promoting">
+                {{ promoting ? "Promoting…" : promotionMode === "new_story" ? "Create story & promote source" : "Promote source to existing story" }}
+              </button>
+            </form>
           </section>
           <section class="studio-panel source-review__rights">
             <h3>Copyright eligibility</h3>
@@ -977,26 +1083,45 @@ onBeforeUnmount(() => {
           </section>
           <section class="studio-panel source-review__quality">
             <h3>Source quality review</h3>
-            <div class="studio-field">
-              <label for="quality-status">Source quality status</label>
-              <select id="quality-status" v-model="qualityStatus">
-                <option value="pending">Pending</option>
-                <option value="approved">Approved</option>
-                <option value="rejected">Rejected</option>
-              </select>
-            </div>
-            <div v-if="qualityStatus !== 'pending'" class="studio-field">
-              <label for="quality-note">Rationale</label>
-              <textarea id="quality-note" v-model="qualityNote" rows="3" />
-            </div>
-            <button
-              type="button"
-              class="studio-button studio-button--quiet"
-              :disabled="qualitySaving"
-              @click="saveQuality"
-            >
-              Save source quality review
-            </button>
+            <template v-if="sourceQualityLocked">
+              <p>Source quality was locked when this acquisition was promoted.</p>
+              <dl class="source-review__quality-history">
+                <div>
+                  <dt>Status</dt>
+                  <dd>{{ selectedAcquisition.sourceQuality.status }}</dd>
+                </div>
+                <div v-if="selectedAcquisition.sourceQuality.note">
+                  <dt>Rationale</dt>
+                  <dd>{{ selectedAcquisition.sourceQuality.note }}</dd>
+                </div>
+                <div v-if="selectedAcquisition.sourceQuality.reviewedAt">
+                  <dt>Reviewed</dt>
+                  <dd>{{ formatSavedAt(selectedAcquisition.sourceQuality.reviewedAt) }}</dd>
+                </div>
+              </dl>
+            </template>
+            <template v-else>
+              <div class="studio-field">
+                <label for="quality-status">Source quality status</label>
+                <select id="quality-status" v-model="qualityStatus">
+                  <option value="pending">Pending</option>
+                  <option value="approved">Approved</option>
+                  <option value="rejected">Rejected</option>
+                </select>
+              </div>
+              <div v-if="qualityStatus !== 'pending'" class="studio-field">
+                <label for="quality-note">Rationale</label>
+                <textarea id="quality-note" v-model="qualityNote" rows="3" />
+              </div>
+              <button
+                type="button"
+                class="studio-button studio-button--quiet"
+                :disabled="qualitySaving"
+                @click="saveQuality"
+              >
+                Save source quality review
+              </button>
+            </template>
           </section>
           <details class="studio-panel source-review__provenance">
             <summary>Source provenance</summary>
@@ -1123,6 +1248,15 @@ onBeforeUnmount(() => {
   display: grid;
   gap: 0.9rem;
   margin: 1rem 0;
+}
+.source-review__promotion {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+.source-review__promotion fieldset {
+  display: grid;
+  gap: 0.5rem;
 }
 .source-review__saved-grid {
   display: grid;

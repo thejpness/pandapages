@@ -86,6 +86,12 @@ type storedSourceAcquisition struct {
 	AssessmentOverallReason   sql.NullString
 	AssessmentEffectiveUKJSON sql.NullString
 	AssessmentProviderJSON    sql.NullString
+	PromotionStoryID          sql.NullString
+	PromotionStorySlug        sql.NullString
+	PromotionStoryTitle       sql.NullString
+	PromotionVersionID        sql.NullString
+	PromotionVersion          sql.NullInt64
+	PromotionCreatedAt        sql.NullTime
 	SourceText                string
 }
 
@@ -378,6 +384,19 @@ func (s *Store) AdminUpdateSourceAcquisitionSourceQualityReview(id string, req m
 		return model.AdminSourceAcquisitionSummary{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	var promoted bool
+	var lockedAcquisitionID string
+	if err := tx.QueryRowContext(ctx, `SELECT id FROM source_acquisitions WHERE id = $1 FOR UPDATE`, id).Scan(&lockedAcquisitionID); errors.Is(err, sql.ErrNoRows) {
+		return model.AdminSourceAcquisitionSummary{}, model.ErrAdminSourceAcquisitionNotFound
+	} else if err != nil {
+		return model.AdminSourceAcquisitionSummary{}, err
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM story_source_versions WHERE source_acquisition_id = $1)`, id).Scan(&promoted); err != nil {
+		return model.AdminSourceAcquisitionSummary{}, err
+	}
+	if promoted {
+		return model.AdminSourceAcquisitionSummary{}, model.ErrAdminSourceAcquisitionAlreadyPromoted
+	}
 	result, err := tx.ExecContext(ctx, `UPDATE source_acquisition_quality_reviews SET status = $2, note = $3, reviewed_at = CASE WHEN $2 = 'pending' THEN NULL ELSE now() END WHERE acquisition_id = $1`, id, status, note)
 	if err != nil {
 		return model.AdminSourceAcquisitionSummary{}, err
@@ -433,7 +452,7 @@ func canonicalSourceAcquisitionQualityReview(req model.AdminSourceQualityReviewU
 	return status, &note, nil
 }
 
-const sourceAcquisitionColumns = `acquisition.id, acquisition.provider, acquisition.external_id, acquisition.title, acquisition.contributors::text, acquisition.languages::text, acquisition.landing_url, acquisition.provider_rights, acquisition.representation_label, acquisition.representation_media_type, acquisition.representation_provider_url, acquisition.representation_size_bytes, acquisition.normalisation_version, acquisition.retrieved_content_hash, acquisition.normalised_content_hash, acquisition.snapshot_hash, acquisition.created_at, quality.status, quality.note, quality.reviewed_at, assessment.assessment_hash, assessment.policy_version, assessment.evaluation_date, assessment.evaluated_at, assessment.us_status, assessment.us_reason, assessment.opds_rights, assessment.rdf_rights, assessment.header_rights, assessment.uk_status, assessment.uk_reason, assessment.overall_status, assessment.overall_reason, assessment.effective_uk_evidence::text, assessment.provider_evidence::text`
+const sourceAcquisitionColumns = `acquisition.id, acquisition.provider, acquisition.external_id, acquisition.title, acquisition.contributors::text, acquisition.languages::text, acquisition.landing_url, acquisition.provider_rights, acquisition.representation_label, acquisition.representation_media_type, acquisition.representation_provider_url, acquisition.representation_size_bytes, acquisition.normalisation_version, acquisition.retrieved_content_hash, acquisition.normalised_content_hash, acquisition.snapshot_hash, acquisition.created_at, quality.status, quality.note, quality.reviewed_at, assessment.assessment_hash, assessment.policy_version, assessment.evaluation_date, assessment.evaluated_at, assessment.us_status, assessment.us_reason, assessment.opds_rights, assessment.rdf_rights, assessment.header_rights, assessment.uk_status, assessment.uk_reason, assessment.overall_status, assessment.overall_reason, assessment.effective_uk_evidence::text, assessment.provider_evidence::text, promotion.story_id, promotion.story_slug, promotion.story_title, promotion.version_id, promotion.version, promotion.created_at`
 
 func sourceAcquisitionFrom() string {
 	return ` FROM source_acquisitions AS acquisition
@@ -449,7 +468,14 @@ LEFT JOIN LATERAL (
 		AND eligibility.overall_status = 'eligible'
 	ORDER BY eligibility.evaluation_date DESC, eligibility.evaluated_at DESC, eligibility.id DESC
 	LIMIT 1
-) AS assessment ON true`
+) AS assessment ON true
+LEFT JOIN LATERAL (
+	SELECT version.story_id, story.slug AS story_slug, story.title AS story_title, version.id AS version_id, version.version, version.created_at
+	FROM story_source_versions AS version
+	JOIN stories AS story ON story.id = version.story_id
+	WHERE version.source_acquisition_id = acquisition.id
+	LIMIT 1
+) AS promotion ON true`
 }
 
 func sourceAcquisitionSelect(includeSourceText bool) string {
@@ -531,7 +557,7 @@ func loadAdminSourceAcquisitionDetailBySnapshotHash(ctx context.Context, queryer
 
 func scanStoredSourceAcquisition(scanner sourceAcquisitionScanner, includeSourceText bool) (storedSourceAcquisition, error) {
 	var stored storedSourceAcquisition
-	arguments := []any{&stored.ID, &stored.Provider, &stored.ExternalID, &stored.Title, &stored.ContributorsJSON, &stored.LanguagesJSON, &stored.LandingURL, &stored.ProviderRights, &stored.RepresentationLabel, &stored.RepresentationMediaType, &stored.RepresentationProviderURL, &stored.RepresentationSizeBytes, &stored.NormalisationVersion, &stored.RetrievedContentHash, &stored.NormalisedContentHash, &stored.SnapshotHash, &stored.CreatedAt, &stored.QualityStatus, &stored.QualityNote, &stored.QualityReviewedAt, &stored.AssessmentHash, &stored.AssessmentPolicyVersion, &stored.AssessmentEvaluationDate, &stored.AssessmentEvaluatedAt, &stored.AssessmentUSStatus, &stored.AssessmentUSReason, &stored.AssessmentOPDSRights, &stored.AssessmentRDFRights, &stored.AssessmentHeaderRights, &stored.AssessmentUKStatus, &stored.AssessmentUKReason, &stored.AssessmentOverallStatus, &stored.AssessmentOverallReason, &stored.AssessmentEffectiveUKJSON, &stored.AssessmentProviderJSON}
+	arguments := []any{&stored.ID, &stored.Provider, &stored.ExternalID, &stored.Title, &stored.ContributorsJSON, &stored.LanguagesJSON, &stored.LandingURL, &stored.ProviderRights, &stored.RepresentationLabel, &stored.RepresentationMediaType, &stored.RepresentationProviderURL, &stored.RepresentationSizeBytes, &stored.NormalisationVersion, &stored.RetrievedContentHash, &stored.NormalisedContentHash, &stored.SnapshotHash, &stored.CreatedAt, &stored.QualityStatus, &stored.QualityNote, &stored.QualityReviewedAt, &stored.AssessmentHash, &stored.AssessmentPolicyVersion, &stored.AssessmentEvaluationDate, &stored.AssessmentEvaluatedAt, &stored.AssessmentUSStatus, &stored.AssessmentUSReason, &stored.AssessmentOPDSRights, &stored.AssessmentRDFRights, &stored.AssessmentHeaderRights, &stored.AssessmentUKStatus, &stored.AssessmentUKReason, &stored.AssessmentOverallStatus, &stored.AssessmentOverallReason, &stored.AssessmentEffectiveUKJSON, &stored.AssessmentProviderJSON, &stored.PromotionStoryID, &stored.PromotionStorySlug, &stored.PromotionStoryTitle, &stored.PromotionVersionID, &stored.PromotionVersion, &stored.PromotionCreatedAt}
 	if includeSourceText {
 		arguments = append(arguments, &stored.SourceText)
 	}
@@ -577,7 +603,11 @@ func (stored storedSourceAcquisition) sourceSummary() (model.AdminSourceAcquisit
 	if err != nil {
 		return model.AdminSourceAcquisitionSummary{}, err
 	}
-	return model.AdminSourceAcquisitionSummary{ID: stored.ID, Provider: stored.Provider, ExternalID: stored.ExternalID, Title: stored.Title, Contributors: contributors, Languages: languages, LandingURL: stored.LandingURL, ProviderRights: providerRights, SelectedRepresentation: model.AdminSourceAcquisitionRepresentation{Label: label, MediaType: stored.RepresentationMediaType, ProviderURL: stored.RepresentationProviderURL, SizeBytes: size}, NormalisationVersion: stored.NormalisationVersion, RetrievedContentHash: stored.RetrievedContentHash, NormalisedContentHash: stored.NormalisedContentHash, SnapshotHash: stored.SnapshotHash, CreatedAt: stored.CreatedAt.UTC().Format(time.RFC3339Nano), Eligibility: eligibility, SourceQuality: quality}, nil
+	promotion, err := stored.promotion()
+	if err != nil {
+		return model.AdminSourceAcquisitionSummary{}, err
+	}
+	return model.AdminSourceAcquisitionSummary{ID: stored.ID, Provider: stored.Provider, ExternalID: stored.ExternalID, Title: stored.Title, Contributors: contributors, Languages: languages, LandingURL: stored.LandingURL, ProviderRights: providerRights, SelectedRepresentation: model.AdminSourceAcquisitionRepresentation{Label: label, MediaType: stored.RepresentationMediaType, ProviderURL: stored.RepresentationProviderURL, SizeBytes: size}, NormalisationVersion: stored.NormalisationVersion, RetrievedContentHash: stored.RetrievedContentHash, NormalisedContentHash: stored.NormalisedContentHash, SnapshotHash: stored.SnapshotHash, CreatedAt: stored.CreatedAt.UTC().Format(time.RFC3339Nano), Eligibility: eligibility, SourceQuality: quality, Promotion: promotion}, nil
 }
 
 func (stored storedSourceAcquisition) detail() (model.AdminSourceAcquisitionDetail, error) {
