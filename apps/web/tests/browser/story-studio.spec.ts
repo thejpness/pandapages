@@ -171,16 +171,16 @@ function sourceAcquisitionSummary(overrides: Record<string, unknown> = {}) {
   }
 }
 
-function sourceProviderWork() {
+function sourceProviderWork(externalId = '11', title = "Alice's Adventures in Wonderland") {
   return {
     provider: 'project-gutenberg',
-    externalId: '11',
-    title: "Alice's Adventures in Wonderland",
+    externalId,
+    title,
     contributors: [{ name: 'Lewis Carroll', role: 'author' }],
     languages: ['en'],
-    landingUrl: 'https://www.gutenberg.org/ebooks/11',
+    landingUrl: `https://www.gutenberg.org/ebooks/${externalId}`,
     providerRights: 'Provider metadata only.',
-    representations: [{ label: 'Plain text UTF-8', mediaType: 'text/plain; charset=utf-8', url: 'https://www.gutenberg.org/files/11/11-0.txt', sizeBytes: 1234 }],
+    representations: [{ label: 'Plain text UTF-8', mediaType: 'text/plain; charset=utf-8', url: `https://www.gutenberg.org/files/${externalId}/${externalId}-0.txt`, sizeBytes: 1234 }],
   }
 }
 
@@ -198,6 +198,9 @@ class StudioAPI {
     release: ReturnType<typeof deferred<void>>
   } | null = null
   detailGates = new Map<string, ReturnType<typeof deferred<void>>>()
+  sourceSearchGates = new Map<string, ReturnType<typeof deferred<void>>>()
+  sourceDetailGates = new Map<string, ReturnType<typeof deferred<void>>>()
+  sourceListPlans: Array<{ gate: ReturnType<typeof deferred<void>>; items: ReturnType<typeof sourceAcquisitionSummary>[] }> = []
 
   stories = [
     summary('panda-tale', 'The Panda Tale', 'published_with_draft'),
@@ -320,7 +323,16 @@ class StudioAPI {
     }
 
     if (path === '/api/v1/admin/source-providers/project-gutenberg/search' && method === 'GET') {
-      await this.fulfill(route, { provider: 'project-gutenberg', results: [sourceProviderWork()] })
+      const query = url.searchParams.get('q') ?? ''
+      const gate = this.sourceSearchGates.get(query)
+      if (gate) {
+        this.sourceSearchGates.delete(query)
+        await gate.promise
+      }
+      const work = query === 'rabbit'
+        ? sourceProviderWork('12', 'Rabbit source')
+        : sourceProviderWork()
+      await this.fulfill(route, { provider: 'project-gutenberg', results: [work] })
       return
     }
 
@@ -342,6 +354,12 @@ class StudioAPI {
     }
 
     if (path === '/api/v1/admin/source-acquisitions' && method === 'GET') {
+      const plan = this.sourceListPlans.shift()
+      if (plan) {
+        await plan.gate.promise
+        await this.fulfill(route, { items: plan.items })
+        return
+      }
       await this.fulfill(route, { items: this.sourceAcquisitions })
       return
     }
@@ -368,6 +386,11 @@ class StudioAPI {
     const acquisitionDetailMatch = /^\/api\/v1\/admin\/source-acquisitions\/([^/]+)$/.exec(path)
     if (acquisitionDetailMatch && method === 'GET') {
       const acquisition = this.sourceAcquisitions.find((item) => item.id === acquisitionDetailMatch[1])
+      const gate = this.sourceDetailGates.get(acquisitionDetailMatch[1])
+      if (gate) {
+        this.sourceDetailGates.delete(acquisitionDetailMatch[1])
+        await gate.promise
+      }
       if (!acquisition) {
         await this.fail(route, { status: 404, code: 'source_acquisition_not_found', message: 'source acquisition was not found' })
         return
@@ -852,6 +875,74 @@ test('global source review saves a selected work directly and keeps rights and s
   expect(api.count('POST', '/api/v1/admin/source-providers/project-gutenberg/works/11/acquisitions')).toBe(2)
   expect(api.unhandled).toEqual([])
   expect(await seriousOrCriticalViolations(page)).toEqual([])
+})
+
+test('global source review isolates stale search, saved-list, and detail requests', async ({ page }) => {
+  const api = new StudioAPI()
+  const searchA = deferred<void>()
+  const searchB = deferred<void>()
+  const savedA = deferred<void>()
+  const savedB = deferred<void>()
+  const detailA = deferred<void>()
+  const detailB = deferred<void>()
+  const secondID = '55555555-5555-4555-8555-555555555555'
+  const first = sourceAcquisitionSummary({ title: 'First saved source' })
+  const second = sourceAcquisitionSummary({ id: secondID, externalId: '12', title: 'Second saved source' })
+  api.sourceAcquisitions = []
+  await api.install(page)
+  await page.goto('/admin/source-review')
+  await expect.poll(() => api.count('GET', '/api/v1/admin/source-acquisitions')).toBe(1)
+  api.sourceAcquisitions = [first, second]
+
+  api.sourceSearchGates.set('alice', searchA)
+  api.sourceSearchGates.set('rabbit', searchB)
+  await page.getByRole('searchbox', { name: 'Search Project Gutenberg' }).fill('alice')
+  await page.getByRole('button', { name: 'Search', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Searching Project Gutenberg' })).toBeVisible()
+  await page.locator('#source-provider-search').evaluate((element) => {
+    const input = element as HTMLInputElement
+    input.value = 'rabbit'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    input.form?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+  })
+  await expect.poll(() => api.count('GET', '/api/v1/admin/source-providers/project-gutenberg/search')).toBe(2)
+  searchA.resolve()
+  await expect(page.getByRole('heading', { name: 'Searching Project Gutenberg' })).toBeVisible()
+  await expect(page.getByRole('alert')).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'Rabbit source' })).toHaveCount(0)
+  searchB.resolve()
+  await expect(page.getByRole('heading', { name: 'Rabbit source' })).toBeVisible()
+
+  api.sourceListPlans.push({ gate: savedA, items: [first] }, { gate: savedB, items: [second] })
+  await page.getByRole('tab', { name: 'Saved sources' }).click()
+  await expect.poll(() => api.count('GET', '/api/v1/admin/source-acquisitions')).toBe(2)
+  await page.getByRole('tab', { name: 'Find a source' }).click()
+  await page.getByRole('tab', { name: 'Saved sources' }).click()
+  await expect.poll(() => api.count('GET', '/api/v1/admin/source-acquisitions')).toBe(3)
+  savedA.resolve()
+  await expect(page.getByRole('heading', { name: 'Loading saved sources' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'First saved source' })).toHaveCount(0)
+  await expect(page.getByRole('alert')).toHaveCount(0)
+  savedB.resolve()
+  await expect(page.getByRole('button', { name: 'Second saved source' })).toBeVisible()
+  await page.getByRole('tab', { name: 'Find a source' }).click()
+  await page.getByRole('tab', { name: 'Saved sources' }).click()
+  await expect(page.getByRole('button', { name: 'First saved source' })).toBeVisible()
+
+  api.sourceDetailGates.set(acquisitionID, detailA)
+  api.sourceDetailGates.set(secondID, detailB)
+  await page.getByRole('button', { name: 'First saved source' }).click()
+  await expect.poll(() => api.count('GET', `/api/v1/admin/source-acquisitions/${acquisitionID}`)).toBe(1)
+  await page.getByRole('button', { name: 'Second saved source' }).click()
+  await expect.poll(() => api.count('GET', `/api/v1/admin/source-acquisitions/${secondID}`)).toBe(1)
+  detailA.resolve()
+  await expect(page.getByRole('heading', { name: 'Opening saved source' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'First saved source' })).toHaveCount(0)
+  await expect(page.getByRole('alert')).toHaveCount(0)
+  detailB.resolve()
+  await expect(page.getByRole('heading', { name: 'Second saved source' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'First saved source' })).toHaveCount(0)
+  expect(api.unhandled).toEqual([])
 })
 
 test('owner can round-trip Manage profiles and Story Studio without entering reader mode', async ({

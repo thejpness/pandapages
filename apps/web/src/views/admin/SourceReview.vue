@@ -110,16 +110,20 @@ async function search() {
     error.value = 'Enter at least two characters to search Project Gutenberg.'
     return
   }
+  const controller = new AbortController()
   searchController?.abort()
-  searchController = new AbortController()
+  searchController = controller
   searching.value = true
   try {
-    const response = await adminSearchSourceProvider(provider, term, searchController.signal)
-    if (!searchController.signal.aborted) works.value = response.results
+    const response = await adminSearchSourceProvider(provider, term, controller.signal)
+    if (!controller.signal.aborted && searchController === controller) works.value = response.results
   } catch (caught) {
-    if (!searchController.signal.aborted) await showError(caught)
+    if (!controller.signal.aborted && searchController === controller) await showError(caught)
   } finally {
-    if (!searchController.signal.aborted) searching.value = false
+    if (searchController === controller) {
+      searching.value = false
+      searchController = null
+    }
   }
 }
 
@@ -144,34 +148,42 @@ function applyReviewDrafts(detail: AdminSourceAcquisitionDetail) {
 }
 
 async function loadSaved() {
+  const controller = new AbortController()
   savedController?.abort()
-  savedController = new AbortController()
+  savedController = controller
   savedLoading.value = true
   try {
-    const response = await adminListSourceAcquisitions(savedController.signal)
-    if (!savedController.signal.aborted) saved.value = response.items
+    const response = await adminListSourceAcquisitions(controller.signal)
+    if (!controller.signal.aborted && savedController === controller) saved.value = response.items
   } catch (caught) {
-    if (!savedController.signal.aborted) await showError(caught)
+    if (!controller.signal.aborted && savedController === controller) await showError(caught)
   } finally {
-    if (!savedController.signal.aborted) savedLoading.value = false
+    if (savedController === controller) {
+      savedLoading.value = false
+      savedController = null
+    }
   }
 }
 
 async function openSaved(id: string, preserveFeedback = false) {
   if (!preserveFeedback) clearFeedback()
+  const controller = new AbortController()
   detailController?.abort()
-  detailController = new AbortController()
+  detailController = controller
   detailLoading.value = true
   try {
-    const detail = await adminGetSourceAcquisition(id, detailController.signal)
-    if (detailController.signal.aborted) return
+    const detail = await adminGetSourceAcquisition(id, controller.signal)
+    if (controller.signal.aborted || detailController !== controller) return
     selectedAcquisition.value = detail
     applyReviewDrafts(detail)
     panel.value = 'saved'
   } catch (caught) {
-    if (!detailController.signal.aborted) await showError(caught)
+    if (!controller.signal.aborted && detailController === controller) await showError(caught)
   } finally {
-    if (!detailController.signal.aborted) detailLoading.value = false
+    if (detailController === controller) {
+      detailLoading.value = false
+      detailController = null
+    }
   }
 }
 
