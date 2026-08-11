@@ -16,6 +16,7 @@ const menuOpen = ref(false)
 const storiesActive = computed(
   () => props.currentPath === '/admin/stories' || props.currentPath.startsWith('/admin/stories/'),
 )
+const sourceReviewActive = computed(() => props.currentPath === '/admin/source-review')
 
 function navigate(path: string) {
   menuOpen.value = false
@@ -56,6 +57,13 @@ function navigate(path: string) {
           @click="navigate('/admin/stories')"
         >
           Stories
+        </button>
+        <button
+          type="button"
+          :aria-current="sourceReviewActive ? 'page' : undefined"
+          @click="navigate('/admin/source-review')"
+        >
+          Source review
         </button>
         <button type="button" class="studio-nav__new" @click="navigate('/admin/stories/new')">
           <span aria-hidden="true">+</span> New story
