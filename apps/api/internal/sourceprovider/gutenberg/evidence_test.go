@@ -249,3 +249,62 @@ func TestCanonicalContributorsAndLanguagesAreOrderIndependent(t *testing.T) {
 		t.Fatalf("languages=%+v", languages)
 	}
 }
+
+func TestParseRDFEvidenceRequiresOfficialNamespaces(t *testing.T) {
+	t.Run("wrong ebook namespace is not an ebook", func(t *testing.T) {
+		body := strings.Replace(rdfAliceFixture, "http://www.gutenberg.org/2009/pgterms/", "https://example.invalid/pgterms/", 1)
+		if _, err := parseRDFEvidence([]byte(body), "11"); !errors.Is(err, sourceprovider.ErrEvidenceInvalid) {
+			t.Fatalf("error=%v", err)
+		}
+	})
+	t.Run("wrong about namespace cannot establish identity", func(t *testing.T) {
+		body := strings.Replace(withFakeNamespace(rdfAliceFixture), "rdf:about", "fake:about", 1)
+		if _, err := parseRDFEvidence([]byte(body), "11"); !errors.Is(err, sourceprovider.ErrEvidenceIdentityMismatch) {
+			t.Fatalf("error=%v", err)
+		}
+	})
+	t.Run("wrong rights namespace is unknown evidence", func(t *testing.T) {
+		body := strings.ReplaceAll(withFakeNamespace(rdfAliceFixture), "dcterms:rights", "fake:rights")
+		evidence, err := parseRDFEvidence([]byte(body), "11")
+		if err != nil || evidence.Rights != copyrighteligibility.ProviderRightsUnknown || evidence.RightsStatement != "" {
+			t.Fatalf("evidence/error=%+v/%v", evidence, err)
+		}
+	})
+	t.Run("wrong creator namespace cannot establish a contributor", func(t *testing.T) {
+		body := strings.ReplaceAll(withFakeNamespace(rdfAliceFixture), "dcterms:creator", "fake:creator")
+		evidence, err := parseRDFEvidence([]byte(body), "11")
+		if err != nil || len(evidence.Contributors) != 0 {
+			t.Fatalf("evidence/error=%+v/%v", evidence, err)
+		}
+	})
+	t.Run("wrong agent and name namespaces cannot establish a contributor", func(t *testing.T) {
+		body := strings.ReplaceAll(withFakeNamespace(rdfAliceFixture), "pgterms:agent", "fake:agent")
+		evidence, err := parseRDFEvidence([]byte(body), "11")
+		if err != nil || len(evidence.Contributors) != 0 {
+			t.Fatalf("agent evidence/error=%+v/%v", evidence, err)
+		}
+		body = strings.ReplaceAll(withFakeNamespace(rdfAliceFixture), "pgterms:name", "fake:name")
+		evidence, err = parseRDFEvidence([]byte(body), "11")
+		if err != nil || len(evidence.Contributors) != 0 {
+			t.Fatalf("name evidence/error=%+v/%v", evidence, err)
+		}
+	})
+	t.Run("wrong deathdate namespace cannot establish a death year", func(t *testing.T) {
+		body := strings.ReplaceAll(withFakeNamespace(rdfAliceFixture), "pgterms:deathdate", "fake:deathdate")
+		evidence, err := parseRDFEvidence([]byte(body), "11")
+		if err != nil || len(evidence.Contributors) != 1 || evidence.Contributors[0].DeathYear != nil {
+			t.Fatalf("evidence/error=%+v/%v", evidence, err)
+		}
+	})
+	t.Run("wrong translator namespace cannot establish a translator", func(t *testing.T) {
+		body := strings.ReplaceAll(withFakeNamespace(rdfOdysseyFixture), "marcrel:trl", "fake:trl")
+		evidence, err := parseRDFEvidence([]byte(body), "1727")
+		if err != nil || len(evidence.Contributors) != 1 || evidence.Contributors[0].Role != "author" {
+			t.Fatalf("evidence/error=%+v/%v", evidence, err)
+		}
+	})
+}
+
+func withFakeNamespace(value string) string {
+	return strings.Replace(value, "<rdf:RDF ", "<rdf:RDF xmlns:fake=\"https://example.invalid/fake\" ", 1)
+}

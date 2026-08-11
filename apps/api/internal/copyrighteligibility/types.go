@@ -1,6 +1,6 @@
 // Package copyrighteligibility contains Panda Pages' deterministic,
 // evidence-based copyright eligibility policy. It does not make legal
-// determinations and deliberately treats incomplete evidence as ineligible for
+// determinations and deliberately treats incomplete evidence as blocked for
 // product workflow purposes.
 package copyrighteligibility
 
@@ -36,25 +36,33 @@ const (
 	ReasonUSHeaderRightsConflict          ReasonCode = "us_header_rights_conflict"
 	ReasonUSHeaderRightsUnknown           ReasonCode = "us_header_rights_unknown"
 
-	ReasonUKOrdinaryLiteraryTermExpired       ReasonCode = "uk_ordinary_literary_term_expired"
-	ReasonUKOrdinaryLiteraryTermActive        ReasonCode = "uk_ordinary_literary_term_active"
-	ReasonUKEvaluationDateInvalid             ReasonCode = "uk_evaluation_date_invalid"
-	ReasonUKWorkCategoryUnsupported           ReasonCode = "uk_work_category_unsupported"
-	ReasonUKJointAuthorshipUnsupported        ReasonCode = "uk_joint_authorship_unsupported"
-	ReasonUKAnonymousAuthorshipUnsupported    ReasonCode = "uk_anonymous_authorship_unsupported"
-	ReasonUKPseudonymousAuthorshipUnsupported ReasonCode = "uk_pseudonymous_authorship_unsupported"
-	ReasonUKAuthorshipUnsupported             ReasonCode = "uk_authorship_unsupported"
-	ReasonUKAuthorIdentityMissing             ReasonCode = "uk_author_identity_missing"
-	ReasonUKAuthorDeathUnknown                ReasonCode = "uk_author_death_unknown"
-	ReasonUKAuthorEvidenceMissing             ReasonCode = "uk_author_evidence_missing"
-	ReasonUKPublicationEvidenceMissing        ReasonCode = "uk_publication_evidence_missing"
-	ReasonUKPublicationPosthumousUnsupported  ReasonCode = "uk_publication_posthumous_unsupported"
-	ReasonUKTranslationPresent                ReasonCode = "uk_translation_present"
-	ReasonUKTranslationUnknown                ReasonCode = "uk_translation_unknown"
-	ReasonUKAdditionalContributionPresent     ReasonCode = "uk_additional_contribution_present"
-	ReasonUKAdditionalContributionUnknown     ReasonCode = "uk_additional_contribution_unknown"
-	ReasonUKSpecialCategoryUnsupported        ReasonCode = "uk_special_category_unsupported"
-	ReasonUKUnpublishedHistoryUnsupported     ReasonCode = "uk_unpublished_history_unsupported"
+	ReasonUKOrdinaryLiteraryTermExpired           ReasonCode = "uk_ordinary_literary_term_expired"
+	ReasonUKOrdinaryLiteraryTermActive            ReasonCode = "uk_ordinary_literary_term_active"
+	ReasonUKEvaluationDateInvalid                 ReasonCode = "uk_evaluation_date_invalid"
+	ReasonUKWorkCategoryUnsupported               ReasonCode = "uk_work_category_unsupported"
+	ReasonUKJointAuthorshipUnsupported            ReasonCode = "uk_joint_authorship_unsupported"
+	ReasonUKAnonymousAuthorshipUnsupported        ReasonCode = "uk_anonymous_authorship_unsupported"
+	ReasonUKPseudonymousAuthorshipUnsupported     ReasonCode = "uk_pseudonymous_authorship_unsupported"
+	ReasonUKAuthorshipUnsupported                 ReasonCode = "uk_authorship_unsupported"
+	ReasonUKAuthorIdentityMissing                 ReasonCode = "uk_author_identity_missing"
+	ReasonUKAuthorDeathUnknown                    ReasonCode = "uk_author_death_unknown"
+	ReasonUKAuthorEvidenceMissing                 ReasonCode = "uk_author_evidence_missing"
+	ReasonUKPublicationEvidenceMissing            ReasonCode = "uk_publication_evidence_missing"
+	ReasonUKPublicationPosthumousUnsupported      ReasonCode = "uk_publication_posthumous_unsupported"
+	ReasonUKTranslationPresent                    ReasonCode = "uk_translation_present"
+	ReasonUKTranslationUnknown                    ReasonCode = "uk_translation_unknown"
+	ReasonUKTranslationEvidenceMissing            ReasonCode = "uk_translation_evidence_missing"
+	ReasonUKAdditionalContributionPresent         ReasonCode = "uk_additional_contribution_present"
+	ReasonUKAdditionalContributionUnknown         ReasonCode = "uk_additional_contribution_unknown"
+	ReasonUKAdditionalContributionEvidenceMissing ReasonCode = "uk_additional_contribution_evidence_missing"
+	ReasonUKSpecialCategoryUnsupported            ReasonCode = "uk_special_category_unsupported"
+	ReasonUKSpecialCategoryEvidenceMissing        ReasonCode = "uk_special_category_evidence_missing"
+	ReasonUKUnpublishedHistoryUnsupported         ReasonCode = "uk_unpublished_history_unsupported"
+	ReasonUKUnpublishedHistoryEvidenceMissing     ReasonCode = "uk_unpublished_history_evidence_missing"
+	ReasonUKAuthorDeathInvalid                    ReasonCode = "uk_author_death_invalid"
+	ReasonUKAuthorDeathFuture                     ReasonCode = "uk_author_death_future"
+	ReasonUKPublicationYearInvalid                ReasonCode = "uk_publication_year_invalid"
+	ReasonUKPublicationYearFuture                 ReasonCode = "uk_publication_year_future"
 
 	ReasonOverallEligible ReasonCode = "overall_eligible"
 	ReasonOverallBlocked  ReasonCode = "overall_blocked"
@@ -156,6 +164,13 @@ type PublicationEvidence struct {
 	References []EvidenceReference
 }
 
+// FactEvidence records a fact state and the evidence supporting that state.
+// It has no decision or override field: the evaluator derives eligibility.
+type FactEvidence struct {
+	State      FactState
+	References []EvidenceReference
+}
+
 // UKEvidence deliberately represents only the ordinary published literary
 // work subset supported by policy v1. Unsupported categories remain explicit
 // rather than being approximated by zero values or prose.
@@ -164,10 +179,10 @@ type UKEvidence struct {
 	Authorship                    AuthorshipCategory
 	Author                        PersonEvidence
 	FirstPublication              PublicationEvidence
-	Translation                   FactState
-	AdditionalTextualContribution FactState
-	SpecialCategory               FactState
-	UnpublishedAtEnd1988          FactState
+	Translation                   FactEvidence
+	AdditionalTextualContribution FactEvidence
+	SpecialCategory               FactEvidence
+	UnpublishedAtEnd1988          FactEvidence
 }
 
 type JurisdictionAssessment struct {

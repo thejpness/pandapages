@@ -18,6 +18,10 @@ import (
 )
 
 const (
+	rdfNamespace          = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+	pgtermsNamespace      = "http://www.gutenberg.org/2009/pgterms/"
+	dctermsNamespace      = "http://purl.org/dc/terms/"
+	marcrelNamespace      = "http://id.loc.gov/vocabulary/relators/"
 	maxRDFBytes           = 512 << 10 // 512 KiB; per-eBook RDF is metadata, not source text.
 	sourceHeaderScanBytes = 64 << 10  // Inspect only the bounded provider wrapper before normalisation.
 )
@@ -100,7 +104,7 @@ func parseRDFEvidence(body []byte, expectedID string) (copyrighteligibility.Prov
 			return copyrighteligibility.ProviderEvidence{}, sourceprovider.ErrEvidenceInvalid
 		}
 		start, ok := token.(xml.StartElement)
-		if !ok || start.Name.Local != "ebook" {
+		if !ok || !isElement(start.Name, pgtermsNamespace, "ebook") {
 			continue
 		}
 		var book rdfBook
@@ -133,7 +137,7 @@ type rdfBook struct {
 }
 
 func (book *rdfBook) UnmarshalXML(decoder *xml.Decoder, start xml.StartElement) error {
-	book.About = attribute(start, "about")
+	book.About = rdfAbout(start)
 	for {
 		token, err := decoder.Token()
 		if err != nil {
@@ -141,21 +145,33 @@ func (book *rdfBook) UnmarshalXML(decoder *xml.Decoder, start xml.StartElement) 
 		}
 		switch token := token.(type) {
 		case xml.StartElement:
-			switch token.Name.Local {
-			case "title":
+			switch {
+			case isElement(token.Name, dctermsNamespace, "title"):
 				book.Title, err = elementText(decoder, token)
-			case "rights":
+			case isElement(token.Name, dctermsNamespace, "rights"):
 				book.Rights, err = elementText(decoder, token)
-			case "language":
+			case isElement(token.Name, dctermsNamespace, "language"):
 				var language string
 				language, err = elementText(decoder, token)
 				if language != "" {
 					book.Languages = append(book.Languages, language)
 				}
-			case "creator", "aut", "trl", "edt", "adp", "ann", "com", "aui", "ctb", "ill":
+			case isElement(token.Name, dctermsNamespace, "creator"):
 				var contributor copyrighteligibility.ContributorEvidence
 				var present bool
-				contributor, present, err = rdfContributor(decoder, token)
+				contributor, present, err = rdfContributor(decoder, token, "author")
+				if present {
+					book.Contributors = append(book.Contributors, contributor)
+				}
+			case token.Name.Space == marcrelNamespace:
+				role, recognised := rdfContributorRole(token.Name)
+				if !recognised {
+					err = decoder.Skip()
+					break
+				}
+				var contributor copyrighteligibility.ContributorEvidence
+				var present bool
+				contributor, present, err = rdfContributor(decoder, token, role)
 				if present {
 					book.Contributors = append(book.Contributors, contributor)
 				}
@@ -173,14 +189,7 @@ func (book *rdfBook) UnmarshalXML(decoder *xml.Decoder, start xml.StartElement) 
 	}
 }
 
-func rdfContributor(decoder *xml.Decoder, relation xml.StartElement) (copyrighteligibility.ContributorEvidence, bool, error) {
-	role, ok := rdfContributorRole(relation.Name.Local)
-	if !ok {
-		if err := decoder.Skip(); err != nil {
-			return copyrighteligibility.ContributorEvidence{}, false, err
-		}
-		return copyrighteligibility.ContributorEvidence{}, false, nil
-	}
+func rdfContributor(decoder *xml.Decoder, relation xml.StartElement, role string) (copyrighteligibility.ContributorEvidence, bool, error) {
 	for {
 		token, err := decoder.Token()
 		if err != nil {
@@ -188,7 +197,7 @@ func rdfContributor(decoder *xml.Decoder, relation xml.StartElement) (copyrighte
 		}
 		switch token := token.(type) {
 		case xml.StartElement:
-			if token.Name.Local != "agent" {
+			if !isElement(token.Name, pgtermsNamespace, "agent") {
 				if err := decoder.Skip(); err != nil {
 					return copyrighteligibility.ContributorEvidence{}, false, err
 				}
@@ -221,8 +230,8 @@ func rdfAgent(decoder *xml.Decoder, start xml.StartElement) (copyrighteligibilit
 		switch token := token.(type) {
 		case xml.StartElement:
 			var value string
-			switch token.Name.Local {
-			case "name", "birthdate", "deathdate":
+			switch {
+			case isElement(token.Name, pgtermsNamespace, "name"), isElement(token.Name, pgtermsNamespace, "birthdate"), isElement(token.Name, pgtermsNamespace, "deathdate"):
 				value, err = elementText(decoder, token)
 				if err != nil {
 					return copyrighteligibility.ContributorEvidence{}, err
@@ -266,8 +275,11 @@ func elementText(decoder *xml.Decoder, start xml.StartElement) (string, error) {
 	}
 }
 
-func rdfContributorRole(raw string) (string, bool) {
-	switch raw {
+func rdfContributorRole(name xml.Name) (string, bool) {
+	if name.Space != marcrelNamespace {
+		return "", false
+	}
+	switch name.Local {
 	case "creator", "aut":
 		return "author", true
 	case "trl":
@@ -300,9 +312,13 @@ func rdfExternalID(raw string) (string, bool) {
 	return id, validExternalID(id)
 }
 
-func attribute(start xml.StartElement, local string) string {
+func isElement(name xml.Name, namespace, local string) bool {
+	return name.Space == namespace && name.Local == local
+}
+
+func rdfAbout(start xml.StartElement) string {
 	for _, attribute := range start.Attr {
-		if attribute.Name.Local == local {
+		if isElement(attribute.Name, rdfNamespace, "about") {
 			return attribute.Value
 		}
 	}

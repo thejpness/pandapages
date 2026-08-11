@@ -55,9 +55,10 @@ func evaluateUS(evidence USProviderEvidence) JurisdictionAssessment {
 
 func evaluateUK(evaluationDate time.Time, evidence UKEvidence) JurisdictionAssessment {
 	date := evaluationDate.UTC()
-	if date.IsZero() {
+	if date.IsZero() || date.Year() < 1 {
 		return JurisdictionAssessment{Status: JurisdictionIndeterminate, Reason: ReasonUKEvaluationDateInvalid}
 	}
+	evaluationYear := date.Year()
 	if evidence.WorkCategory != WorkCategoryOrdinaryLiterary {
 		return JurisdictionAssessment{Status: JurisdictionIndeterminate, Reason: ReasonUKWorkCategoryUnsupported}
 	}
@@ -78,29 +79,35 @@ func evaluateUK(evaluationDate time.Time, evidence UKEvidence) JurisdictionAsses
 	if evidence.Author.DeathYear == 0 {
 		return JurisdictionAssessment{Status: JurisdictionIndeterminate, Reason: ReasonUKAuthorDeathUnknown}
 	}
+	if evidence.Author.DeathYear < 1 {
+		return JurisdictionAssessment{Status: JurisdictionIndeterminate, Reason: ReasonUKAuthorDeathInvalid}
+	}
+	if evidence.Author.DeathYear > evaluationYear {
+		return JurisdictionAssessment{Status: JurisdictionIndeterminate, Reason: ReasonUKAuthorDeathFuture}
+	}
 	if !hasEvidence(evidence.Author.References) {
 		return JurisdictionAssessment{Status: JurisdictionIndeterminate, Reason: ReasonUKAuthorEvidenceMissing}
 	}
-	if evidence.Translation == FactPresent {
-		return JurisdictionAssessment{Status: JurisdictionIndeterminate, Reason: ReasonUKTranslationPresent}
+	if result, ok := evaluateAbsenceFact(evidence.Translation, ReasonUKTranslationPresent, ReasonUKTranslationUnknown, ReasonUKTranslationEvidenceMissing); ok {
+		return result
 	}
-	if evidence.Translation != FactNoneConfirmed {
-		return JurisdictionAssessment{Status: JurisdictionIndeterminate, Reason: ReasonUKTranslationUnknown}
+	if result, ok := evaluateAbsenceFact(evidence.AdditionalTextualContribution, ReasonUKAdditionalContributionPresent, ReasonUKAdditionalContributionUnknown, ReasonUKAdditionalContributionEvidenceMissing); ok {
+		return result
 	}
-	if evidence.AdditionalTextualContribution == FactPresent {
-		return JurisdictionAssessment{Status: JurisdictionIndeterminate, Reason: ReasonUKAdditionalContributionPresent}
+	if result, ok := evaluateAbsenceFact(evidence.SpecialCategory, ReasonUKSpecialCategoryUnsupported, ReasonUKSpecialCategoryUnsupported, ReasonUKSpecialCategoryEvidenceMissing); ok {
+		return result
 	}
-	if evidence.AdditionalTextualContribution != FactNoneConfirmed {
-		return JurisdictionAssessment{Status: JurisdictionIndeterminate, Reason: ReasonUKAdditionalContributionUnknown}
-	}
-	if evidence.SpecialCategory != FactNoneConfirmed {
-		return JurisdictionAssessment{Status: JurisdictionIndeterminate, Reason: ReasonUKSpecialCategoryUnsupported}
-	}
-	if evidence.UnpublishedAtEnd1988 != FactNoneConfirmed {
-		return JurisdictionAssessment{Status: JurisdictionIndeterminate, Reason: ReasonUKUnpublishedHistoryUnsupported}
+	if result, ok := evaluateAbsenceFact(evidence.UnpublishedAtEnd1988, ReasonUKUnpublishedHistoryUnsupported, ReasonUKUnpublishedHistoryUnsupported, ReasonUKUnpublishedHistoryEvidenceMissing); ok {
+		return result
 	}
 	if evidence.FirstPublication.Year == 0 || !hasEvidence(evidence.FirstPublication.References) {
 		return JurisdictionAssessment{Status: JurisdictionIndeterminate, Reason: ReasonUKPublicationEvidenceMissing}
+	}
+	if evidence.FirstPublication.Year < 1 {
+		return JurisdictionAssessment{Status: JurisdictionIndeterminate, Reason: ReasonUKPublicationYearInvalid}
+	}
+	if evidence.FirstPublication.Year > evaluationYear {
+		return JurisdictionAssessment{Status: JurisdictionIndeterminate, Reason: ReasonUKPublicationYearFuture}
 	}
 	if evidence.FirstPublication.Year > evidence.Author.DeathYear {
 		return JurisdictionAssessment{Status: JurisdictionIndeterminate, Reason: ReasonUKPublicationPosthumousUnsupported}
@@ -109,10 +116,23 @@ func evaluateUK(evaluationDate time.Time, evidence UKEvidence) JurisdictionAsses
 	// For the supported ordinary-life policy, the term ends on 31 December of
 	// the death year plus 70. A UTC calendar date in the following year is the
 	// first date that can satisfy this condition.
-	if date.Year() < evidence.Author.DeathYear+71 {
+	if evaluationYear-evidence.Author.DeathYear < 71 {
 		return JurisdictionAssessment{Status: JurisdictionIneligible, Reason: ReasonUKOrdinaryLiteraryTermActive}
 	}
 	return JurisdictionAssessment{Status: JurisdictionEligible, Reason: ReasonUKOrdinaryLiteraryTermExpired}
+}
+
+func evaluateAbsenceFact(fact FactEvidence, present, unknown, missingEvidence ReasonCode) (JurisdictionAssessment, bool) {
+	if fact.State == FactPresent {
+		return JurisdictionAssessment{Status: JurisdictionIndeterminate, Reason: present}, true
+	}
+	if fact.State != FactNoneConfirmed {
+		return JurisdictionAssessment{Status: JurisdictionIndeterminate, Reason: unknown}, true
+	}
+	if !hasEvidence(fact.References) {
+		return JurisdictionAssessment{Status: JurisdictionIndeterminate, Reason: missingEvidence}, true
+	}
+	return JurisdictionAssessment{}, false
 }
 
 func validProviderRights(value ProviderRightsClassification) bool {
