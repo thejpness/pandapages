@@ -25,7 +25,7 @@ const (
 func knownUKException(title, author string) UKKnownException {
 	normalizedTitle := normalizeKnownExceptionIdentity(title)
 
-	if normalizedTitle == "peterpan" && knownPeterPanAuthor(author) {
+	if knownPeterPanTitle(normalizedTitle) && knownPeterPanAuthor(author) {
 		return UKKnownExceptionPeterPan
 	}
 	if knownKingJamesBibleTitle(normalizedTitle) {
@@ -35,6 +35,15 @@ func knownUKException(title, author string) UKKnownException {
 		return UKKnownExceptionBookOfCommonPrayer
 	}
 	return UKKnownExceptionNone
+}
+
+func knownPeterPanTitle(title string) bool {
+	switch title {
+	case "peterpan", "peterpanpeterandwendy", "peterandwendy", "peterpanandwendy", "peterpanortheboywhowouldnotgrowup", "peterpanortheboywhowouldntgrowup":
+		return true
+	default:
+		return false
+	}
 }
 
 func knownPeterPanAuthor(value string) bool {
@@ -49,7 +58,7 @@ func knownPeterPanAuthor(value string) bool {
 
 func knownKingJamesBibleTitle(title string) bool {
 	switch title {
-	case "kingjamesbible", "thekingjamesbible", "kingjamesversion", "thekingjamesversion", "authorisedversion", "authorizedversion", "authorisedversionofthebible", "authorizedversionofthebible":
+	case "kingjamesbible", "thekingjamesbible", "kingjamesversion", "thekingjamesversion", "thekingjamesversionofthebible", "thebiblekingjamesversion", "authorisedversion", "authorizedversion", "authorisedversionofthebible", "authorizedversionofthebible":
 		return true
 	default:
 		return false

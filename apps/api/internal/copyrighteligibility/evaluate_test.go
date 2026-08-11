@@ -231,21 +231,32 @@ func TestEvaluateUKKnownExceptionsBlockSupportedPath(t *testing.T) {
 	}
 }
 
-func TestKnownUKExceptionDoesNotFuzzyMatch(t *testing.T) {
+func TestKnownUKExceptionProviderTitleAliasesAndFalsePositives(t *testing.T) {
 	tests := []struct {
+		name   string
 		title  string
 		author string
+		want   UKKnownException
 	}{
-		{"", "J. M. Barrie"},
-		{"Peter Pan", "Lewis Carroll"},
-		{"Peter Pan and Wendy", "J. M. Barrie"},
-		{"A King James Bible Commentary", ""},
-		{"A Book of Common Prayers", ""},
+		{"Peter Pan provider bracket form", "Peter Pan : [Peter and Wendy]", "J. M. Barrie", UKKnownExceptionPeterPan},
+		{"Peter and Wendy", "Peter and Wendy", "James Matthew Barrie", UKKnownExceptionPeterPan},
+		{"Peter Pan and Wendy", "Peter Pan and Wendy", "J. M. Barrie", UKKnownExceptionPeterPan},
+		{"Peter Pan play title", "Peter Pan : or, The boy who would not grow up", "J. M. Barrie", UKKnownExceptionPeterPan},
+		{"Peter Pan apostrophe play title", "Peter Pan : or, The boy who wouldn't grow up", "J. M. Barrie", UKKnownExceptionPeterPan},
+		{"unrelated Peter Pan author", "Peter Pan", "Lewis Carroll", UKKnownExceptionNone},
+		{"Peter Pan commentary", "A History of Peter Pan", "J. M. Barrie", UKKnownExceptionNone},
+		{"King James Version of the Bible", "The King James Version of the Bible", "", UKKnownExceptionKingJamesBible},
+		{"Bible King James Version", "The Bible, King James Version", "", UKKnownExceptionKingJamesBible},
+		{"King James Bible study", "A Study of the King James Version of the Bible", "", UKKnownExceptionNone},
+		{"empty title", "", "J. M. Barrie", UKKnownExceptionNone},
+		{"Book of Common Prayers", "A Book of Common Prayers", "", UKKnownExceptionNone},
 	}
 	for _, test := range tests {
-		if got := knownUKException(test.title, test.author); got != UKKnownExceptionNone {
-			t.Fatalf("knownUKException(%q, %q)=%q", test.title, test.author, got)
-		}
+		t.Run(test.name, func(t *testing.T) {
+			if got := knownUKException(test.title, test.author); got != test.want {
+				t.Fatalf("knownUKException(%q, %q)=%q want=%q", test.title, test.author, got, test.want)
+			}
+		})
 	}
 }
 
