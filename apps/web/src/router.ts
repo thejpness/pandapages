@@ -95,6 +95,11 @@ export const router = createRouter({
           component: () => import("./views/admin/SourceReview.vue"),
         },
         {
+          path: "source-review/works/:externalID",
+          name: "admin-source-review-work",
+          component: () => import("./views/admin/SourceReview.vue"),
+        },
+        {
           path: "stories/new",
           name: "admin-story-new",
           component: () => import("./views/admin/StoryStudioEditor.vue"),

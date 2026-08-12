@@ -56,6 +56,7 @@ type HumanUKEvidence struct {
 type Evaluation struct {
 	Candidate           sourceprovider.SourceCandidate
 	ProviderEvidence    copyrighteligibility.ProviderEvidence
+	Resolution          evidenceresolver.Resolution
 	OPDSRights          copyrighteligibility.ProviderRightsClassification
 	HeaderRights        copyrighteligibility.SourceHeaderRightsClassification
 	EffectiveUKEvidence copyrighteligibility.UKEvidence
@@ -122,7 +123,7 @@ func (s *Service) Evaluate(ctx context.Context, provider sourceprovider.ID, exte
 	if err != nil {
 		return Evaluation{}, ErrProviderEvidenceInvalid
 	}
-	effective, err := bindGutenbergUKEvidence(providerEvidence, evidenceresolver.ToUKEvidence(resolution), human)
+	effective, err := bindGutenbergUKEvidence(providerEvidence, resolution, evidenceresolver.ToUKEvidence(resolution), human)
 	if err != nil {
 		return Evaluation{}, err
 	}
@@ -140,6 +141,7 @@ func (s *Service) Evaluate(ctx context.Context, provider sourceprovider.ID, exte
 	return Evaluation{
 		Candidate:           acquired.Candidate,
 		ProviderEvidence:    canonicalProviderEvidence(providerEvidence),
+		Resolution:          resolution,
 		OPDSRights:          acquired.OPDSRights,
 		HeaderRights:        acquired.HeaderRights,
 		EffectiveUKEvidence: canonicalUKEvidence(effective),
@@ -149,7 +151,7 @@ func (s *Service) Evaluate(ctx context.Context, provider sourceprovider.ID, exte
 	}, nil
 }
 
-func bindGutenbergUKEvidence(provider copyrighteligibility.ProviderEvidence, automated copyrighteligibility.UKEvidence, human HumanUKEvidence) (copyrighteligibility.UKEvidence, error) {
+func bindGutenbergUKEvidence(provider copyrighteligibility.ProviderEvidence, resolution evidenceresolver.Resolution, automated copyrighteligibility.UKEvidence, human HumanUKEvidence) (copyrighteligibility.UKEvidence, error) {
 	if provider.Provider != string(sourceprovider.ProjectGutenberg) || strings.TrimSpace(provider.ExternalID) == "" {
 		return copyrighteligibility.UKEvidence{}, ErrProviderEvidenceInvalid
 	}
@@ -160,19 +162,19 @@ func bindGutenbergUKEvidence(provider copyrighteligibility.ProviderEvidence, aut
 	if err != nil {
 		return copyrighteligibility.UKEvidence{}, err
 	}
-	firstPublication, err := mergePublication(automated.FirstPublication, human.FirstPublication)
+	firstPublication, err := mergePublication(resolution.FirstPublication.Status, automated.FirstPublication, human.FirstPublication)
 	if err != nil {
 		return copyrighteligibility.UKEvidence{}, err
 	}
-	translation, err := mergeFact(automated.Translation, human.Translation)
+	translation, err := mergeFact(resolution.Translation.Status, automated.Translation, human.Translation)
 	if err != nil {
 		return copyrighteligibility.UKEvidence{}, err
 	}
-	additionalTextual, err := mergeFact(automated.AdditionalTextualContribution, human.AdditionalTextual)
+	additionalTextual, err := mergeFact(resolution.AdditionalTextual.Status, automated.AdditionalTextualContribution, human.AdditionalTextual)
 	if err != nil {
 		return copyrighteligibility.UKEvidence{}, err
 	}
-	unpublished, err := mergeFact(automated.UnpublishedAtEnd1988, human.UnpublishedAtEnd1988)
+	unpublished, err := mergeFact(resolution.UnpublishedAtEnd1988.Status, automated.UnpublishedAtEnd1988, human.UnpublishedAtEnd1988)
 	if err != nil {
 		return copyrighteligibility.UKEvidence{}, err
 	}
@@ -232,7 +234,13 @@ func mergeWorkCategory(automated copyrighteligibility.WorkCategory, automatedRef
 	return human, canonicalReferences(humanReferences), nil
 }
 
-func mergePublication(automated, human copyrighteligibility.PublicationEvidence) (copyrighteligibility.PublicationEvidence, error) {
+func mergePublication(status evidenceresolver.ResolutionStatus, automated, human copyrighteligibility.PublicationEvidence) (copyrighteligibility.PublicationEvidence, error) {
+	if status == evidenceresolver.ResolutionConflicting {
+		if human.Year != 0 {
+			return copyrighteligibility.PublicationEvidence{}, ErrHumanEvidenceConflict
+		}
+		return copyrighteligibility.PublicationEvidence{}, nil
+	}
 	if automated.Year != 0 {
 		if human.Year != 0 && human.Year != automated.Year {
 			return copyrighteligibility.PublicationEvidence{}, ErrHumanEvidenceConflict
@@ -242,7 +250,13 @@ func mergePublication(automated, human copyrighteligibility.PublicationEvidence)
 	return copyrighteligibility.PublicationEvidence{Year: human.Year, References: canonicalReferences(human.References)}, nil
 }
 
-func mergeFact(automated, human copyrighteligibility.FactEvidence) (copyrighteligibility.FactEvidence, error) {
+func mergeFact(status evidenceresolver.ResolutionStatus, automated, human copyrighteligibility.FactEvidence) (copyrighteligibility.FactEvidence, error) {
+	if status == evidenceresolver.ResolutionConflicting {
+		if !unknownFactState(human.State) {
+			return copyrighteligibility.FactEvidence{}, ErrHumanEvidenceConflict
+		}
+		return copyrighteligibility.FactEvidence{State: copyrighteligibility.FactUnknown}, nil
+	}
 	if !unknownFactState(automated.State) {
 		if !unknownFactState(human.State) && human.State != automated.State {
 			return copyrighteligibility.FactEvidence{}, ErrHumanEvidenceConflict

@@ -919,27 +919,31 @@ test('global source review validates factual evidence, saves eligible work, and 
   await page.getByRole('button', { name: 'Search', exact: true }).click()
   await expect(page.getByRole('heading', { name: "Alice's Adventures in Wonderland" })).toBeVisible()
   await page.getByRole('button', { name: 'Select work' }).click()
-  await expect(page.getByRole('heading', { name: "Alice's Adventures in Wonderland" })).toHaveCount(2)
-  await expect(page.getByText('United States:')).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Validate & save for source review' })).toBeVisible()
-  await expect(page.getByRole('button', { name: /Preview source|Approve preview|Accept candidate/ })).toHaveCount(0)
-  await expect(page.getByLabel('Special category', { exact: true })).toHaveCount(0)
-  await page.getByLabel('Work type evidence source').fill('Title-page record')
-  await page.getByLabel('Work type observed fact').fill('The title page identifies this as an ordinary literary work.')
-  await page.getByLabel('First publication year').fill('1865')
-  await page.getByLabel('First publication evidence source').fill('Library catalogue')
-  await page.getByLabel('First publication observed fact').fill('The catalogue records first publication in 1865.')
-  await page.getByLabel('First publication evidence locator / reference (optional)').fill('Shelfmark C.123, title page')
-  await page.getByLabel('Translation', { exact: true }).selectOption('none_confirmed')
-  await page.getByLabel('Translation evidence source').fill('Edition inspection')
-  await page.getByLabel('Translation observed fact').fill('No translator is identified in this acquired text.')
-  await page.getByLabel('Additional textual contribution', { exact: true }).selectOption('none_confirmed')
-  await page.getByLabel('Additional textual contribution evidence source').fill('Edition inspection')
-  await page.getByLabel('Additional textual contribution observed fact').fill('No additional textual contribution appears in this acquired text.')
-  await page.getByLabel('Unpublished at end of 1988', { exact: true }).selectOption('none_confirmed')
-  await page.getByLabel('Unpublished-at-end-of-1988 evidence source').fill('Publication record')
-  await page.getByLabel('Unpublished-at-end-of-1988 observed fact').fill('The work was published before the end of 1988.')
-  await page.getByRole('button', { name: 'Validate & save for source review' }).click()
+  await expect(page).toHaveURL('/admin/source-review/works/11?q=alice')
+  await expect(page.getByRole('heading', { name: "Alice's Adventures in Wonderland" })).toHaveCount(1)
+  await expect(page.getByRole('searchbox', { name: 'Search Project Gutenberg' })).toHaveCount(0)
+  await expect(page.getByText('Eligible under Panda Pages V3')).toBeVisible()
+  const facts = page.locator('.source-eligibility-summary__facts')
+  await expect(facts.getByText('1898', { exact: true })).toBeVisible()
+  await expect(facts.getByText('1865', { exact: true })).toBeVisible()
+  await expect(page.getByLabel('First publication year')).toHaveCount(0)
+  await expect(page.getByLabel('Translation', { exact: true })).toHaveCount(0)
+  await expect(page.getByLabel('Additional textual contribution', { exact: true })).toHaveCount(0)
+  await expect(page.getByLabel('Unpublished at end of 1988', { exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Save for source review' })).toBeVisible()
+  const firstPreflight = api.requests.find((request) =>
+    request.path.endsWith('/copyright-eligibility'),
+  )?.body
+  expect(firstPreflight).toEqual({})
+
+  await page.getByRole('button', { name: '← Back to search results' }).click()
+  await expect(page).toHaveURL('/admin/source-review?q=alice')
+  await expect(page.getByRole('searchbox', { name: 'Search Project Gutenberg' })).toHaveValue('alice')
+  await expect(page.getByRole('heading', { name: "Alice's Adventures in Wonderland" })).toBeVisible()
+
+  await page.getByRole('button', { name: 'Select work' }).click()
+  await expect(page).toHaveURL('/admin/source-review/works/11?q=alice')
+  await page.getByRole('button', { name: 'Save for source review' }).click()
 
   await expect(page.getByText('Saved for source review.')).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Saved source text' })).toBeVisible()
@@ -947,7 +951,7 @@ test('global source review validates factual evidence, saves eligible work, and 
   await expect(page.getByRole('heading', { name: 'Copyright eligibility' })).toBeVisible()
   expect(api.count('POST', '/api/v1/admin/source-providers/project-gutenberg/works/11/acquisitions')).toBe(1)
   const saveBody = api.requests.find((request) => request.path.endsWith('/acquisitions'))?.body as Record<string, unknown>
-  expect(saveBody).toMatchObject({ firstPublicationYear: 1865, workCategoryReferences: [{ source: 'Title-page record', fact: 'The title page identifies this as an ordinary literary work.' }], firstPublicationReferences: [{ source: 'Library catalogue', fact: 'The catalogue records first publication in 1865.', locator: 'Shelfmark C.123, title page' }], translation: { references: [{ source: 'Edition inspection', fact: 'No translator is identified in this acquired text.' }] } })
+  expect(saveBody).toEqual({})
   expect(JSON.stringify(saveBody)).not.toMatch(/sourceText|providerUrl|snapshotHash|policyVersion|"eligible"/)
   await expect(page.getByLabel('Rights status')).toHaveCount(0)
 
@@ -982,29 +986,103 @@ test('global source review validates factual evidence, saves eligible work, and 
   await page.getByRole('searchbox', { name: 'Search Project Gutenberg' }).fill('alice')
   await page.getByRole('button', { name: 'Search', exact: true }).click()
   await page.getByRole('button', { name: 'Select work' }).click()
-  await page.getByRole('button', { name: 'Validate & save for source review' }).click()
+  await page.getByRole('button', { name: 'Save for source review' }).click()
   await expect(page.getByText('This exact saved source already exists. Opening it for review.')).toBeVisible()
   expect(api.count('POST', '/api/v1/admin/source-providers/project-gutenberg/works/11/acquisitions')).toBe(2)
   expect(api.unhandled).toEqual([])
   expect(await seriousOrCriticalViolations(page)).toEqual([])
 })
 
-test('global source review preserves provider facts through a stale factual form', async ({ page }) => {
+test('global source review offers factual fallback only for insufficient automatic evidence', async ({ page }) => {
   const api = new StudioAPI()
-  api.sourceEligibilityOverrides.set('11', { contributors: [{ name: 'Lewis Carroll', role: 'author', deathYear: 1898 }, { name: 'Translator', role: 'translator' }] })
+  const base = sourceEligibility()
+  api.sourceEligibilityOverrides.set('11', {
+    uk: { status: 'indeterminate', reason: 'uk_publication_evidence_missing' },
+    overall: 'blocked',
+    overallReason: 'overall_blocked',
+    automaticResolution: {
+      workCategory: 'established',
+      authorship: 'established',
+      author: 'established',
+      firstPublication: 'insufficient',
+      translation: 'established',
+      additionalTextualContribution: 'established',
+      unpublishedAtEnd1988: 'established',
+    },
+    effectiveUkEvidence: {
+      ...base.effectiveUkEvidence,
+      firstPublicationYear: 0,
+      firstPublicationReferences: [],
+    },
+  })
   await api.install(page)
   await page.goto('/admin/source-review')
   await page.getByRole('searchbox', { name: 'Search Project Gutenberg' }).fill('alice')
   await page.getByRole('button', { name: 'Search', exact: true }).click()
   await page.getByRole('button', { name: 'Select work' }).click()
-  await expect(page.getByText('Translator - translator')).toBeVisible()
-  await expect(page.getByText('Provider author death year: 1898')).toBeVisible()
+
+  await expect(page.getByText('Additional factual evidence required')).toBeVisible()
+  await expect(page.getByLabel('First publication year')).toBeVisible()
+  await expect(page.getByLabel('Work type')).toHaveCount(0)
   await expect(page.getByLabel('Translation', { exact: true })).toHaveCount(0)
-  await expect(page.getByLabel('Author death year', { exact: true })).toHaveCount(0)
+  const save = page.getByRole('button', { name: 'Validate & save for source review' })
+  await expect(save).toBeDisabled()
+
   await page.getByLabel('First publication year').fill('1865')
-  await expect(page.locator('.source-review__stale')).toHaveAttribute('role', 'status')
+  await page.getByLabel('First publication evidence source').fill('Library catalogue')
+  await page.getByLabel('First publication observed fact').fill('The catalogue records first publication in 1865.')
   await expect(page.getByText('Eligibility conclusion needs revalidation after factual evidence changed.')).toBeVisible()
-  await expect(page.getByText('Translator - translator')).toBeVisible()
+  await expect(save).toBeEnabled()
+  await save.click()
+  await expect(page.getByText('Saved for source review.')).toBeVisible()
+
+  const body = api.requests.find((request) => request.path.endsWith('/acquisitions'))?.body
+  expect(body).toEqual({
+    firstPublicationYear: 1865,
+    firstPublicationReferences: [
+      {
+        source: 'Library catalogue',
+        fact: 'The catalogue records first publication in 1865.',
+      },
+    ],
+  })
+  expect(api.unhandled).toEqual([])
+})
+
+test('global source review never offers manual repair for conflicting automatic evidence', async ({ page }) => {
+  const api = new StudioAPI()
+  const base = sourceEligibility()
+  api.sourceEligibilityOverrides.set('11', {
+    uk: { status: 'indeterminate', reason: 'uk_publication_evidence_missing' },
+    overall: 'blocked',
+    overallReason: 'overall_blocked',
+    automaticResolution: {
+      workCategory: 'established',
+      authorship: 'established',
+      author: 'established',
+      firstPublication: 'conflicting',
+      translation: 'established',
+      additionalTextualContribution: 'established',
+      unpublishedAtEnd1988: 'established',
+    },
+    effectiveUkEvidence: {
+      ...base.effectiveUkEvidence,
+      firstPublicationYear: 0,
+      firstPublicationReferences: [],
+    },
+  })
+  await api.install(page)
+  await page.goto('/admin/source-review')
+  await page.getByRole('searchbox', { name: 'Search Project Gutenberg' }).fill('alice')
+  await page.getByRole('button', { name: 'Search', exact: true }).click()
+  await page.getByRole('button', { name: 'Select work' }).click()
+
+  await expect(page.getByText('Manual evidence unavailable')).toBeVisible()
+  await expect(page.getByText(/Conflicting evidence cannot be manually overridden/)).toBeVisible()
+  await expect(page.getByLabel('First publication year')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Save for source review' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Validate & save for source review' })).toHaveCount(0)
+  expect(api.count('POST', '/api/v1/admin/source-providers/project-gutenberg/works/11/acquisitions')).toBe(0)
   expect(api.unhandled).toEqual([])
 })
 
@@ -1051,6 +1129,8 @@ test('global source review isolates stale search, saved-list, and detail request
   await page.getByRole('button', { name: 'Search', exact: true }).click()
   await page.getByRole('button', { name: 'Select work' }).click()
   await expect.poll(() => api.count('GET', '/api/v1/admin/source-providers/project-gutenberg/works/11')).toBe(1)
+  await page.getByRole('button', { name: '← Back to search results' }).click()
+  await expect(page).toHaveURL('/admin/source-review?q=alice')
   await page.getByRole('searchbox', { name: 'Search Project Gutenberg' }).fill('rabbit')
   await page.getByRole('button', { name: 'Search', exact: true }).click()
   await page.getByRole('button', { name: 'Select work' }).click()
@@ -1058,6 +1138,9 @@ test('global source review isolates stale search, saved-list, and detail request
   delayedWorkA.resolve()
   await expect(page.getByText('Project Gutenberg #12').last()).toBeVisible()
   await expect(page.getByRole('alert')).toHaveCount(0)
+
+  await page.getByRole('button', { name: '← Back to search results' }).click()
+  await expect(page).toHaveURL('/admin/source-review?q=rabbit')
 
   api.sourceListPlans.push({ gate: savedA, items: [first] }, { gate: savedB, items: [second] })
   await page.getByRole('tab', { name: 'Saved sources' }).click()

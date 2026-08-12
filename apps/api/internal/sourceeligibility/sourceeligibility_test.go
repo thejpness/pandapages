@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"pandapages/api/internal/copyrighteligibility"
+	"pandapages/api/internal/evidenceresolver"
 	"pandapages/api/internal/sourceprovider"
 )
 
@@ -23,6 +24,14 @@ func (s gatewayStub) AcquireEvidence(context.Context, sourceprovider.ID, string)
 }
 func (s gatewayStub) CopyrightEvidence(context.Context, sourceprovider.ID, string) (copyrighteligibility.ProviderEvidence, error) {
 	return s.evidence, s.evidenceErr
+}
+
+type resolverStub struct {
+	resolution evidenceresolver.Resolution
+}
+
+func (s resolverStub) Resolve(context.Context, evidenceresolver.ExactSourceContext) (evidenceresolver.Resolution, error) {
+	return s.resolution, nil
 }
 
 func TestEvaluateBindsProviderFactsAndHumanFacts(t *testing.T) {
@@ -53,6 +62,53 @@ func TestEvaluateRejectsManualConflictAndProviderRoleOverrides(t *testing.T) {
 	evaluation, err := service.Evaluate(context.Background(), sourceprovider.ProjectGutenberg, "11", eligibleHumanEvidence())
 	if err != nil || evaluation.EffectiveUKEvidence.Translation.State != copyrighteligibility.FactPresent || evaluation.Assessment.UK.Reason != copyrighteligibility.ReasonUKTranslationPresent {
 		t.Fatalf("translator was overridden: %#v / %v", evaluation, err)
+	}
+}
+
+func TestEvaluateHumanFallbackCannotRepairAutomatedConflicts(t *testing.T) {
+	death := 1898
+	gateway := gatewayStub{
+		acquired: acquisitionEvidence("11"),
+		evidence: providerEvidence("11", []copyrighteligibility.ContributorEvidence{{Name: "Lewis Carroll", Role: "author", DeathYear: &death}}),
+	}
+	human := eligibleHumanEvidence()
+
+	publicationConflict, err := New(Config{Gateway: gateway, Resolver: resolverStub{resolution: evidenceresolver.Resolution{
+		WorkTitle:        "Alice",
+		FirstPublication: evidenceresolver.ResolvedYear{Status: evidenceresolver.ResolutionConflicting, Reason: evidenceresolver.ReasonEvidenceConflict},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publicationConflict.Evaluate(context.Background(), sourceprovider.ProjectGutenberg, "11", human); !errors.Is(err, ErrHumanEvidenceConflict) {
+		t.Fatalf("publication conflict repaired by human evidence: %v", err)
+	}
+
+	translationConflict, err := New(Config{Gateway: gateway, Resolver: resolverStub{resolution: evidenceresolver.Resolution{
+		WorkTitle:   "Alice",
+		Translation: evidenceresolver.ResolvedFact{Status: evidenceresolver.ResolutionConflicting, State: copyrighteligibility.FactUnknown, Reason: evidenceresolver.ReasonEvidenceConflict},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := translationConflict.Evaluate(context.Background(), sourceprovider.ProjectGutenberg, "11", human); !errors.Is(err, ErrHumanEvidenceConflict) {
+		t.Fatalf("translation conflict repaired by human evidence: %v", err)
+	}
+
+	insufficient, err := New(Config{Gateway: gateway, Resolver: resolverStub{resolution: evidenceresolver.Resolution{
+		WorkTitle:        "Alice",
+		FirstPublication: evidenceresolver.ResolvedYear{Status: evidenceresolver.ResolutionInsufficient, Reason: evidenceresolver.ReasonEvidenceInsufficient},
+		Translation:      evidenceresolver.ResolvedFact{Status: evidenceresolver.ResolutionInsufficient, State: copyrighteligibility.FactUnknown, Reason: evidenceresolver.ReasonEvidenceInsufficient},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evaluation, err := insufficient.Evaluate(context.Background(), sourceprovider.ProjectGutenberg, "11", human)
+	if err != nil {
+		t.Fatalf("insufficient evidence should retain factual fallback: %v", err)
+	}
+	if evaluation.EffectiveUKEvidence.FirstPublication.Year != 1865 || evaluation.EffectiveUKEvidence.Translation.State != copyrighteligibility.FactNoneConfirmed {
+		t.Fatalf("human fallback was not retained for insufficient evidence: %#v", evaluation.EffectiveUKEvidence)
 	}
 }
 

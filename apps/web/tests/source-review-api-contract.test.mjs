@@ -43,7 +43,7 @@ function acquisitionSummary(overrides = {}) {
   }
 }
 
-test('source review wrappers submit only factual UK evidence and keep source text detail-only', async (t) => {
+test('source review wrappers support empty automatic evidence and keep source text detail-only', async (t) => {
   const originalFetch = globalThis.fetch
   t.after(() => { globalThis.fetch = originalFetch })
   const requests = []
@@ -64,23 +64,25 @@ test('source review wrappers submit only factual UK evidence and keep source tex
     return response({ items: [acquisitionSummary()] })
   }
   const api = await loadAPI()
-  const facts = { firstPublicationYear: 1865, firstPublicationReferences: reference('first published in 1865') }
   assert.equal((await api.adminSearchSourceProvider('project-gutenberg', 'alice')).results[0].externalId, '11')
   assert.equal((await api.adminGetSourceProviderWork('project-gutenberg', '11')).title, work.title)
-  assert.equal((await api.adminCheckSourceEligibility('project-gutenberg', '11', facts)).overall, 'eligible')
-  assert.equal((await api.adminPersistSourceAcquisition('project-gutenberg', '11', facts)).outcome, 'created')
+  assert.equal((await api.adminCheckSourceEligibility('project-gutenberg', '11', {})).overall, 'eligible')
+  assert.equal((await api.adminPersistSourceAcquisition('project-gutenberg', '11', {})).outcome, 'created')
   assert.equal((await api.adminListSourceAcquisitions()).items[0].title, work.title)
   assert.equal((await api.adminGetSourceAcquisition(id)).sourceText, 'Down the rabbit-hole.\n')
   assert.equal((await api.adminUpdateSourceAcquisitionSourceQualityReview(id, { status: 'rejected', note: 'Incomplete text' })).sourceQuality.status, 'rejected')
   assert.deepEqual(requests.map(({ path }) => path), ['/api/v1/admin/source-providers/project-gutenberg/search?q=alice', '/api/v1/admin/source-providers/project-gutenberg/works/11', '/api/v1/admin/source-providers/project-gutenberg/works/11/copyright-eligibility', '/api/v1/admin/source-providers/project-gutenberg/works/11/acquisitions', '/api/v1/admin/source-acquisitions', `/api/v1/admin/source-acquisitions/${id}`, `/api/v1/admin/source-acquisitions/${id}/source-quality-review`])
-  assert.deepEqual(JSON.parse(String(requests[2].init.body)), facts)
-  assert.deepEqual(JSON.parse(String(requests[3].init.body)), facts)
+  assert.deepEqual(JSON.parse(String(requests[2].init.body)), {})
+  assert.deepEqual(JSON.parse(String(requests[3].init.body)), {})
   for (const index of [2, 3]) {
     const body = String(requests[index].init.body)
     assert.ok(!body.includes('sourceText') && !body.includes('providerUrl') && !body.includes('snapshotHash') && !body.includes('"eligible"') && !body.includes('policyVersion'))
   }
   assert.deepEqual(JSON.parse(String(requests[6].init.body)), { status: 'rejected', note: 'Incomplete text' })
   assert.ok(requests.every(({ init }) => init.credentials === 'omit'))
+  const resolution = { workCategory: 'established', authorship: 'established', author: 'established', firstPublication: 'established', translation: 'established', additionalTextualContribution: 'established', unpublishedAtEnd1988: 'established' }
+  assert.equal(api.parseAdminEligibility(eligibility({ automaticResolution: resolution })).automaticResolution.firstPublication, 'established')
+  assert.throws(() => api.parseAdminEligibility(eligibility({ automaticResolution: { ...resolution, translation: 'maybe' } })), /Invalid admin response/)
   assert.equal(api.parseAdminEligibility(eligibility({
     us: { status: 'indeterminate', reason: 'us_provider_rights_missing' }, uk: { status: 'indeterminate', reason: 'uk_work_category_unsupported' }, overall: 'blocked', overallReason: 'overall_blocked',
     effectiveUkEvidence: { workTitle: "Alice's Adventures in Wonderland", workCategory: 'unknown', workCategoryReferences: [], authorship: 'unknown', authorshipReferences: [], authorName: '', authorDeathYear: 0, authorReferences: [], firstPublicationYear: 0, firstPublicationReferences: [], translation: { state: 'unknown', references: [] }, additionalTextualContribution: { state: 'unknown', references: [] }, unpublishedAtEnd1988: { state: 'unknown', references: [] } },

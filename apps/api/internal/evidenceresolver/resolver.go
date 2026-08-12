@@ -321,9 +321,22 @@ func resolveTranslationAbsence(provider copyrighteligibility.ProviderEvidence, r
 	if !front.Inspected || !hasSingleLanguage(provider.Languages) {
 		return ResolvedFact{Status: ResolutionInsufficient, State: copyrighteligibility.FactUnknown, Reason: ReasonEvidenceInsufficient}
 	}
-	originalLanguage, values, ok := resolveOriginalWorkLanguage(records)
-	if !ok || canonicalLanguage(provider.Languages[0]) != originalLanguage {
+	acquiredLanguage := canonicalLanguage(provider.Languages[0])
+	if acquiredLanguage == "" {
 		return ResolvedFact{Status: ResolutionInsufficient, State: copyrighteligibility.FactUnknown, Reason: ReasonEvidenceInsufficient}
+	}
+	originalLanguage, values, status := resolveOriginalWorkLanguage(records)
+	if status != ResolutionEstablished {
+		reason := ReasonEvidenceInsufficient
+		if status == ResolutionConflicting {
+			reason = ReasonEvidenceConflict
+		}
+		return ResolvedFact{Status: status, State: copyrighteligibility.FactUnknown, Reason: reason, Evidence: recordReferences(values, "Structured original-work language evidence is unresolved.")}
+	}
+	if acquiredLanguage != originalLanguage {
+		evidence := []EvidenceItem{providerReference(provider, "Project Gutenberg RDF supplies the acquired source language.")}
+		evidence = append(evidence, recordReferences(values, "Structured original-work language evidence conflicts with the acquired source language.")...)
+		return ResolvedFact{Status: ResolutionConflicting, State: copyrighteligibility.FactUnknown, Reason: ReasonEvidenceConflict, Evidence: evidence}
 	}
 	evidence := []EvidenceItem{
 		providerReference(provider, "Project Gutenberg RDF contains no recognised translator role."),
@@ -355,7 +368,7 @@ func resolveAdditionalTextualAbsence(provider copyrighteligibility.ProviderEvide
 // usable observation must canonically agree. A record with multiple plausible
 // original languages is itself unresolved and therefore blocks automated
 // translation screening.
-func resolveOriginalWorkLanguage(records []BibliographicRecord) (string, []BibliographicRecord, bool) {
+func resolveOriginalWorkLanguage(records []BibliographicRecord) (string, []BibliographicRecord, ResolutionStatus) {
 	var language string
 	values := make([]BibliographicRecord, 0, len(records))
 	for _, record := range records {
@@ -369,20 +382,26 @@ func resolveOriginalWorkLanguage(records []BibliographicRecord) (string, []Bibli
 				languages[value] = struct{}{}
 			}
 		}
+		if len(languages) == 0 {
+			continue
+		}
+		values = append(values, record)
 		if len(languages) != 1 {
-			return "", nil, false
+			return "", values, ResolutionConflicting
 		}
 		var observed string
 		for value := range languages {
 			observed = value
 		}
 		if language != "" && language != observed {
-			return "", nil, false
+			return "", values, ResolutionConflicting
 		}
 		language = observed
-		values = append(values, record)
 	}
-	return language, values, language != ""
+	if language == "" {
+		return "", values, ResolutionInsufficient
+	}
+	return language, values, ResolutionEstablished
 }
 
 func firstBibliographicContributor(records []BibliographicRecord, role string) (BibliographicRecord, bool) {

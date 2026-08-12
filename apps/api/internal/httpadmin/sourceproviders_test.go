@@ -112,6 +112,16 @@ func TestEligibilityPreflightIsZeroWriteAndFailsClosed(t *testing.T) {
 	if strings.Contains(response.Body.String(), "<rdf") {
 		t.Fatalf("raw RDF leaked: %s", response.Body.String())
 	}
+	for _, expected := range []string{
+		`"automaticResolution"`,
+		`"workCategory":"insufficient"`,
+		`"firstPublication":"insufficient"`,
+		`"translation":"insufficient"`,
+	} {
+		if !strings.Contains(response.Body.String(), expected) {
+			t.Fatalf("automatic resolution missing %s: %s", expected, response.Body.String())
+		}
+	}
 }
 
 func TestEligibleSaveAcceptsOnlyHumanFactsAndPersistsEvaluation(t *testing.T) {

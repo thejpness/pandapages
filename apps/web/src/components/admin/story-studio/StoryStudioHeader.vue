@@ -16,7 +16,11 @@ const menuOpen = ref(false)
 const storiesActive = computed(
   () => props.currentPath === '/admin/stories' || props.currentPath.startsWith('/admin/stories/'),
 )
-const sourceReviewActive = computed(() => props.currentPath === '/admin/source-review')
+const sourceReviewActive = computed(
+  () =>
+    props.currentPath === '/admin/source-review' ||
+    props.currentPath.startsWith('/admin/source-review/'),
+)
 
 function navigate(path: string) {
   menuOpen.value = false
