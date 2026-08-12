@@ -12,6 +12,14 @@ The committed synthetic fixture corpus under `apps/api/internal/storybenchmark/t
 
 The live Stage 4 CLI evaluates the controlled corpus only. It does not perform live story generation and does not accept an arbitrary source path. End-to-end generation remains available in the internal benchmark runner and will be exposed only after a separately reviewed eligible source fixture is added.
 
+### Reviewed end-to-end source fixture
+
+Stage 5A adds one committed, reviewed end-to-end source under `apps/api/internal/storybenchmark/testdata/publicdomain/benjamin-bunny`: *The Tale of Benjamin Bunny* by Beatrix Potter, Project Gutenberg ebook `14407`. The fixture is bound to an exact canonical-source SHA-256 and a reviewed evidence snapshot under `panda-pages-copyright-v3`.
+
+Loading the fixture re-runs the deterministic Panda Pages copyright policy and fails closed unless both the US and UK assessments are eligible. The loader also requires the exact Project Gutenberg provider identity and landing URL. This is a benchmark-specific reviewed fixture, not an arbitrary source-file escape hatch.
+
+Stage 5A does not yet expose paid end-to-end generation through the CLI. That remains a separate change so the source/provenance boundary can be reviewed independently from live execution and human-review scoring.
+
 ## Technical status versus model quality
 
 `complete` means the benchmark trial completed its technical contract. `incomplete` means transport, decoding, evidence, artifact, binding, or another execution boundary failed.
