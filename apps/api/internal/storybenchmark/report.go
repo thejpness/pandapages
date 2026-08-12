@@ -35,18 +35,20 @@ type UsageSummary struct {
 }
 
 type ControlledResultDocument struct {
-	BenchmarkVersion Version       `json:"benchmarkVersion"`
-	Suite            string        `json:"suite"`
-	StartedAt        string        `json:"startedAt"`
-	FinishedAt       string        `json:"finishedAt"`
-	Run              ControlledRun `json:"run"`
-	Usage            UsageSummary  `json:"usage"`
+	BenchmarkVersion Version           `json:"benchmarkVersion"`
+	Suite            string            `json:"suite"`
+	StartedAt        string            `json:"startedAt"`
+	FinishedAt       string            `json:"finishedAt"`
+	Run              ControlledRun     `json:"run"`
+	Usage            UsageSummary      `json:"usage"`
+	ResponsesAPI     ResponseTelemetry `json:"responsesApiTelemetry"`
 }
 
 func BuildControlledResultDocument(
 	startedAt time.Time,
 	finishedAt time.Time,
 	run ControlledRun,
+	responses ...ResponseTelemetry,
 ) (ControlledResultDocument, error) {
 	if run.BenchmarkVersion != VersionV1 {
 		return ControlledResultDocument{}, fmt.Errorf("controlled run benchmark version must equal %q", VersionV1)
@@ -65,6 +67,10 @@ func BuildControlledResultDocument(
 	if err != nil {
 		return ControlledResultDocument{}, err
 	}
+	responseTelemetry, err := optionalResponseTelemetry(responses)
+	if err != nil {
+		return ControlledResultDocument{}, fmt.Errorf("controlled Responses telemetry is invalid: %w", err)
+	}
 
 	return ControlledResultDocument{
 		BenchmarkVersion: VersionV1,
@@ -73,6 +79,7 @@ func BuildControlledResultDocument(
 		FinishedAt:       finishedAt.UTC().Format(time.RFC3339Nano),
 		Run:              run,
 		Usage:            usage,
+		ResponsesAPI:     responseTelemetry,
 	}, nil
 }
 
@@ -82,6 +89,9 @@ func MarshalControlledResultJSON(document ControlledResultDocument) ([]byte, err
 	}
 	if document.Suite != ControlledSuite {
 		return nil, fmt.Errorf("result document suite must equal %q", ControlledSuite)
+	}
+	if err := document.ResponsesAPI.Validate(); err != nil {
+		return nil, fmt.Errorf("controlled Responses telemetry is invalid: %w", err)
 	}
 	encoded, err := json.MarshalIndent(document, "", "  ")
 	if err != nil {
@@ -93,6 +103,9 @@ func MarshalControlledResultJSON(document ControlledResultDocument) ([]byte, err
 func RenderControlledMarkdown(document ControlledResultDocument) (string, error) {
 	if document.BenchmarkVersion != VersionV1 || document.Suite != ControlledSuite {
 		return "", fmt.Errorf("controlled result document is invalid")
+	}
+	if err := document.ResponsesAPI.Validate(); err != nil {
+		return "", fmt.Errorf("controlled Responses telemetry is invalid: %w", err)
 	}
 
 	run := document.Run
@@ -113,7 +126,7 @@ func RenderControlledMarkdown(document ControlledResultDocument) (string, error)
 	fmt.Fprintf(&builder, "- Forbidden findings triggered: %d / %d checked (%s)\n\n", summary.ForbiddenFindingsTriggered, summary.ForbiddenFindingsChecked, percentage(summary.ForbiddenFindingsTriggered, summary.ForbiddenFindingsChecked))
 
 	builder.WriteString("## Validator matrix\n\n")
-	builder.WriteString("| Config | Model | Reasoning | Max output tokens | Complete responses | Total tokens |\n")
+	builder.WriteString("| Config | Model | Reasoning | Max output tokens | Valid assessment artifacts | Retained tokens |\n")
 	builder.WriteString("| --- | --- | --- | ---: | ---: | ---: |\n")
 	usageByID := make(map[string]ValidatorUsage, len(document.Usage.ByValidator))
 	for _, usage := range document.Usage.ByValidator {
@@ -133,13 +146,31 @@ func RenderControlledMarkdown(document ControlledResultDocument) (string, error)
 		)
 	}
 
-	builder.WriteString("\n## Token telemetry\n\n")
-	fmt.Fprintf(&builder, "- Completed model responses: %d\n", document.Usage.CompletedResponses)
-	fmt.Fprintf(&builder, "- Input tokens: %d\n", document.Usage.Usage.InputTokens)
-	fmt.Fprintf(&builder, "- Cached input tokens: %d\n", document.Usage.Usage.CachedTokens)
-	fmt.Fprintf(&builder, "- Output tokens: %d\n", document.Usage.Usage.OutputTokens)
-	fmt.Fprintf(&builder, "- Reasoning tokens: %d\n", document.Usage.Usage.ReasoningTokens)
-	fmt.Fprintf(&builder, "- Total tokens: %d\n\n", document.Usage.Usage.TotalTokens)
+	builder.WriteString("\n## Responses API telemetry\n\n")
+	fmt.Fprintf(&builder, "- Attempted requests: %d\n", document.ResponsesAPI.AttemptedRequests)
+	fmt.Fprintf(&builder, "- Successful Responses API results: %d\n", document.ResponsesAPI.SuccessfulResponses)
+	fmt.Fprintf(&builder, "- Failed Responses API requests: %d\n", document.ResponsesAPI.FailedRequests)
+	fmt.Fprintf(&builder, "- Input tokens across successful API results: %d\n", document.ResponsesAPI.Usage.InputTokens)
+	fmt.Fprintf(&builder, "- Cached input tokens across successful API results: %d\n", document.ResponsesAPI.Usage.CachedTokens)
+	fmt.Fprintf(&builder, "- Output tokens across successful API results: %d\n", document.ResponsesAPI.Usage.OutputTokens)
+	fmt.Fprintf(&builder, "- Reasoning tokens across successful API results: %d\n", document.ResponsesAPI.Usage.ReasoningTokens)
+	fmt.Fprintf(&builder, "- Total tokens across successful API results: %d\n\n", document.ResponsesAPI.Usage.TotalTokens)
+	if len(document.ResponsesAPI.ByRequestedModel) > 0 {
+		builder.WriteString("| Requested model | Attempted | Successful | Failed | Total tokens |\n")
+		builder.WriteString("| --- | ---: | ---: | ---: | ---: |\n")
+		for _, usage := range document.ResponsesAPI.ByRequestedModel {
+			fmt.Fprintf(&builder, "| `%s` | %d | %d | %d | %d |\n", usage.RequestedModel, usage.AttemptedRequests, usage.SuccessfulResponses, usage.FailedRequests, usage.Usage.TotalTokens)
+		}
+		builder.WriteString("\n")
+	}
+
+	builder.WriteString("## Retained artifact telemetry\n\n")
+	fmt.Fprintf(&builder, "- Technically valid assessment artifacts: %d\n", document.Usage.CompletedResponses)
+	fmt.Fprintf(&builder, "- Input tokens represented in retained artifacts: %d\n", document.Usage.Usage.InputTokens)
+	fmt.Fprintf(&builder, "- Cached input tokens represented in retained artifacts: %d\n", document.Usage.Usage.CachedTokens)
+	fmt.Fprintf(&builder, "- Output tokens represented in retained artifacts: %d\n", document.Usage.Usage.OutputTokens)
+	fmt.Fprintf(&builder, "- Reasoning tokens represented in retained artifacts: %d\n", document.Usage.Usage.ReasoningTokens)
+	fmt.Fprintf(&builder, "- Total tokens represented in retained artifacts: %d\n\n", document.Usage.Usage.TotalTokens)
 
 	builder.WriteString("## Interpretation boundary\n\n")
 	builder.WriteString("A semantic benchmark pass means the output is suitable to progress to human editorial review under the current benchmark expectations. It is not publication approval, a publication ticket, or a legal/source-eligibility determination.\n")

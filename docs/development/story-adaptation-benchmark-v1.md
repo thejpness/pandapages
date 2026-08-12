@@ -4,31 +4,31 @@ Identifier: `panda-pages-story-benchmark-v1`
 
 This benchmark evaluates Panda Pages adaptation generation and semantic validation without creating publication approval, publication tickets, or source-eligibility decisions.
 
-## Current suites
+## Suites
 
 ### Controlled semantic suite
 
 The committed synthetic fixture corpus under `apps/api/internal/storybenchmark/testdata/controlled` is publication-ineligible test material. Each case defines required and forbidden PR91 semantic findings. Generated-edition fixture Markdown must pass PR91 deterministic validation before it can enter semantic evaluation.
 
-The live Stage 4 CLI evaluates the controlled corpus only. It does not perform live story generation and does not accept an arbitrary source path. End-to-end generation remains available in the internal benchmark runner and will be exposed only after a separately reviewed eligible source fixture is added.
+The controlled live mode evaluates this fixed corpus only. It performs semantic-validation calls but does not perform story generation and does not accept an arbitrary source path.
 
-### Reviewed end-to-end source fixture
+### Reviewed end-to-end suite
 
-Stage 5A adds one committed, reviewed end-to-end source under `apps/api/internal/storybenchmark/testdata/publicdomain/benjamin-bunny`: *The Tale of Benjamin Bunny* by Beatrix Potter, Project Gutenberg ebook `14407`. The fixture is bound to an exact canonical-source SHA-256 and a reviewed evidence snapshot under `panda-pages-copyright-v3`.
+The end-to-end suite uses exactly one committed source under `apps/api/internal/storybenchmark/testdata/publicdomain/benjamin-bunny`: *The Tale of Benjamin Bunny* by Beatrix Potter, Project Gutenberg ebook `14407`. The fixture is bound to an exact canonical-source SHA-256 and a reviewed evidence snapshot under `panda-pages-copyright-v3`.
 
-Loading the fixture re-runs the deterministic Panda Pages copyright policy and fails closed unless both the US and UK assessments are eligible. The loader also requires the exact Project Gutenberg provider identity and landing URL. This is a benchmark-specific reviewed fixture, not an arbitrary source-file escape hatch.
+Loading the fixture re-runs the deterministic Panda Pages copyright policy and fails closed unless both the US and UK assessments are eligible. The loader also requires the exact Project Gutenberg provider identity and landing URL. The live CLI has no source-file or source-URL flag: end-to-end generation can only use this reviewed fixture.
 
-Stage 5A does not yet expose paid end-to-end generation through the CLI. That remains a separate change so the source/provenance boundary can be reviewed independently from live execution and human-review scoring.
+Generation reuses PR92 directly. Its model remains fixed by the generation contract to `gpt-5.6-terra`; the benchmark records the explicit analysis and edition reasoning efforts and output-token budgets used for the run. Each generation repetition independently performs one StoryAnalysis call and four edition-generation calls. Every validator configuration then evaluates the same exact four generated artifacts for that repetition: four edition assessments plus one bundle assessment per validation repetition.
 
 ## Technical status versus model quality
 
-`complete` means the benchmark trial completed its technical contract. `incomplete` means transport, decoding, evidence, artifact, binding, or another execution boundary failed.
+`complete` means the benchmark trial completed its technical contract. `incomplete` means transport, decoding, evidence, artifact, binding, structural validation, or another execution boundary failed.
 
-A semantic `fail` result is model output and must never be used to represent a technical execution error. Incomplete trials are excluded from quality scoring.
+A semantic `fail` result is model output and must never be used to represent a technical execution error. Incomplete validation trials are excluded from semantic or human-review agreement scoring. There are no automatic benchmark retries.
 
 ## Live execution guard
 
-Live execution is intentionally opt-in and paid. The command requires all of the following:
+Paid execution is intentionally opt-in. Both live modes require all of the following:
 
 1. the `--live` flag;
 2. `PP_ALLOW_LIVE_STORY_BENCHMARK=1`;
@@ -37,7 +37,9 @@ Live execution is intentionally opt-in and paid. The command requires all of the
 
 The API key is not accepted as a command-line argument and is not written to benchmark output.
 
-Run from `apps/api`:
+Run from `apps/api`.
+
+Controlled suite:
 
 ```bash
 export OPENAI_API_KEY='...'
@@ -46,38 +48,86 @@ export PP_ALLOW_LIVE_STORY_BENCHMARK=1
 go run ./cmd/storybenchmark --live
 ```
 
-The safe default is one validation repetition across the current validator matrix. Repetitions and the matrix can be changed explicitly, for example:
+End-to-end suite:
 
 ```bash
+export OPENAI_API_KEY='...'
+export PP_ALLOW_LIVE_STORY_BENCHMARK=1
+
 go run ./cmd/storybenchmark \
+  --mode=end-to-end \
   --live \
-  --validation-repetitions=3 \
+  --generation-repetitions=1 \
+  --validation-repetitions=1 \
   --models=gpt-5.6-luna,gpt-5.6-terra,gpt-5.6-sol \
   --reasoning-effort=medium \
-  --max-output-tokens=8192
+  --max-output-tokens=8192 \
+  --analysis-reasoning-effort=medium \
+  --analysis-max-output-tokens=16384 \
+  --edition-reasoning-effort=medium \
+  --edition-max-output-tokens=32768
 ```
 
-There are no automatic benchmark retries. A failed or incomplete call remains visible as an incomplete trial.
+Before making any live request, the end-to-end mode loads the committed fixture, verifies its exact source SHA-256, and re-evaluates its committed evidence through the current copyright policy. The command prints the planned number of paid requests before orchestration begins.
 
 ## Output
 
-Each live run creates a new private local directory beneath:
+Each live run creates a new private local directory beneath `apps/api/tmp/storybenchmark/`:
 
 ```text
-tmp/storybenchmark/controlled-<UTC timestamp>-<nanoseconds>/
+controlled-<UTC timestamp>-<nanoseconds>/
+end-to-end-<UTC timestamp>-<nanoseconds>/
 ```
 
-The repository already ignores `apps/api/tmp/`.
+The repository ignores `apps/api/tmp/`.
 
-Each run writes:
+Controlled runs write:
 
 - `result.json`: machine-readable benchmark result, model provenance, assessments, scores, and raw token telemetry;
 - `report.md`: human-readable summary derived from the result document.
 
-Files are created with mode `0600`; the run directory is created with mode `0700`. Existing run directories are never overwritten.
+End-to-end runs write:
 
-Token reporting records the existing Responses telemetry: input, cached input, output, reasoning, and total tokens. Stage 4 does not estimate dollar cost because the current transport does not expose cache-write token telemetry and pricing can change independently of the benchmark contract.
+- `result.json`: exact source/provenance binding, generation configuration, PR92 analysis and generated-edition artifacts, PR93 assessments, response IDs, and token telemetry;
+- `report.md`: derived technical and token summary;
+- `human-review-template.json`: an editorial-review template bound to the exact StoryAnalysis SHA-256 and generated edition content SHA-256 values.
+
+Files are created with mode `0600`; run directories are created with mode `0700`. Existing run directories and result files are never overwritten.
+
+Live execution wraps the Responses gateway with benchmark-owned telemetry before generation or semantic validation begins. The benchmark records request metadata plus response ID, returned model, and token usage for every successful Responses API result, even when downstream decoding, evidence verification, binding, structural validation, or scoring later marks the benchmark work incomplete. Raw prompts and model output are not duplicated into this telemetry stream. Failed API requests are recorded as failed attempts, but if no `ResponsesResult` exists there is no token usage available to record; provider-side work for such failures therefore cannot be inferred from the benchmark artifact.
+
+The existing `usage` block remains retained-artifact telemetry derived from valid PR92/PR93 artifacts. The separate `responsesApiTelemetry` block is the correct benchmark view for comparing observed API usage across validator configurations because it also includes successful model responses that were subsequently rejected by stricter Panda Pages validation.
+
+## Human-review comparison
+
+Human review is deliberately a second, offline step. It never makes an OpenAI request.
+
+After an end-to-end run, copy `human-review-template.json` to a separate review file. For each target:
+
+1. review the exact generated Markdown identified by its SHA-256 binding;
+2. change `reviewStatus` from `pending` to `complete`;
+3. set `expectedResult` to `pass`, `needs_review`, or `fail`;
+4. list the complete PR91 semantic finding-code set you expect in `expectedFindingCodes` (non-pass results require at least one code);
+5. record an editorial note as useful.
+
+Then score that review against the saved benchmark result:
+
+```bash
+go run ./cmd/storybenchmark \
+  --mode=human-review \
+  --result-json=tmp/storybenchmark/end-to-end-.../result.json \
+  --human-review=/path/to/completed-human-review.json
+```
+
+Human-review mode refuses `--live` and does not require `OPENAI_API_KEY`. It rejects pending targets, malformed taxonomy, wrong assessment scope, missing targets, changed source bindings, changed StoryAnalysis SHA-256 values, or changed generated-edition SHA-256 values. A review therefore cannot silently score regenerated content.
+
+Successful comparison writes, without overwriting existing files:
+
+- `human-review-score.json`;
+- `human-review-report.md`.
+
+The comparison reports result agreement and exact finding-set agreement separately, plus full agreement, globally and by validator configuration.
 
 ## Interpretation boundary
 
-A semantic benchmark pass means an output is suitable to progress to human editorial review under the benchmark expectations. It is not automatic publication approval, a legal conclusion, or permission to bypass human review.
+A semantic benchmark pass means an output is suitable to progress to human editorial review under the benchmark expectations. Human-review agreement is evidence for selecting and configuring a validator; it is not automatic publication approval, a legal conclusion, or permission to bypass human review or source eligibility.

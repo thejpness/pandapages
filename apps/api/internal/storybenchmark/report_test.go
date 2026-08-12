@@ -57,7 +57,29 @@ func TestBuildControlledResultDocumentAggregatesUsage(t *testing.T) {
 
 	start := time.Date(2026, 8, 12, 20, 0, 0, 0, time.FixedZone("BST", 3600))
 	finish := start.Add(2 * time.Second)
-	document, err := BuildControlledResultDocument(start, finish, run)
+	responses := summarizeResponseObservations([]ResponseObservation{
+		{
+			Sequence:        1,
+			Status:          ResponseTelemetrySucceeded,
+			RequestedModel:  config.Model,
+			ReturnedModel:   config.Model,
+			ReasoningEffort: config.ReasoningEffort,
+			MaxOutputTokens: config.MaxOutputTokens,
+			ResponseID:      "resp_complete",
+			Usage:           TokenUsage{InputTokens: 100, CachedTokens: 20, OutputTokens: 30, ReasoningTokens: 10, TotalTokens: 130},
+		},
+		{
+			Sequence:        2,
+			Status:          ResponseTelemetrySucceeded,
+			RequestedModel:  config.Model,
+			ReturnedModel:   config.Model,
+			ReasoningEffort: config.ReasoningEffort,
+			MaxOutputTokens: config.MaxOutputTokens,
+			ResponseID:      "resp_downstream_invalid",
+			Usage:           TokenUsage{InputTokens: 90, CachedTokens: 70, OutputTokens: 20, ReasoningTokens: 5, TotalTokens: 110},
+		},
+	})
+	document, err := BuildControlledResultDocument(start, finish, run, responses)
 	if err != nil {
 		t.Fatalf("BuildControlledResultDocument() error = %v", err)
 	}
@@ -69,6 +91,9 @@ func TestBuildControlledResultDocumentAggregatesUsage(t *testing.T) {
 	}
 	if len(document.Usage.ByValidator) != 1 || document.Usage.ByValidator[0].Usage.CachedTokens != 20 {
 		t.Fatalf("validator usage = %#v", document.Usage.ByValidator)
+	}
+	if document.ResponsesAPI.SuccessfulResponses != 2 || document.ResponsesAPI.Usage.TotalTokens != 240 {
+		t.Fatalf("Responses API telemetry = %#v", document.ResponsesAPI)
 	}
 }
 
@@ -109,7 +134,7 @@ func TestRenderControlledMarkdownStatesPublicationBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderControlledMarkdown() error = %v", err)
 	}
-	for _, required := range []string{"human editorial review", "not publication approval", "not publication", "Token telemetry"} {
+	for _, required := range []string{"human editorial review", "not publication approval", "not publication", "Responses API telemetry", "Retained artifact telemetry"} {
 		if !strings.Contains(markdown, required) {
 			t.Fatalf("markdown does not contain %q:\n%s", required, markdown)
 		}
@@ -132,7 +157,7 @@ func TestMarshalControlledResultJSONUsesStableTopLevelFields(t *testing.T) {
 	if err := json.Unmarshal(encoded, &decoded); err != nil {
 		t.Fatalf("json.Unmarshal() error = %v", err)
 	}
-	for _, field := range []string{"benchmarkVersion", "suite", "startedAt", "finishedAt", "run", "usage"} {
+	for _, field := range []string{"benchmarkVersion", "suite", "startedAt", "finishedAt", "run", "usage", "responsesApiTelemetry"} {
 		if _, exists := decoded[field]; !exists {
 			t.Fatalf("encoded result is missing %q: %s", field, encoded)
 		}
