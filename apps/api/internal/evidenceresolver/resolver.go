@@ -307,58 +307,82 @@ func resolveAdditionalTextual(provider copyrighteligibility.ProviderEvidence, re
 	if record, ok := firstBibliographicTextualContributor(records); ok {
 		return ResolvedFact{Status: ResolutionEstablished, State: copyrighteligibility.FactPresent, Reason: ReasonProviderContributorPresent, Evidence: []EvidenceItem{recordReference(record, "Structured bibliographic contributor data identifies an additional textual contributor.")}}
 	}
-	return resolveAdditionalTextualAbsence(provider, records, front)
+	return resolveAdditionalTextualAbsence(provider, front)
 }
 
-// resolveTranslationAbsence requires three independent, observable conditions:
-// a bounded exact-source wrapper with no translator signal, no Gutenberg RDF
-// translator, and an exact-edition bibliographic contributor record that
-// reports no translator while its original language agrees
-// with the acquired source language. Missing any condition remains unknown.
+// resolveTranslationAbsence applies Panda Pages' v3 contributor-risk screen.
+// It requires a clean, bounded exact Gutenberg wrapper and provider record,
+// plus a single acquired language that agrees with all usable structured
+// original-work language observations. This is screening evidence that no
+// material translation risk is indicated by the acquired source; it is not
+// proof that no translator has ever existed. Missing or conflicting language
+// evidence remains unknown.
 func resolveTranslationAbsence(provider copyrighteligibility.ProviderEvidence, records []BibliographicRecord, front FrontMatter) ResolvedFact {
 	if !front.Inspected || !hasSingleLanguage(provider.Languages) {
 		return ResolvedFact{Status: ResolutionInsufficient, State: copyrighteligibility.FactUnknown, Reason: ReasonEvidenceInsufficient}
 	}
-	values := make([]BibliographicRecord, 0, len(records))
-	for _, record := range records {
-		if record.EditionID != "" && record.ContributorRolesObserved && singleLanguageAgreement(provider.Languages, record.OriginalLanguages) && !hasContributorRole(record, "translator") {
-			values = append(values, record)
-		}
-	}
-	if len(values) == 0 {
+	originalLanguage, values, ok := resolveOriginalWorkLanguage(records)
+	if !ok || canonicalLanguage(provider.Languages[0]) != originalLanguage {
 		return ResolvedFact{Status: ResolutionInsufficient, State: copyrighteligibility.FactUnknown, Reason: ReasonEvidenceInsufficient}
 	}
 	evidence := []EvidenceItem{
 		providerReference(provider, "Project Gutenberg RDF contains no recognised translator role."),
 		{Class: SourceProjectGutenberg, Source: "Project Gutenberg source front matter", Digest: front.Digest, Fact: "Bounded provider front matter contains no translator signal."},
 	}
-	evidence = append(evidence, recordReferences(values, "An exact-edition bibliographic contributor record has matching original/source language and no translator role.")...)
+	evidence = append(evidence, recordReferences(values, "Structured original-work language evidence agrees with the acquired source language.")...)
 	return ResolvedFact{Status: ResolutionEstablished, State: copyrighteligibility.FactNoneConfirmed, Reason: ReasonEstablished, Evidence: evidence}
 }
 
-// resolveAdditionalTextualAbsence requires a bounded exact-source wrapper
-// without a contributor signal, no recognised Gutenberg textual contributor,
-// and an exact-edition structured contributor-role list without a relevant
-// textual role. It never treats a missing upstream field as an absence fact.
-func resolveAdditionalTextualAbsence(provider copyrighteligibility.ProviderEvidence, records []BibliographicRecord, front FrontMatter) ResolvedFact {
+// resolveAdditionalTextualAbsence applies Panda Pages' v3 contributor-risk
+// screen. A clean exact Gutenberg wrapper and provider record are sufficient
+// to establish that no material additional-text risk is indicated by the
+// acquired source. This does not assert that no separate contribution has ever
+// existed; any positive provider, front-matter, or structured observation wins.
+func resolveAdditionalTextualAbsence(provider copyrighteligibility.ProviderEvidence, front FrontMatter) ResolvedFact {
 	if !front.Inspected {
-		return ResolvedFact{Status: ResolutionInsufficient, State: copyrighteligibility.FactUnknown, Reason: ReasonEvidenceInsufficient}
-	}
-	values := make([]BibliographicRecord, 0, len(records))
-	for _, record := range records {
-		if record.EditionID != "" && record.ContributorRolesObserved && !hasTextualContributor(record) {
-			values = append(values, record)
-		}
-	}
-	if len(values) == 0 {
 		return ResolvedFact{Status: ResolutionInsufficient, State: copyrighteligibility.FactUnknown, Reason: ReasonEvidenceInsufficient}
 	}
 	evidence := []EvidenceItem{
 		providerReference(provider, "Project Gutenberg RDF contains no recognised additional textual contributor role."),
 		{Class: SourceProjectGutenberg, Source: "Project Gutenberg source front matter", Digest: front.Digest, Fact: "Bounded provider front matter contains no additional textual-contributor signal."},
 	}
-	evidence = append(evidence, recordReferences(values, "An exact-edition bibliographic contributor record has no relevant textual contributor role.")...)
 	return ResolvedFact{Status: ResolutionEstablished, State: copyrighteligibility.FactNoneConfirmed, Reason: ReasonEstablished, Evidence: evidence}
+}
+
+// resolveOriginalWorkLanguage establishes one original-work language from
+// structured bibliographic work observations. Publication authority is not
+// reused for this separate fact: one usable observation is enough, but every
+// usable observation must canonically agree. A record with multiple plausible
+// original languages is itself unresolved and therefore blocks automated
+// translation screening.
+func resolveOriginalWorkLanguage(records []BibliographicRecord) (string, []BibliographicRecord, bool) {
+	var language string
+	values := make([]BibliographicRecord, 0, len(records))
+	for _, record := range records {
+		if len(record.OriginalLanguages) == 0 {
+			continue
+		}
+		languages := make(map[string]struct{}, len(record.OriginalLanguages))
+		for _, value := range record.OriginalLanguages {
+			value = canonicalLanguage(value)
+			if value != "" {
+				languages[value] = struct{}{}
+			}
+		}
+		if len(languages) != 1 {
+			return "", nil, false
+		}
+		var observed string
+		for value := range languages {
+			observed = value
+		}
+		if language != "" && language != observed {
+			return "", nil, false
+		}
+		language = observed
+		values = append(values, record)
+	}
+	return language, values, language != ""
 }
 
 func firstBibliographicContributor(records []BibliographicRecord, role string) (BibliographicRecord, bool) {
@@ -398,14 +422,6 @@ func hasTextualContributor(record BibliographicRecord) bool {
 	return false
 }
 
-func singleLanguageAgreement(source, original []string) bool {
-	if len(source) != 1 || len(original) != 1 {
-		return false
-	}
-	left, right := canonicalLanguage(source[0]), canonicalLanguage(original[0])
-	return left != "" && left == right
-}
-
 func canonicalLanguage(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
 	value = strings.TrimPrefix(value, "http://id.loc.gov/vocabulary/iso639-2/")
@@ -420,6 +436,14 @@ func canonicalLanguage(value string) string {
 	case "es", "spa":
 		return "spa"
 	default:
+		if len(value) < 2 || len(value) > 3 {
+			return ""
+		}
+		for _, r := range value {
+			if r < 'a' || r > 'z' {
+				return ""
+			}
+		}
 		return value
 	}
 }

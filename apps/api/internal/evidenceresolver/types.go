@@ -92,7 +92,6 @@ type BibliographicRecord struct {
 	Digest               string
 	Title                string
 	WorkID               string
-	EditionID            string
 	Authors              []Person
 	Contributors         []Contributor
 	FirstPublicationYear *int
@@ -100,11 +99,6 @@ type BibliographicRecord struct {
 	OriginalLanguages    []string
 	Subjects             []string
 	MaterialTypes        []string
-	// ContributorRolesObserved means the source supplied a structured
-	// contributor-role list for the identified exact edition. An empty list is
-	// an observable result, not an adapter assertion that a contribution cannot
-	// exist outside the record.
-	ContributorRolesObserved bool
 }
 
 // Query contains only server-owned exact-work metadata. It does not contain a

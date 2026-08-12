@@ -6,9 +6,9 @@ import (
 )
 
 func TestExtractFrontMatterRecognisesOnlyBoundedPositiveContributorSignals(t *testing.T) {
-	source := "Translator: Samuel Butler\nEditor: Example Editor\nIntroduction by Another Writer\n*** START OF THE PROJECT GUTENBERG EBOOK EXAMPLE ***\n\nTranslated by a character in the literary body.\n"
+	source := "Translator: Samuel Butler\nEditor: Example Editor\nIntroduction by Another Writer\nAnnotations by Another Writer\nCommentary: Another Writer\n*** START OF THE PROJECT GUTENBERG EBOOK EXAMPLE ***\n\nTranslated by a character in the literary body.\n"
 	front := ExtractFrontMatter(source)
-	if !front.Inspected || len(front.Translators) != 1 || front.Translators[0] != "Samuel Butler" || len(front.TextualContributors) != 2 || front.Digest == "" {
+	if !front.Inspected || len(front.Translators) != 1 || front.Translators[0] != "Samuel Butler" || len(front.TextualContributors) != 4 || front.Digest == "" {
 		t.Fatalf("front=%#v", front)
 	}
 }
