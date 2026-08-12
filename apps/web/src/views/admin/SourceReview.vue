@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
-import { useRouter } from "vue-router";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import SourceEvidenceReferenceFields, {
   type SourceEvidenceReferenceInput,
 } from "@/components/admin/source-review/SourceEvidenceReferenceFields.vue";
+import SourceEligibilitySummary from "@/components/admin/source-review/SourceEligibilitySummary.vue";
 import StoryStudioState from "@/components/admin/story-studio/StoryStudioState.vue";
 import {
   adminCheckSourceEligibility,
@@ -33,9 +34,16 @@ import {
 type WorkspacePanel = "find" | "saved";
 
 const provider = "project-gutenberg" as const;
+const route = useRoute();
 const router = useRouter();
 const panel = ref<WorkspacePanel>("find");
-const query = ref("");
+const query = ref(typeof route.query.q === "string" ? route.query.q : "");
+const selectedExternalID = computed(() =>
+  typeof route.params.externalID === "string"
+    ? route.params.externalID.trim()
+    : "",
+);
+const reviewingWork = computed(() => selectedExternalID.value !== "");
 const searching = ref(false);
 const searchStarted = ref(false);
 const works = ref<AdminSourceProviderWork[]>([]);
@@ -67,7 +75,7 @@ const promotionFormOpen = ref(false);
 const error = ref("");
 const message = ref("");
 
-const workCategory = ref<"ordinary_literary" | "unknown">("ordinary_literary");
+const workCategory = ref<"ordinary_literary" | "unknown">("unknown");
 const authorDeathYear = ref<number | undefined>();
 const firstPublicationYear = ref<number | undefined>();
 const translation = ref<AdminCopyrightFactState>("unknown");
@@ -104,24 +112,51 @@ const providerAuthorDeathYear = computed(() => {
 const providerAuthorDeathKnown = computed(
   () => providerAuthorDeathYear.value !== undefined,
 );
-const providerTranslationPresent = computed(
-  () =>
-    providerEvidence.value?.contributors.some(
-      (contributor) => contributor.role === "translator",
-    ) ?? false,
+
+const automaticResolution = computed(
+  () => providerEvidence.value?.automaticResolution ?? null,
 );
-const providerTextualContributionPresent = computed(
+const providerAuthorCount = computed(
   () =>
-    providerEvidence.value?.contributors.some((contributor) =>
-      [
-        "adapter",
-        "annotator",
-        "compiler",
-        "introduction_author",
-        "editor",
-        "contributor",
-      ].includes(contributor.role),
-    ) ?? false,
+    providerEvidence.value?.contributors.filter(
+      (contributor) => contributor.role === "author",
+    ).length ?? 0,
+);
+const fallbackWorkCategory = computed(
+  () => automaticResolution.value?.workCategory === "insufficient",
+);
+const fallbackAuthorDeath = computed(
+  () =>
+    automaticResolution.value?.author === "insufficient" &&
+    providerAuthorCount.value === 1 &&
+    !providerAuthorDeathKnown.value,
+);
+const fallbackFirstPublication = computed(
+  () => automaticResolution.value?.firstPublication === "insufficient",
+);
+const fallbackTranslation = computed(
+  () => automaticResolution.value?.translation === "insufficient",
+);
+const fallbackAdditionalTextual = computed(
+  () =>
+    automaticResolution.value?.additionalTextualContribution === "insufficient",
+);
+const fallbackUnpublished = computed(
+  () => automaticResolution.value?.unpublishedAtEnd1988 === "insufficient",
+);
+const hasManualFallback = computed(
+  () =>
+    fallbackWorkCategory.value ||
+    fallbackAuthorDeath.value ||
+    fallbackFirstPublication.value ||
+    fallbackTranslation.value ||
+    fallbackAdditionalTextual.value ||
+    fallbackUnpublished.value,
+);
+const hasAutomaticConflict = computed(
+  () =>
+    automaticResolution.value !== null &&
+    Object.values(automaticResolution.value).includes("conflicting"),
 );
 
 function newEvidenceInput(): SourceEvidenceReferenceInput {
@@ -140,37 +175,89 @@ function evidenceReferences(
 }
 
 function humanEvidence(): AdminSourceEligibilityHumanEvidence {
-  return {
-    workCategory: workCategory.value,
-    workCategoryReferences: evidenceReferences(workCategoryEvidence.value),
-    ...(providerAuthorDeathKnown.value || authorDeathYear.value === undefined
-      ? {}
-      : {
-          authorDeathYear: authorDeathYear.value,
-          authorDeathReferences: evidenceReferences(authorDeathEvidence.value),
-        }),
-    ...(firstPublicationYear.value === undefined
-      ? {}
-      : {
-          firstPublicationYear: firstPublicationYear.value,
-          firstPublicationReferences: evidenceReferences(
-            firstPublicationEvidence.value,
-          ),
-        }),
-    translation: {
+  const evidence: AdminSourceEligibilityHumanEvidence = {};
+  if (fallbackWorkCategory.value) {
+    evidence.workCategory = workCategory.value;
+    evidence.workCategoryReferences = evidenceReferences(
+      workCategoryEvidence.value,
+    );
+  }
+  if (fallbackAuthorDeath.value && authorDeathYear.value !== undefined) {
+    evidence.authorDeathYear = authorDeathYear.value;
+    evidence.authorDeathReferences = evidenceReferences(authorDeathEvidence.value);
+  }
+  if (
+    fallbackFirstPublication.value &&
+    firstPublicationYear.value !== undefined
+  ) {
+    evidence.firstPublicationYear = firstPublicationYear.value;
+    evidence.firstPublicationReferences = evidenceReferences(
+      firstPublicationEvidence.value,
+    );
+  }
+  if (fallbackTranslation.value) {
+    evidence.translation = {
       state: translation.value,
       references: evidenceReferences(translationEvidence.value),
-    },
-    additionalTextualContribution: {
+    };
+  }
+  if (fallbackAdditionalTextual.value) {
+    evidence.additionalTextualContribution = {
       state: additionalTextual.value,
       references: evidenceReferences(additionalTextualEvidence.value),
-    },
-    unpublishedAtEnd1988: {
+    };
+  }
+  if (fallbackUnpublished.value) {
+    evidence.unpublishedAtEnd1988 = {
       state: unpublishedAtEnd1988.value,
       references: evidenceReferences(unpublishedEvidence.value),
-    },
-  };
+    };
+  }
+  return evidence;
 }
+
+function hasEvidence(input: SourceEvidenceReferenceInput) {
+  return evidenceReferences(input).length > 0;
+}
+
+const manualFallbackComplete = computed(() => {
+  if (!hasManualFallback.value) return false;
+  if (
+    fallbackWorkCategory.value &&
+    (workCategory.value !== "ordinary_literary" ||
+      !hasEvidence(workCategoryEvidence.value))
+  )
+    return false;
+  if (
+    fallbackAuthorDeath.value &&
+    (authorDeathYear.value === undefined || !hasEvidence(authorDeathEvidence.value))
+  )
+    return false;
+  if (
+    fallbackFirstPublication.value &&
+    (firstPublicationYear.value === undefined ||
+      !hasEvidence(firstPublicationEvidence.value))
+  )
+    return false;
+  if (
+    fallbackTranslation.value &&
+    (translation.value === "unknown" || !hasEvidence(translationEvidence.value))
+  )
+    return false;
+  if (
+    fallbackAdditionalTextual.value &&
+    (additionalTextual.value === "unknown" ||
+      !hasEvidence(additionalTextualEvidence.value))
+  )
+    return false;
+  if (
+    fallbackUnpublished.value &&
+    (unpublishedAtEnd1988.value === "unknown" ||
+      !hasEvidence(unpublishedEvidence.value))
+  )
+    return false;
+  return true;
+});
 
 function contributorText(work: {
   contributors: readonly { name: string; role: string }[];
@@ -180,19 +267,6 @@ function contributorText(work: {
       .map(({ name, role }) => (role ? `${name} (${role})` : name))
       .join(", ") || "No contributor metadata"
   );
-}
-
-function providerContributorText(contributor: {
-  name: string;
-  role: string;
-  birthYear?: number;
-  deathYear?: number;
-}) {
-  const years =
-    contributor.birthYear || contributor.deathYear
-      ? ` (${contributor.birthYear ?? "?"}–${contributor.deathYear ?? "?"})`
-      : "";
-  return `${contributor.name} - ${contributor.role}${years}`;
 }
 
 function statusLabel(status: string) {
@@ -232,7 +306,7 @@ function invalidateAssessment() {
 async function moveToSignIn() {
   await router.replace({
     path: "/account/login",
-    query: { next: "/admin/source-review" },
+    query: { next: route.fullPath },
   });
 }
 
@@ -273,11 +347,18 @@ async function search() {
   const term = query.value.trim();
   searchStarted.value = true;
   clearFeedback();
-  clearSelectedWork();
+  if (!reviewingWork.value) clearSelectedWork();
   if (term.length < 2) {
     works.value = [];
     error.value = "Enter at least two characters to search Project Gutenberg.";
     return;
+  }
+
+  if (!reviewingWork.value) {
+    await router.replace({
+      name: "admin-source-review",
+      query: { q: term },
+    });
   }
 
   const controller = new AbortController();
@@ -304,6 +385,15 @@ async function search() {
 }
 
 async function selectWork(work: AdminSourceProviderWork) {
+  const term = query.value.trim();
+  await router.push({
+    name: "admin-source-review-work",
+    params: { externalID: work.externalId },
+    query: term ? { q: term } : {},
+  });
+}
+
+async function loadSelectedWork(externalID: string) {
   const controller = new AbortController();
   workController?.abort();
   eligibilityController?.abort();
@@ -320,10 +410,15 @@ async function selectWork(work: AdminSourceProviderWork) {
   try {
     const detail = await adminGetSourceProviderWork(
       provider,
-      work.externalId,
+      externalID,
       controller.signal,
     );
-    if (controller.signal.aborted || workController !== controller) return;
+    if (
+      controller.signal.aborted ||
+      workController !== controller ||
+      selectedExternalID.value !== externalID
+    )
+      return;
     selectedWork.value = detail;
     await loadEligibility(detail);
   } catch (caught) {
@@ -337,17 +432,27 @@ async function selectWork(work: AdminSourceProviderWork) {
   }
 }
 
+async function backToSearch() {
+  const term = query.value.trim();
+  await router.push({
+    name: "admin-source-review",
+    query: term ? { q: term } : {},
+  });
+  if (term.length >= 2 && works.value.length === 0) {
+    await search();
+  }
+}
+
 async function loadEligibility(work: AdminSourceProviderWork) {
   const controller = new AbortController();
   eligibilityController?.abort();
   eligibilityController = controller;
   eligibilityLoading.value = true;
-  const evidence = humanEvidence();
   try {
     const result = await adminCheckSourceEligibility(
       provider,
       work.externalId,
-      evidence,
+      {},
       controller.signal,
     );
     if (
@@ -424,16 +529,25 @@ async function saveForReview() {
   clearFeedback();
   saving.value = true;
   try {
+    const evidence =
+      providerEvidence.value?.overall === "eligible" && !assessmentStale.value
+        ? {}
+        : humanEvidence();
     const result = await adminPersistSourceAcquisition(
       provider,
       work.externalId,
-      humanEvidence(),
+      evidence,
     );
     message.value =
       result.outcome === "created"
         ? "Saved for source review."
         : "This exact saved source already exists. Opening it for review.";
     await loadSaved();
+    const term = query.value.trim();
+    await router.push({
+      name: "admin-source-review",
+      query: term ? { q: term } : {},
+    });
     await openSaved(result.acquisition.id, true);
   } catch (caught) {
     const body = (caught as APIError).body;
@@ -565,7 +679,24 @@ function onTabKeydown(event: KeyboardEvent, current: WorkspacePanel) {
   void changePanel(next, true);
 }
 
-onMounted(loadSaved);
+watch(
+  selectedExternalID,
+  (externalID) => {
+    if (externalID) {
+      void loadSelectedWork(externalID);
+    } else {
+      clearSelectedWork();
+    }
+  },
+  { immediate: true },
+);
+
+onMounted(() => {
+  void loadSaved();
+  if (!reviewingWork.value && query.value.trim().length >= 2) {
+    void search();
+  }
+});
 onBeforeUnmount(() => {
   searchController?.abort();
   workController?.abort();
@@ -587,6 +718,7 @@ onBeforeUnmount(() => {
     </header>
 
     <div
+      v-if="!reviewingWork"
       class="source-review__tabs"
       role="tablist"
       aria-label="Source review workspace"
@@ -624,11 +756,20 @@ onBeforeUnmount(() => {
 
     <section
       v-if="panel === 'find'"
-      :id="panelID('find')"
-      role="tabpanel"
-      :aria-labelledby="tabID('find')"
+      :id="reviewingWork ? undefined : panelID('find')"
+      :role="reviewingWork ? undefined : 'tabpanel'"
+      :aria-labelledby="reviewingWork ? undefined : tabID('find')"
     >
-      <div class="studio-panel">
+      <button
+        v-if="reviewingWork"
+        type="button"
+        class="studio-button studio-button--quiet source-review__back"
+        @click="backToSearch"
+      >
+        ← Back to search results
+      </button>
+
+      <div v-if="!reviewingWork" class="studio-panel">
         <h2>Search Project Gutenberg</h2>
         <form class="source-review__search" @submit.prevent="search">
           <div class="studio-field">
@@ -651,19 +792,19 @@ onBeforeUnmount(() => {
       </div>
 
       <StoryStudioState
-        v-if="searching"
+        v-if="!reviewingWork && searching"
         kind="loading"
         title="Searching Project Gutenberg"
         message="Finding provider works."
       />
       <StoryStudioState
-        v-else-if="searchStarted && works.length === 0 && !error"
+        v-else-if="!reviewingWork && searchStarted && works.length === 0 && !error"
         kind="empty"
         title="No matching works"
         message="Try another title or author search."
       />
 
-      <ol v-else-if="works.length" class="source-review__results">
+      <ol v-else-if="!reviewingWork && works.length" class="source-review__results">
         <li
           v-for="work in works"
           :key="work.externalId"
@@ -712,44 +853,13 @@ onBeforeUnmount(() => {
             v-if="eligibilityLoading"
             kind="loading"
             title="Checking provider evidence"
-            message="Loading current Project Gutenberg evidence."
+            message="Loading current Project Gutenberg and bibliographic evidence."
           />
           <template v-else>
-            <div
-              v-if="providerEvidence"
-              class="source-review__provider-evidence"
-            >
-              <p>
-                Provider rights evidence: OPDS
-                {{ providerEvidence.opdsRights }} · RDF
-                {{ providerEvidence.rdfRights }}.
-              </p>
-              <ul v-if="providerEvidence.contributors.length">
-                <li
-                  v-for="contributor in providerEvidence.contributors"
-                  :key="`${contributor.name}-${contributor.role}`"
-                >
-                  {{ providerContributorText(contributor) }}
-                </li>
-              </ul>
-            </div>
-            <p v-else>
-              Provider evidence could not be loaded. Saving remains blocked
-              until it can be verified.
-            </p>
-            <div
+            <SourceEligibilitySummary
               v-if="assessment && !assessmentStale"
-              class="source-review__assessment"
-            >
-              <p>
-                United States:
-                <strong>{{ statusLabel(assessment.us.status) }}</strong> ·
-                United Kingdom:
-                <strong>{{ statusLabel(assessment.uk.status) }}</strong
-                ><br />
-                {{ assessment.us.reason }} · {{ assessment.uk.reason }}
-              </p>
-            </div>
+              :eligibility="assessment"
+            />
             <p
               v-else-if="providerEvidence"
               class="source-review__stale"
@@ -758,54 +868,70 @@ onBeforeUnmount(() => {
               Eligibility conclusion needs revalidation after factual evidence
               changed.
             </p>
+            <p v-else>
+              Copyright evidence could not be loaded. Saving remains blocked
+              until it can be verified.
+            </p>
           </template>
         </section>
 
-        <section class="source-review__uk-evidence">
-          <h3>UK factual evidence</h3>
+        <section
+          v-if="
+            assessment &&
+            !assessmentStale &&
+            assessment.overall === 'eligible'
+          "
+          class="studio-panel source-review__automatic-action"
+        >
+          <h3>Automatic screening complete</h3>
           <p>
-            Provide facts and their evidence source, not a legal conclusion.
-            Citation locators are evidence metadata only and are never fetched.
+            Panda Pages established the required V3 evidence automatically.
+            Saving rechecks the current provider and bibliographic evidence.
+          </p>
+          <button
+            type="button"
+            class="studio-button studio-button--primary"
+            :disabled="saving || eligibilityLoading"
+            @click="saveForReview"
+          >
+            {{ saving ? "Saving…" : "Save for source review" }}
+          </button>
+        </section>
+
+        <section
+          v-else-if="providerEvidence && hasManualFallback"
+          class="source-review__uk-evidence"
+        >
+          <h3>Additional factual evidence required</h3>
+          <p>
+            Automatic evidence is incomplete only for the fields shown below.
+            Add factual evidence for those unresolved facts; this does not
+            override conflicting automatic evidence.
           </p>
           <div class="source-review__review-fields">
-            <div class="studio-field">
-              <label for="work-category">Work type</label>
-              <select
-                id="work-category"
-                v-model="workCategory"
-                @change="invalidateAssessment"
-              >
-                <option value="ordinary_literary">
-                  Ordinary literary work
-                </option>
-                <option value="unknown">Unknown</option>
-              </select>
-            </div>
-            <SourceEvidenceReferenceFields
-              v-model="workCategoryEvidence"
-              label="Work type"
-              id-prefix="work-category"
-              @update:model-value="invalidateAssessment"
-            />
-
-            <div class="studio-field">
-              <label for="first-publication">First publication year</label>
-              <input
-                id="first-publication"
-                v-model.number="firstPublicationYear"
-                type="number"
-                min="1"
-                @input="invalidateAssessment"
+            <template v-if="fallbackWorkCategory">
+              <div class="studio-field">
+                <label for="work-category">Work type</label>
+                <select
+                  id="work-category"
+                  v-model="workCategory"
+                  @change="invalidateAssessment"
+                >
+                  <option value="unknown">Select work type</option>
+                  <option value="ordinary_literary">
+                    Ordinary literary work
+                  </option>
+                </select>
+              </div>
+              <SourceEvidenceReferenceFields
+                v-model="workCategoryEvidence"
+                label="Work type"
+                id-prefix="work-category"
+                @update:model-value="invalidateAssessment"
               />
-            </div>
-            <SourceEvidenceReferenceFields
-              v-model="firstPublicationEvidence"
-              label="First publication"
-              id-prefix="first-publication"
-              @update:model-value="invalidateAssessment"
-            />
+            </template>
 
-            <template v-if="!providerAuthorDeathKnown">
+            <template v-if="fallbackAuthorDeath">
               <div class="studio-field">
                 <label for="author-death">Author death year</label>
                 <input
@@ -823,17 +949,27 @@ onBeforeUnmount(() => {
                 @update:model-value="invalidateAssessment"
               />
             </template>
-            <p v-else>
-              Provider author death year: {{ providerAuthorDeathYear }}
-            </p>
 
-            <template v-if="providerTranslationPresent">
-              <p>
-                Project Gutenberg reports a translator. This narrow policy
-                cannot pass this source.
-              </p>
+            <template v-if="fallbackFirstPublication">
+              <div class="studio-field">
+                <label for="first-publication">First publication year</label>
+                <input
+                  id="first-publication"
+                  v-model.number="firstPublicationYear"
+                  type="number"
+                  min="1"
+                  @input="invalidateAssessment"
+                />
+              </div>
+              <SourceEvidenceReferenceFields
+                v-model="firstPublicationEvidence"
+                label="First publication"
+                id-prefix="first-publication"
+                @update:model-value="invalidateAssessment"
+              />
             </template>
-            <template v-else>
+
+            <template v-if="fallbackTranslation">
               <div class="studio-field">
                 <label for="translation">Translation</label>
                 <select
@@ -841,9 +977,9 @@ onBeforeUnmount(() => {
                   v-model="translation"
                   @change="invalidateAssessment"
                 >
+                  <option value="unknown">Select factual state</option>
                   <option value="none_confirmed">None confirmed</option>
                   <option value="present">Present</option>
-                  <option value="unknown">Unknown</option>
                 </select>
               </div>
               <SourceEvidenceReferenceFields
@@ -854,13 +990,7 @@ onBeforeUnmount(() => {
               />
             </template>
 
-            <template v-if="providerTextualContributionPresent">
-              <p>
-                Project Gutenberg reports a possible additional textual
-                contributor. This narrow policy cannot pass this source.
-              </p>
-            </template>
-            <template v-else>
+            <template v-if="fallbackAdditionalTextual">
               <div class="studio-field">
                 <label for="textual">Additional textual contribution</label>
                 <select
@@ -868,9 +998,9 @@ onBeforeUnmount(() => {
                   v-model="additionalTextual"
                   @change="invalidateAssessment"
                 >
+                  <option value="unknown">Select factual state</option>
                   <option value="none_confirmed">None confirmed</option>
                   <option value="present">Present</option>
-                  <option value="unknown">Unknown</option>
                 </select>
               </div>
               <SourceEvidenceReferenceFields
@@ -881,29 +1011,32 @@ onBeforeUnmount(() => {
               />
             </template>
 
-            <div class="studio-field">
-              <label for="unpublished">Unpublished at end of 1988</label>
-              <select
-                id="unpublished"
-                v-model="unpublishedAtEnd1988"
-                @change="invalidateAssessment"
-              >
-                <option value="none_confirmed">None confirmed</option>
-                <option value="present">Present</option>
-                <option value="unknown">Unknown</option>
-              </select>
-            </div>
-            <SourceEvidenceReferenceFields
-              v-model="unpublishedEvidence"
-              label="Unpublished-at-end-of-1988"
-              id-prefix="unpublished"
-              @update:model-value="invalidateAssessment"
-            />
+            <template v-if="fallbackUnpublished">
+              <div class="studio-field">
+                <label for="unpublished">Unpublished at end of 1988</label>
+                <select
+                  id="unpublished"
+                  v-model="unpublishedAtEnd1988"
+                  @change="invalidateAssessment"
+                >
+                  <option value="unknown">Select factual state</option>
+                  <option value="none_confirmed">None confirmed</option>
+                  <option value="present">Present</option>
+                </select>
+              </div>
+              <SourceEvidenceReferenceFields
+                v-model="unpublishedEvidence"
+                label="Unpublished-at-end-of-1988"
+                id-prefix="unpublished"
+                @update:model-value="invalidateAssessment"
+              />
+            </template>
           </div>
+
           <button
             type="button"
             class="studio-button studio-button--primary"
-            :disabled="saving || eligibilityLoading"
+            :disabled="saving || eligibilityLoading || !manualFallbackComplete"
             @click="saveForReview"
           >
             {{
@@ -913,11 +1046,26 @@ onBeforeUnmount(() => {
             }}
           </button>
         </section>
+
+        <section
+          v-else-if="providerEvidence && providerEvidence.overall === 'blocked'"
+          class="studio-panel source-review__manual-blocked"
+        >
+          <h3>Manual evidence unavailable</h3>
+          <p v-if="hasAutomaticConflict">
+            Trusted automatic evidence is conflicting. Conflicting evidence
+            cannot be manually overridden in Source Review.
+          </p>
+          <p v-else>
+            Automatic evidence does not establish an eligible result, and the
+            unresolved or blocking fact has no supported manual fallback.
+          </p>
+        </section>
       </section>
     </section>
 
     <section
-      v-if="panel === 'saved'"
+      v-if="panel === 'saved' && !reviewingWork"
       :id="panelID('saved')"
       role="tabpanel"
       :aria-labelledby="tabID('saved')"
@@ -1026,34 +1174,10 @@ onBeforeUnmount(() => {
           </section>
           <section class="studio-panel source-review__rights">
             <h3>Copyright eligibility</h3>
-            <div v-if="selectedAcquisition.eligibility">
-              <p>
-                United States:
-                {{ statusLabel(selectedAcquisition.eligibility.us.status) }} ·
-                United Kingdom:
-                {{ statusLabel(selectedAcquisition.eligibility.uk.status)
-                }}<br />
-                Policy: {{ selectedAcquisition.eligibility.policyVersion }} ·
-                {{ formatSavedAt(selectedAcquisition.eligibility.evaluatedAt) }}
-              </p>
-              <details>
-                <summary>Eligibility evidence</summary>
-                <p>
-                  OPDS: {{ selectedAcquisition.eligibility.opdsRights }} · RDF:
-                  {{ selectedAcquisition.eligibility.rdfRights }} · source
-                  header: {{ selectedAcquisition.eligibility.headerRights }}
-                </p>
-                <ul>
-                  <li
-                    v-for="contributor in selectedAcquisition.eligibility
-                      .contributors"
-                    :key="`${contributor.name}-${contributor.role}`"
-                  >
-                    {{ providerContributorText(contributor) }}
-                  </li>
-                </ul>
-              </details>
-            </div>
+            <SourceEligibilitySummary
+              v-if="selectedAcquisition.eligibility"
+              :eligibility="selectedAcquisition.eligibility"
+            />
             <p v-else>Eligibility: Recheck required.</p>
           </section>
           <section class="studio-panel source-review__quality">

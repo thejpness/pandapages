@@ -15,6 +15,7 @@ import (
 
 	"pandapages/api/internal/appidentity"
 	"pandapages/api/internal/copyrighteligibility"
+	"pandapages/api/internal/evidenceresolver"
 	"pandapages/api/internal/model"
 	"pandapages/api/internal/sourceeligibility"
 	"pandapages/api/internal/sourceprovider"
@@ -635,7 +636,28 @@ func sourceEligibilityResponse(evaluation sourceeligibility.Evaluation) model.Ad
 		OverallReason:  string(evaluation.Assessment.OverallReason),
 		OPDSRights:     string(evaluation.OPDSRights), RDFRights: string(evaluation.ProviderEvidence.Rights), HeaderRights: string(evaluation.HeaderRights),
 		ProviderTitle: evaluation.ProviderEvidence.Title, Contributors: contributors, RDFDigest: evaluation.ProviderEvidence.EvidenceDigest,
-		EffectiveUK: sourceEligibilityEffectiveUK(evaluation.EffectiveUKEvidence),
+		EffectiveUK:         sourceEligibilityEffectiveUK(evaluation.EffectiveUKEvidence),
+		AutomaticResolution: sourceEligibilityAutomaticResolution(evaluation.Resolution),
+	}
+}
+
+func sourceEligibilityAutomaticResolution(value evidenceresolver.Resolution) *model.AdminSourceEligibilityAutomaticResolution {
+	status := func(value evidenceresolver.ResolutionStatus) string {
+		switch value {
+		case evidenceresolver.ResolutionEstablished, evidenceresolver.ResolutionConflicting:
+			return string(value)
+		default:
+			return string(evidenceresolver.ResolutionInsufficient)
+		}
+	}
+	return &model.AdminSourceEligibilityAutomaticResolution{
+		WorkCategory:                  status(value.WorkCategory.Status),
+		Authorship:                    status(value.Authorship.Status),
+		Author:                        status(value.Author.Status),
+		FirstPublication:              status(value.FirstPublication.Status),
+		Translation:                   status(value.Translation.Status),
+		AdditionalTextualContribution: status(value.AdditionalTextual.Status),
+		UnpublishedAtEnd1988:          status(value.UnpublishedAtEnd1988.Status),
 	}
 }
 

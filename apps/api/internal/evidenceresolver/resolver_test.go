@@ -72,7 +72,7 @@ func TestResolveNegativeFactsUseCleanExactSourceScreening(t *testing.T) {
 	wrongLanguage.OriginalLanguages = []string{"fr"}
 	resolver = newResolver(t, wrongLanguage)
 	resolution, err = resolver.Resolve(context.Background(), aliceContext())
-	if err != nil || resolution.Translation.Status != ResolutionInsufficient || resolution.AdditionalTextual.State != copyrighteligibility.FactNoneConfirmed {
+	if err != nil || resolution.Translation.Status != ResolutionConflicting || resolution.Translation.Reason != ReasonEvidenceConflict || resolution.AdditionalTextual.State != copyrighteligibility.FactNoneConfirmed {
 		t.Fatalf("language mismatch resolution=%#v err=%v", resolution, err)
 	}
 
@@ -80,7 +80,7 @@ func TestResolveNegativeFactsUseCleanExactSourceScreening(t *testing.T) {
 	conflictingLanguage.OriginalLanguages = []string{"fr"}
 	resolver = newResolver(t, workRecord, conflictingLanguage)
 	resolution, err = resolver.Resolve(context.Background(), aliceContext())
-	if err != nil || resolution.Translation.Status != ResolutionInsufficient {
+	if err != nil || resolution.Translation.Status != ResolutionConflicting || resolution.Translation.Reason != ReasonEvidenceConflict {
 		t.Fatalf("language conflict resolution=%#v err=%v", resolution, err)
 	}
 
@@ -88,7 +88,7 @@ func TestResolveNegativeFactsUseCleanExactSourceScreening(t *testing.T) {
 	multipleOriginalLanguages.OriginalLanguages = []string{"en", "fr"}
 	resolver = newResolver(t, multipleOriginalLanguages)
 	resolution, err = resolver.Resolve(context.Background(), aliceContext())
-	if err != nil || resolution.Translation.Status != ResolutionInsufficient {
+	if err != nil || resolution.Translation.Status != ResolutionConflicting || resolution.Translation.Reason != ReasonEvidenceConflict {
 		t.Fatalf("multiple original languages resolution=%#v err=%v", resolution, err)
 	}
 

@@ -101,24 +101,35 @@ type AdminCopyrightJurisdiction struct {
 	Reason string `json:"reason"`
 }
 
+type AdminSourceEligibilityAutomaticResolution struct {
+	WorkCategory                  string `json:"workCategory"`
+	Authorship                    string `json:"authorship"`
+	Author                        string `json:"author"`
+	FirstPublication              string `json:"firstPublication"`
+	Translation                   string `json:"translation"`
+	AdditionalTextualContribution string `json:"additionalTextualContribution"`
+	UnpublishedAtEnd1988          string `json:"unpublishedAtEnd1988"`
+}
+
 // AdminSourceEligibility is immutable evidence retained for the exact saved
 // acquisition. It deliberately does not expose raw RDF or source text.
 type AdminSourceEligibility struct {
-	PolicyVersion  string                                    `json:"policyVersion"`
-	EvaluationDate string                                    `json:"evaluationDate"`
-	EvaluatedAt    string                                    `json:"evaluatedAt"`
-	US             AdminCopyrightJurisdiction                `json:"us"`
-	UK             AdminCopyrightJurisdiction                `json:"uk"`
-	Overall        string                                    `json:"overall"`
-	OverallReason  string                                    `json:"overallReason"`
-	OPDSRights     string                                    `json:"opdsRights"`
-	RDFRights      string                                    `json:"rdfRights"`
-	HeaderRights   string                                    `json:"headerRights"`
-	ProviderTitle  string                                    `json:"providerTitle"`
-	Contributors   []AdminCopyrightContributorEvidence       `json:"contributors"`
-	RDFDigest      string                                    `json:"rdfDigest"`
-	EffectiveUK    AdminSourceEligibilityEffectiveUKEvidence `json:"effectiveUkEvidence"`
-	AssessmentHash *string                                   `json:"assessmentHash,omitempty"`
+	PolicyVersion       string                                     `json:"policyVersion"`
+	EvaluationDate      string                                     `json:"evaluationDate"`
+	EvaluatedAt         string                                     `json:"evaluatedAt"`
+	US                  AdminCopyrightJurisdiction                 `json:"us"`
+	UK                  AdminCopyrightJurisdiction                 `json:"uk"`
+	Overall             string                                     `json:"overall"`
+	OverallReason       string                                     `json:"overallReason"`
+	OPDSRights          string                                     `json:"opdsRights"`
+	RDFRights           string                                     `json:"rdfRights"`
+	HeaderRights        string                                     `json:"headerRights"`
+	ProviderTitle       string                                     `json:"providerTitle"`
+	Contributors        []AdminCopyrightContributorEvidence        `json:"contributors"`
+	RDFDigest           string                                     `json:"rdfDigest"`
+	EffectiveUK         AdminSourceEligibilityEffectiveUKEvidence  `json:"effectiveUkEvidence"`
+	AutomaticResolution *AdminSourceEligibilityAutomaticResolution `json:"automaticResolution,omitempty"`
+	AssessmentHash      *string                                    `json:"assessmentHash,omitempty"`
 }
 
 type AdminSourceAcquisitionSummary struct {
