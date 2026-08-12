@@ -9,7 +9,7 @@ import "time"
 // PolicyVersion identifies the deliberately narrow Panda Pages policy used to
 // derive an assessment. It is stable application policy, not a source-control
 // revision or a claim of legal certainty.
-const PolicyVersion = "panda-pages-copyright-v2"
+const PolicyVersion = "panda-pages-copyright-v3"
 
 type JurisdictionStatus string
 
@@ -140,6 +140,9 @@ const (
 type FactState string
 
 const (
+	// FactNoneConfirmed means the applicable Panda Pages screening evidence
+	// indicates no material risk for the fact. It is not a universal legal
+	// assertion that the relevant circumstance has never existed.
 	FactNoneConfirmed FactState = "none_confirmed"
 	FactPresent       FactState = "present"
 	FactUnknown       FactState = "unknown"
@@ -175,7 +178,7 @@ type FactEvidence struct {
 }
 
 // UKEvidence deliberately represents only the ordinary published literary
-// work subset supported by policy v2. Unsupported categories remain explicit
+// work subset supported by policy v3. Unsupported categories remain explicit
 // rather than being approximated by zero values or prose.
 type UKEvidence struct {
 	WorkTitle                     string
@@ -223,7 +226,7 @@ func IsOverallStatus(value OverallStatus) bool {
 	return value == OverallEligible || value == OverallBlocked
 }
 
-// IsReasonCode reports whether value is a reason emitted by policy v2.
+// IsReasonCode reports whether value is a reason emitted by policy v3.
 func IsReasonCode(value ReasonCode) bool {
 	switch value {
 	case ReasonUSProviderPublicDomainConfirmed, ReasonUSProviderRestricted,

@@ -18,7 +18,7 @@ function reference(fact) { return [{ source: 'Catalogue record', fact }] }
 
 function eligibility(overrides = {}) {
   return {
-    policyVersion: 'panda-pages-copyright-v2', evaluationDate: '2026-08-11', evaluatedAt: timestamp,
+    policyVersion: 'panda-pages-copyright-v3', evaluationDate: '2026-08-11', evaluatedAt: timestamp,
     us: { status: 'eligible', reason: 'us_provider_public_domain_confirmed' },
     uk: { status: 'eligible', reason: 'uk_ordinary_literary_term_expired' }, overall: 'eligible', overallReason: 'overall_eligible',
     opdsRights: 'public_domain', rdfRights: 'public_domain', headerRights: 'public_domain',
@@ -85,5 +85,6 @@ test('source review wrappers submit only factual UK evidence and keep source tex
     us: { status: 'indeterminate', reason: 'us_provider_rights_missing' }, uk: { status: 'indeterminate', reason: 'uk_work_category_unsupported' }, overall: 'blocked', overallReason: 'overall_blocked',
     effectiveUkEvidence: { workTitle: "Alice's Adventures in Wonderland", workCategory: 'unknown', workCategoryReferences: [], authorship: 'unknown', authorshipReferences: [], authorName: '', authorDeathYear: 0, authorReferences: [], firstPublicationYear: 0, firstPublicationReferences: [], translation: { state: 'unknown', references: [] }, additionalTextualContribution: { state: 'unknown', references: [] }, unpublishedAtEnd1988: { state: 'unknown', references: [] } },
   })).overall, 'blocked')
+  assert.throws(() => api.parseAdminEligibility(eligibility({ policyVersion: 'panda-pages-copyright-v2' })), /Invalid admin response/)
   assert.throws(() => api.parseAdminSourceAcquisitionListResponse({ items: [{ ...acquisitionSummary(), sourceText: 'must not leak' }] }), /Invalid admin response/)
 })

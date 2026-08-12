@@ -179,7 +179,7 @@ function sourceEvidenceReference(fact: string) {
 
 function sourceEligibility(overrides: Record<string, unknown> = {}) {
   return {
-    policyVersion: 'panda-pages-copyright-v2',
+    policyVersion: 'panda-pages-copyright-v3',
     evaluationDate: '2026-07-20',
     evaluatedAt: timestamp,
     us: { status: 'eligible', reason: 'us_provider_public_domain_confirmed' },

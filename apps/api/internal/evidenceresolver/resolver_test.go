@@ -29,9 +29,7 @@ func TestResolveSyntheticCrossSourceFactsCanProduceEligibleUKEvidence(t *testing
 	loc := record(SourceLibraryOfCongress, "loc:alice", "Lewis Carroll", &death, &publication)
 	ol := record(SourceOpenLibrary, "ol:alice", "Carroll, Lewis", &death, &publication)
 	for _, value := range []*BibliographicRecord{&loc, &ol} {
-		value.EditionID = value.Identifier + ":edition"
 		value.OriginalLanguages = []string{"en"}
-		value.ContributorRolesObserved = true
 	}
 	resolver := newResolver(t,
 		loc,
@@ -50,58 +48,84 @@ func TestResolveSyntheticCrossSourceFactsCanProduceEligibleUKEvidence(t *testing
 	}
 }
 
-func TestResolveNegativeFactsRequireExactObservableEvidence(t *testing.T) {
+func TestResolveNegativeFactsUseCleanExactSourceScreening(t *testing.T) {
 	death := 1898
 	publication := 1865
-	exactRecord := record(SourceOpenLibrary, "ol:alice", "Lewis Carroll", &death, &publication)
-	exactRecord.EditionID = "OL123M"
-	exactRecord.OriginalLanguages = []string{"en"}
-	exactRecord.ContributorRolesObserved = true
+	workRecord := record(SourceBibliothequeNationaleDeFrance, "ark:/12148/cb12011248f", "Lewis Carroll", &death, &publication)
+	workRecord.OriginalLanguages = []string{"en"}
 
-	resolver := newResolver(t, exactRecord)
+	resolver := newResolver(t, workRecord)
 	resolution, err := resolver.Resolve(context.Background(), aliceContext())
 	if err != nil || resolution.Translation.State != copyrighteligibility.FactNoneConfirmed || resolution.AdditionalTextual.State != copyrighteligibility.FactNoneConfirmed {
 		t.Fatalf("resolution=%#v err=%v", resolution, err)
 	}
 
-	missingEdition := exactRecord
-	missingEdition.EditionID = ""
-	resolver = newResolver(t, missingEdition)
+	missingOriginalLanguage := workRecord
+	missingOriginalLanguage.OriginalLanguages = nil
+	resolver = newResolver(t, missingOriginalLanguage)
 	resolution, err = resolver.Resolve(context.Background(), aliceContext())
-	if err != nil || resolution.Translation.Status != ResolutionInsufficient || resolution.AdditionalTextual.Status != ResolutionInsufficient {
-		t.Fatalf("missing edition resolution=%#v err=%v", resolution, err)
+	if err != nil || resolution.Translation.Status != ResolutionInsufficient || resolution.AdditionalTextual.State != copyrighteligibility.FactNoneConfirmed {
+		t.Fatalf("missing original-language resolution=%#v err=%v", resolution, err)
 	}
 
-	wrongLanguage := exactRecord
+	wrongLanguage := workRecord
 	wrongLanguage.OriginalLanguages = []string{"fr"}
 	resolver = newResolver(t, wrongLanguage)
 	resolution, err = resolver.Resolve(context.Background(), aliceContext())
-	if err != nil || resolution.Translation.Status != ResolutionInsufficient {
+	if err != nil || resolution.Translation.Status != ResolutionInsufficient || resolution.AdditionalTextual.State != copyrighteligibility.FactNoneConfirmed {
 		t.Fatalf("language mismatch resolution=%#v err=%v", resolution, err)
+	}
+
+	conflictingLanguage := record(SourceLibraryOfCongress, "loc:alice", "Lewis Carroll", &death, &publication)
+	conflictingLanguage.OriginalLanguages = []string{"fr"}
+	resolver = newResolver(t, workRecord, conflictingLanguage)
+	resolution, err = resolver.Resolve(context.Background(), aliceContext())
+	if err != nil || resolution.Translation.Status != ResolutionInsufficient {
+		t.Fatalf("language conflict resolution=%#v err=%v", resolution, err)
+	}
+
+	multipleOriginalLanguages := workRecord
+	multipleOriginalLanguages.OriginalLanguages = []string{"en", "fr"}
+	resolver = newResolver(t, multipleOriginalLanguages)
+	resolution, err = resolver.Resolve(context.Background(), aliceContext())
+	if err != nil || resolution.Translation.Status != ResolutionInsufficient {
+		t.Fatalf("multiple original languages resolution=%#v err=%v", resolution, err)
+	}
+
+	multiLanguage := aliceContext()
+	multiLanguage.ProviderEvidence.Languages = []string{"en", "fr"}
+	resolver = newResolver(t, workRecord)
+	resolution, err = resolver.Resolve(context.Background(), multiLanguage)
+	if err != nil || resolution.Translation.Status != ResolutionInsufficient {
+		t.Fatalf("multiple acquired languages resolution=%#v err=%v", resolution, err)
+	}
+
+	missingLanguage := aliceContext()
+	missingLanguage.ProviderEvidence.Languages = nil
+	resolver = newResolver(t, workRecord)
+	resolution, err = resolver.Resolve(context.Background(), missingLanguage)
+	if err != nil || resolution.Translation.Status != ResolutionInsufficient || resolution.Translation.State != copyrighteligibility.FactUnknown || resolution.AdditionalTextual.State != copyrighteligibility.FactNoneConfirmed {
+		t.Fatalf("missing acquired language resolution=%#v err=%v", resolution, err)
 	}
 
 	frontMissing := aliceContext()
 	frontMissing.SourceText = "provider wrapper without a marker"
-	resolver = newResolver(t, exactRecord)
+	resolver = newResolver(t, workRecord)
 	resolution, err = resolver.Resolve(context.Background(), frontMissing)
 	if err != nil || resolution.Translation.Status != ResolutionInsufficient || resolution.AdditionalTextual.Status != ResolutionInsufficient {
 		t.Fatalf("front matter resolution=%#v err=%v", resolution, err)
 	}
 }
 
-func TestResolveBNFWorkRecordCannotEstablishNegativeContributorFacts(t *testing.T) {
+func TestResolveBNFWorkLanguageSupportsTranslationScreening(t *testing.T) {
 	death := 1898
 	publication := 1865
 	workRecord := record(SourceBibliothequeNationaleDeFrance, "ark:/12148/cb12011248f", "Lewis Carroll", &death, &publication)
 	workRecord.WorkID = workRecord.Identifier
 	workRecord.OriginalLanguages = []string{"eng"}
-	// A work record can identify the underlying work and original language, but
-	// cannot identify the exact acquired expression/edition. Even an adapter
-	// bug setting this flag must not bypass the exact-edition requirement.
-	workRecord.ContributorRolesObserved = true
 
 	resolution, err := newResolver(t, workRecord).Resolve(context.Background(), aliceContext())
-	if err != nil || resolution.Translation.Status != ResolutionInsufficient || resolution.Translation.State != copyrighteligibility.FactUnknown || resolution.AdditionalTextual.Status != ResolutionInsufficient || resolution.AdditionalTextual.State != copyrighteligibility.FactUnknown {
+	if err != nil || resolution.Translation.Status != ResolutionEstablished || resolution.Translation.State != copyrighteligibility.FactNoneConfirmed || resolution.AdditionalTextual.Status != ResolutionEstablished || resolution.AdditionalTextual.State != copyrighteligibility.FactNoneConfirmed {
 		t.Fatalf("resolution=%#v err=%v", resolution, err)
 	}
 }
@@ -110,9 +134,7 @@ func TestResolveBibliographicPositiveContributorBlocksAbsence(t *testing.T) {
 	death := 1898
 	publication := 1865
 	value := record(SourceOpenLibrary, "ol:alice", "Lewis Carroll", &death, &publication)
-	value.EditionID = "OL123M"
 	value.OriginalLanguages = []string{"en"}
-	value.ContributorRolesObserved = true
 	value.Contributors = append(value.Contributors, Contributor{Name: "Example Translator", Role: "translator"})
 	resolver := newResolver(t, value)
 	resolution, err := resolver.Resolve(context.Background(), aliceContext())
@@ -124,6 +146,62 @@ func TestResolveBibliographicPositiveContributorBlocksAbsence(t *testing.T) {
 	resolver = newResolver(t, value)
 	resolution, err = resolver.Resolve(context.Background(), aliceContext())
 	if err != nil || resolution.AdditionalTextual.Status != ResolutionEstablished || resolution.AdditionalTextual.State != copyrighteligibility.FactPresent {
+		t.Fatalf("resolution=%#v err=%v", resolution, err)
+	}
+}
+
+func TestResolveProviderContributorSignalsBlockScreening(t *testing.T) {
+	death := 1898
+	publication := 1865
+	for _, contributor := range []copyrighteligibility.ContributorEvidence{
+		{Name: "Example Translator", Role: "translator"},
+		{Name: "Example Editor", Role: "editor"},
+	} {
+		t.Run(contributor.Role, func(t *testing.T) {
+			exact := aliceContext()
+			exact.ProviderEvidence.Contributors = append(exact.ProviderEvidence.Contributors, contributor)
+			record := record(SourceBibliothequeNationaleDeFrance, "ark:/12148/cb12011248f", "Lewis Carroll", &death, &publication)
+			record.OriginalLanguages = []string{"eng"}
+			resolution, err := newResolver(t, record).Resolve(context.Background(), exact)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if contributor.Role == "translator" && (resolution.Translation.Status != ResolutionEstablished || resolution.Translation.State != copyrighteligibility.FactPresent) {
+				t.Fatalf("translation=%#v", resolution.Translation)
+			}
+			if contributor.Role == "editor" && (resolution.AdditionalTextual.Status != ResolutionEstablished || resolution.AdditionalTextual.State != copyrighteligibility.FactPresent) {
+				t.Fatalf("additional=%#v", resolution.AdditionalTextual)
+			}
+		})
+	}
+}
+
+func TestResolveFrontMatterTextualSignalsBlockScreening(t *testing.T) {
+	for _, line := range []string{
+		"Edited by Example Editor",
+		"Introduction by Example Writer",
+		"Preface by Example Writer",
+		"Adapted by Example Writer",
+		"Annotations by Example Writer",
+		"Compiled by Example Writer",
+		"Commentary by Example Writer",
+	} {
+		t.Run(line, func(t *testing.T) {
+			exact := aliceContext()
+			exact.SourceText = line + "\n*** START OF THE PROJECT GUTENBERG EBOOK EXAMPLE ***\n"
+			resolution, err := newResolver(t).Resolve(context.Background(), exact)
+			if err != nil || resolution.AdditionalTextual.Status != ResolutionEstablished || resolution.AdditionalTextual.State != copyrighteligibility.FactPresent {
+				t.Fatalf("resolution=%#v err=%v", resolution, err)
+			}
+		})
+	}
+}
+
+func TestResolveFrontMatterTranslatorBlocksScreening(t *testing.T) {
+	exact := aliceContext()
+	exact.SourceText = "Translated by Example Translator\n*** START OF THE PROJECT GUTENBERG EBOOK EXAMPLE ***\n"
+	resolution, err := newResolver(t).Resolve(context.Background(), exact)
+	if err != nil || resolution.Translation.Status != ResolutionEstablished || resolution.Translation.State != copyrighteligibility.FactPresent {
 		t.Fatalf("resolution=%#v err=%v", resolution, err)
 	}
 }
@@ -307,7 +385,7 @@ func newResolver(t *testing.T, values ...BibliographicRecord) *Service {
 		byClass[value.Source] = append(byClass[value.Source], value)
 	}
 	sources := make([]BibliographicSource, 0, len(byClass))
-	for _, class := range []SourceClass{SourceLibraryOfCongress, SourceOpenLibrary, SourceWikidata} {
+	for _, class := range []SourceClass{SourceBibliothequeNationaleDeFrance, SourceLibraryOfCongress, SourceOpenLibrary, SourceWikidata} {
 		if records, ok := byClass[class]; ok {
 			sources = append(sources, sourceStub{class: class, records: records})
 		}

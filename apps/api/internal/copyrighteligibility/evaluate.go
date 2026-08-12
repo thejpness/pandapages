@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// Evaluate applies Panda Pages copyright policy v2 to supplied factual
+// Evaluate applies Panda Pages copyright policy v3 to supplied factual
 // evidence. It is pure and deterministic: it performs no I/O and does not
 // inspect the wall clock.
 func Evaluate(input Input) Assessment {

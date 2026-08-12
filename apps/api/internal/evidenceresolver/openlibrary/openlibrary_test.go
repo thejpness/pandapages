@@ -81,7 +81,7 @@ func TestLookupUsesOnlyFixedStructuredOpenLibraryEndpoints(t *testing.T) {
 	defer server.Close()
 	adapter, transport := adapterForServer(server)
 	records, err := adapter.Lookup(context.Background(), exactQuery())
-	if err != nil || len(records) != 1 || records[0].Source != evidenceresolver.SourceOpenLibrary || records[0].WorkID != "/works/OL138052W" || records[0].EditionID != "" || records[0].FirstPublicationYear == nil || *records[0].FirstPublicationYear != 1865 || len(records[0].Authors) != 1 || records[0].Authors[0].DeathYear == nil || *records[0].Authors[0].DeathYear != 1898 || len(records[0].Languages) != 1 || records[0].Languages[0] != "eng" || len(records[0].Subjects) != 2 || len(records[0].Contributors) != 1 || records[0].ContributorRolesObserved || records[0].Digest == "" {
+	if err != nil || len(records) != 1 || records[0].Source != evidenceresolver.SourceOpenLibrary || records[0].WorkID != "/works/OL138052W" || records[0].FirstPublicationYear == nil || *records[0].FirstPublicationYear != 1865 || len(records[0].Authors) != 1 || records[0].Authors[0].DeathYear == nil || *records[0].Authors[0].DeathYear != 1898 || len(records[0].Languages) != 1 || records[0].Languages[0] != "eng" || len(records[0].Subjects) != 2 || len(records[0].Contributors) != 1 || records[0].Digest == "" {
 		t.Fatalf("records=%#v err=%v", records, err)
 	}
 	requests := transport.requests()
@@ -207,7 +207,7 @@ func TestLookupIgnoresNonExactOrUnboundResults(t *testing.T) {
 
 // This composes the real Open Library adapter output with the resolver. It
 // deliberately does not invent a Library of Congress record or an exact-edition
-// contributor list: those are not supplied by the current runtime adapter.
+// original-work language: that is not supplied by the current runtime adapter.
 func TestRuntimeOpenLibraryOutputLeavesAliceLikeDossierBlocked(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -242,7 +242,7 @@ func TestRuntimeOpenLibraryOutputLeavesAliceLikeDossierBlocked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolution.Authorship.Status != evidenceresolver.ResolutionEstablished || resolution.Author.Status != evidenceresolver.ResolutionEstablished || resolution.WorkCategory.Status != evidenceresolver.ResolutionInsufficient || resolution.FirstPublication.Status != evidenceresolver.ResolutionInsufficient || resolution.Translation.Status != evidenceresolver.ResolutionInsufficient || resolution.AdditionalTextual.Status != evidenceresolver.ResolutionInsufficient || resolution.UnpublishedAtEnd1988.Status != evidenceresolver.ResolutionInsufficient {
+	if resolution.Authorship.Status != evidenceresolver.ResolutionEstablished || resolution.Author.Status != evidenceresolver.ResolutionEstablished || resolution.WorkCategory.Status != evidenceresolver.ResolutionInsufficient || resolution.FirstPublication.Status != evidenceresolver.ResolutionInsufficient || resolution.Translation.Status != evidenceresolver.ResolutionInsufficient || resolution.AdditionalTextual.Status != evidenceresolver.ResolutionEstablished || resolution.AdditionalTextual.State != copyrighteligibility.FactNoneConfirmed || resolution.UnpublishedAtEnd1988.Status != evidenceresolver.ResolutionInsufficient {
 		t.Fatalf("resolution=%#v", resolution)
 	}
 	assessment := copyrighteligibility.Evaluate(copyrighteligibility.Input{EvaluationDate: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), UK: evidenceresolver.ToUKEvidence(resolution)})

@@ -26,9 +26,9 @@ func TestEvaluateUKOrdinaryLiteraryLifePlusSeventyBoundary(t *testing.T) {
 	}
 }
 
-func TestEvaluateReportsPolicyVersionV2(t *testing.T) {
+func TestEvaluateReportsPolicyVersionV3(t *testing.T) {
 	assessment := Evaluate(Input{EvaluationDate: time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC), UK: ordinaryLiteraryEvidence(1898)})
-	if assessment.PolicyVersion != "panda-pages-copyright-v2" {
+	if assessment.PolicyVersion != "panda-pages-copyright-v3" {
 		t.Fatalf("policy version=%q", assessment.PolicyVersion)
 	}
 }

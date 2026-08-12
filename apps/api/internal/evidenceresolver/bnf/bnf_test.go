@@ -97,7 +97,7 @@ func TestLookupUsesOnlyFixedBoundedBNFSPARQLEndpoint(t *testing.T) {
 		t.Fatalf("records=%#v err=%v", records, err)
 	}
 	record := records[0]
-	if record.Source != evidenceresolver.SourceBibliothequeNationaleDeFrance || record.Identifier != "ark:/12148/cb12011248f" || record.WorkID != record.Identifier || record.EditionID != "" || record.Locator != "https://data.bnf.fr/ark:/12148/cb12011248f" || record.FirstPublicationYear == nil || *record.FirstPublicationYear != 1865 || len(record.Authors) != 1 || record.Authors[0].Name != "Lewis Carroll" || len(record.OriginalLanguages) != 1 || record.OriginalLanguages[0] != "eng" || len(record.Subjects) != 1 || record.Subjects[0] != "Littératures" || len(record.Contributors) != 1 || record.Contributors[0].Role != "author" || record.ContributorRolesObserved || record.Digest == "" {
+	if record.Source != evidenceresolver.SourceBibliothequeNationaleDeFrance || record.Identifier != "ark:/12148/cb12011248f" || record.WorkID != record.Identifier || record.Locator != "https://data.bnf.fr/ark:/12148/cb12011248f" || record.FirstPublicationYear == nil || *record.FirstPublicationYear != 1865 || len(record.Authors) != 1 || record.Authors[0].Name != "Lewis Carroll" || len(record.OriginalLanguages) != 1 || record.OriginalLanguages[0] != "eng" || len(record.Subjects) != 1 || record.Subjects[0] != "Littératures" || len(record.Contributors) != 1 || record.Contributors[0].Role != "author" || record.Digest == "" {
 		t.Fatalf("record=%#v", record)
 	}
 	requests := transport.requests()
@@ -117,7 +117,7 @@ func TestLookupDoesNotTreatWorkLevelGenericContributorAsRoleEvidence(t *testing.
 	defer server.Close()
 	adapter, _ := adapterForServer(server)
 	records, err := adapter.Lookup(context.Background(), exactQuery())
-	if err != nil || len(records) != 1 || len(records[0].Contributors) != 1 || records[0].Contributors[0].Role != "author" || records[0].ContributorRolesObserved {
+	if err != nil || len(records) != 1 || len(records[0].Contributors) != 1 || records[0].Contributors[0].Role != "author" {
 		t.Fatalf("records=%#v err=%v", records, err)
 	}
 }

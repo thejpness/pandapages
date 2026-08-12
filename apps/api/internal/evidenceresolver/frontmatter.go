@@ -14,7 +14,7 @@ const maxFrontMatterBytes = 64 << 10
 var (
 	gutenbergStartMarker = regexp.MustCompile(`(?im)^\*{3}\s*START OF (?:THE |THIS )?PROJECT GUTENBERG EBOOK\b.*$`)
 	translatorLine       = regexp.MustCompile(`(?im)^\s*(?:translated|translation)\s+by\s*[:,-]?\s*(.{1,500})\s*$|^\s*translator\s*:\s*(.{1,500})\s*$`)
-	textualLine          = regexp.MustCompile(`(?im)^\s*(edited|editor|introduction|preface|notes|annotated|adapted|compiled)\s+by\s*[:,-]?\s*(.{1,500})\s*$|^\s*(editor|introduction|preface|notes|annotator|adapter|compiler)\s*:\s*(.{1,500})\s*$`)
+	textualLine          = regexp.MustCompile(`(?im)^\s*(edited|editor|introduction|preface|notes|annotations?|annotated|adapted|compiled|commentary)\s+by\s*[:,-]?\s*(.{1,500})\s*$|^\s*(editor|introduction|preface|notes|annotations?|annotator|adapter|compiler|commentary)\s*:\s*(.{1,500})\s*$`)
 )
 
 type FrontMatterContributor struct {
@@ -22,8 +22,9 @@ type FrontMatterContributor struct {
 	Name string
 }
 
-// FrontMatter contains only positive, bounded signals from the provider wrapper.
-// Lack of a signal is never an assertion that a contribution is absent.
+// FrontMatter contains bounded signals from the exact provider wrapper. The
+// resolver combines a clean result with independent provider metadata under its
+// explicit contributor-risk policy; this structure never makes a legal claim.
 type FrontMatter struct {
 	Inspected           bool
 	Digest              string

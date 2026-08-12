@@ -959,7 +959,7 @@ func validateSourceEligibility(value model.AdminSourceEligibility) bool {
 	return sourceEligibilityMatchesPolicy(value)
 }
 
-// sourceEligibilityMatchesPolicy independently reconstructs policy v2 from
+// sourceEligibilityMatchesPolicy independently reconstructs policy v3 from
 // stored evidence. Database rows are evidence, not inherently trustworthy:
 // malformed or internally contradictory assessment data fails closed.
 func sourceEligibilityMatchesPolicy(value model.AdminSourceEligibility) bool {
