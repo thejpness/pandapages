@@ -1,0 +1,13 @@
+# The Lantern Keeper
+
+For twenty-four months Mara had served as Ivo's apprentice in the Greyhaven harbour light service, learning not merely to ignite the lamp but to maintain the glass, trim the wick to an even edge, calculate the reservoir's oil requirement, inspect shutters, record visibility, and understand how the evening tide interacted with the hazardous geometry of Black Tooth Reef.
+
+On the autumn evening in question, a rapidly developing maritime storm reduced visibility while Ivo, attempting to secure a shutter against a gust, struck the wall and sustained a painful ankle injury. This created an immediate operational problem: he could not ascend the lighthouse stairs, the principal lantern had not yet been lit, and the merchant vessel Gull Star was scheduled to arrive before nightfall.
+
+Magistrate Rusk then arrived. His position mattered because the harbour's apprenticeship administration required his signature before trainees could qualify for licensed work. His commercial interests mattered too: he owned warehouses and wanted the Gull Star, which carried cloth associated with a competing merchant, to miss the tide. Rusk therefore proposed a precise ten-minute delay in illumination. When Mara rejected the proposal, he explicitly connected her refusal to the possible rejection of her apprenticeship papers.
+
+Mara evaluated the conflict. Her two years of training and future employment were personally significant, yet the functional purpose of the lantern was to give mariners a visible reference near Black Tooth Reef when weather made the hazard difficult to identify. She therefore treated Rusk's institutional leverage as a real threat without treating it as a legitimate reason to abandon the lighthouse's purpose.
+
+Because Ivo retained enough knowledge and composure to direct her to the reserve oil, Mara retrieved the can, ascended alone, removed rainwater from the lantern housing, replenished the reservoir, prepared the wick, and established the flame before the Gull Star reached the reef. The resulting light gave the captain the visual information needed to correct the vessel's course and pass safely into Greyhaven.
+
+After descending, Mara made a factual report to Ivo. He escalated Rusk's threat to the harbour council. Other workers supplied related accounts, and the council temporarily removed Rusk's authority over apprenticeship paperwork pending investigation. Mara received neither immediate licensure nor ceremonial reward. She continued as an apprentice, with the final transfer of the oil can from Ivo indicating increased trust through ordinary work rather than through a triumphal celebration.

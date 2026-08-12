@@ -1,0 +1,157 @@
+{
+  "centralPlot": "When a storm injures her mentor, apprentice lantern keeper Mara must choose between a magistrate's threat to her future and her duty to light the harbour lantern before an approaching ship reaches a dangerous reef.",
+  "characters": [
+    {
+      "name": "Mara",
+      "role": "Apprentice lantern keeper and protagonist",
+      "explicitMotivations": [
+        "Protect sailors who depend on the harbour lantern",
+        "Earn Ivo's trust and qualify as a licensed lantern keeper"
+      ],
+      "flawsOrAmbiguities": [
+        "She is frightened by the credible threat to the future she has worked toward"
+      ]
+    },
+    {
+      "name": "Ivo",
+      "role": "Mara's injured mentor",
+      "explicitMotivations": [
+        "Keep the harbour lantern operating safely",
+        "Teach Mara to understand the responsibility of the work"
+      ],
+      "flawsOrAmbiguities": []
+    },
+    {
+      "name": "Magistrate Rusk",
+      "role": "Harbour official and antagonist",
+      "explicitMotivations": [
+        "Delay a rival's ship so his own business gains the first berth"
+      ],
+      "flawsOrAmbiguities": [
+        "Uses official power over apprenticeship papers for private commercial advantage"
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "parties": [
+        "Mara",
+        "Ivo"
+      ],
+      "nature": "Mentor and apprentice",
+      "powerDynamics": "Ivo has teaching authority but treats Mara's responsibility seriously and supports her judgment."
+    },
+    {
+      "parties": [
+        "Mara",
+        "Magistrate Rusk"
+      ],
+      "nature": "Apprentice confronted by an official who wants her cooperation",
+      "powerDynamics": "Rusk can influence Mara's qualification papers and uses that power to threaten her future."
+    }
+  ],
+  "coreStoryBeats": [
+    {
+      "summary": "A storm injures Ivo, leaving Mara responsible for an unlit harbour lantern before the Gull Star arrives."
+    },
+    {
+      "summary": "Rusk asks Mara to leave the lantern dark so a rival ship misses the tide."
+    },
+    {
+      "summary": "Rusk threatens Mara's apprenticeship when she refuses."
+    },
+    {
+      "summary": "Mara chooses her duty to sailors despite the threat and climbs the tower with the spare oil."
+    },
+    {
+      "summary": "Mara lights the lantern before the Gull Star reaches Black Tooth Reef, allowing the captain to correct course and pass safely."
+    },
+    {
+      "summary": "Mara reports Rusk's threat; his authority over apprenticeship papers is removed during an investigation, while Mara remains Ivo's apprentice."
+    }
+  ],
+  "developmentBeats": [
+    {
+      "summary": "Mara has spent two years learning the practical work of maintaining the lantern."
+    },
+    {
+      "summary": "Mara explicitly fears losing the future she has planned but remembers why sailors depend on the light."
+    }
+  ],
+  "enrichmentMaterial": [
+    {
+      "summary": "Greyhaven's harbour and Black Tooth Reef establish the physical setting and danger."
+    },
+    {
+      "summary": "The final exchange of the oil can shows Ivo's increased trust without turning Mara's choice into a reward ceremony."
+    }
+  ],
+  "causalDependencies": [
+    {
+      "cause": "Ivo is injured and cannot climb the tower.",
+      "effect": "Mara must prepare and light the lantern herself.",
+      "whyItMatters": "The injury creates the circumstance in which Mara must act independently."
+    },
+    {
+      "cause": "The lantern is dark during a storm and Black Tooth Reef is difficult to see.",
+      "effect": "The approaching Gull Star needs the lantern to correct its course safely.",
+      "whyItMatters": "This establishes the concrete stakes behind Mara's decision."
+    },
+    {
+      "cause": "Rusk controls apprenticeship paperwork and threatens Mara with losing her future.",
+      "effect": "Mara faces a meaningful personal cost for refusing his demand.",
+      "whyItMatters": "The coercive power relationship makes her choice difficult rather than effortless."
+    },
+    {
+      "cause": "Mara lights the lantern before the Gull Star reaches the reef.",
+      "effect": "The captain sees the light, corrects course, and passes Black Tooth Reef safely.",
+      "whyItMatters": "The climax depends on the timing and causal effect of Mara's action."
+    }
+  ],
+  "iconicMaterial": [
+    {
+      "kind": "image",
+      "textOrDescription": "The harbour lantern shining through the storm as the Gull Star approaches Black Tooth Reef",
+      "importance": "This is the central visual expression of Mara choosing duty over Rusk's threat."
+    },
+    {
+      "kind": "line",
+      "textOrDescription": "Rusk's demand does not change what the lantern is for.",
+      "importance": "This captures Mara's reasoning without adding a moral lesson from outside the story."
+    }
+  ],
+  "intenseMaterial": [
+    {
+      "kind": "injury",
+      "description": "Ivo badly twists his ankle and cannot climb the tower.",
+      "narrativeFunction": "Forces Mara to take responsibility for lighting the lantern."
+    },
+    {
+      "kind": "frightening",
+      "description": "A ship approaches a difficult-to-see reef during a storm while the harbour lantern is dark.",
+      "narrativeFunction": "Creates immediate stakes for Mara's decision."
+    }
+  ],
+  "adaptationRisks": [
+    {
+      "kind": "motivation",
+      "description": "Mara's choice can be flattened into wanting praise or a reward.",
+      "whatMustBePreserved": "Her established motives are protecting sailors, accepting responsibility, and earning trust through the work itself."
+    },
+    {
+      "kind": "causality",
+      "description": "The rescue can stop depending on Mara lighting the lantern before the Gull Star reaches the reef.",
+      "whatMustBePreserved": "Mara's timely action must cause the captain to see the danger and correct course."
+    },
+    {
+      "kind": "power_relationship",
+      "description": "Rusk's threat can be softened into friendly advice or ordinary disagreement.",
+      "whatMustBePreserved": "Rusk uses real institutional power over Mara's apprenticeship to pressure her for private gain."
+    },
+    {
+      "kind": "story_identity",
+      "description": "The adaptation can retain names while losing the lighthouse duty, coercive choice, and reef rescue.",
+      "whatMustBePreserved": "The story remains about Mara choosing to light the harbour lantern despite Rusk's threat, thereby protecting the Gull Star."
+    }
+  ]
+}

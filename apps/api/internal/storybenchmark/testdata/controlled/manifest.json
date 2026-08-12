@@ -1,0 +1,251 @@
+{
+  "benchmarkVersion": "panda-pages-story-benchmark-v1",
+  "fixtureKind": "synthetic_controlled",
+  "story": {
+    "slug": "the-lantern-keeper",
+    "title": "The Lantern Keeper",
+    "author": "Panda Pages benchmark fixture",
+    "language": "en-GB",
+    "sourceUrl": "https://example.invalid/pandapages/benchmark/the-lantern-keeper",
+    "rights": {
+      "status": "synthetic-benchmark-fixture",
+      "publicationEligible": false,
+      "note": "Original test content created only for Panda Pages semantic benchmark evaluation."
+    },
+    "canonicalSourcePath": "source.md",
+    "analysisPath": "analysis.json"
+  },
+  "cases": [
+    {
+      "id": "clean-control",
+      "description": "Faithful Growing Readers control expected to produce no semantic findings.",
+      "expectation": {
+        "assessmentScope": "edition",
+        "editionKey": "growing-readers",
+        "expectedResult": "pass",
+        "requiredFindingCodes": [],
+        "forbiddenFindingCodes": []
+      },
+      "editions": [
+        {
+          "editionKey": "growing-readers",
+          "path": "editions/clean-growing-readers.md"
+        }
+      ]
+    },
+    {
+      "id": "motivation-changed",
+      "description": "Changes Mara's established motivation from duty and protection to fame and a medal.",
+      "expectation": {
+        "assessmentScope": "edition",
+        "editionKey": "growing-readers",
+        "expectedResult": "fail",
+        "requiredFindingCodes": [
+          "motivation_changed"
+        ],
+        "forbiddenFindingCodes": []
+      },
+      "editions": [
+        {
+          "editionKey": "growing-readers",
+          "path": "editions/motivation-changed.md"
+        }
+      ]
+    },
+    {
+      "id": "invented-moralising",
+      "description": "Adds an explicit universal moral and reward promise that the source does not contain.",
+      "expectation": {
+        "assessmentScope": "edition",
+        "editionKey": "growing-readers",
+        "expectedResult": "fail",
+        "requiredFindingCodes": [
+          "invented_moralising"
+        ],
+        "forbiddenFindingCodes": []
+      },
+      "editions": [
+        {
+          "editionKey": "growing-readers",
+          "path": "editions/invented-moralising.md"
+        }
+      ]
+    },
+    {
+      "id": "causal-chain-broken",
+      "description": "Places the ship's safe passage before Mara lights the lantern while still claiming the later light caused the rescue.",
+      "expectation": {
+        "assessmentScope": "edition",
+        "editionKey": "growing-readers",
+        "expectedResult": "fail",
+        "requiredFindingCodes": [
+          "causal_chain_broken"
+        ],
+        "forbiddenFindingCodes": []
+      },
+      "editions": [
+        {
+          "editionKey": "growing-readers",
+          "path": "editions/causal-chain-broken.md"
+        }
+      ]
+    },
+    {
+      "id": "coercion-romanticised",
+      "description": "Recasts Rusk's credible threat over Mara's future as evidence that he cares for and protects her.",
+      "expectation": {
+        "assessmentScope": "edition",
+        "editionKey": "growing-readers",
+        "expectedResult": "fail",
+        "requiredFindingCodes": [
+          "coercion_romanticised"
+        ],
+        "forbiddenFindingCodes": []
+      },
+      "editions": [
+        {
+          "editionKey": "growing-readers",
+          "path": "editions/coercion-romanticised.md"
+        }
+      ]
+    },
+    {
+      "id": "substantial-material-invented",
+      "description": "Introduces a sea dragon, magic rescue, queenship, and magical healing absent from the source.",
+      "expectation": {
+        "assessmentScope": "edition",
+        "editionKey": "growing-readers",
+        "expectedResult": "fail",
+        "requiredFindingCodes": [
+          "substantial_material_invented"
+        ],
+        "forbiddenFindingCodes": []
+      },
+      "editions": [
+        {
+          "editionKey": "growing-readers",
+          "path": "editions/substantial-material-invented.md"
+        }
+      ]
+    },
+    {
+      "id": "edition-identity-lost",
+      "description": "Retains character names but replaces the lighthouse conflict with a cake competition.",
+      "expectation": {
+        "assessmentScope": "edition",
+        "editionKey": "growing-readers",
+        "expectedResult": "fail",
+        "requiredFindingCodes": [
+          "edition_identity_lost"
+        ],
+        "forbiddenFindingCodes": []
+      },
+      "editions": [
+        {
+          "editionKey": "growing-readers",
+          "path": "editions/edition-identity-lost.md"
+        }
+      ]
+    },
+    {
+      "id": "scope-too-rich",
+      "description": "Preserves the source but retains substantially more operational and institutional detail than Growing Readers needs.",
+      "expectation": {
+        "assessmentScope": "edition",
+        "editionKey": "growing-readers",
+        "expectedResult": "needs_review",
+        "requiredFindingCodes": [
+          "scope_too_rich"
+        ],
+        "forbiddenFindingCodes": []
+      },
+      "editions": [
+        {
+          "editionKey": "growing-readers",
+          "path": "editions/scope-too-rich.md"
+        }
+      ]
+    },
+    {
+      "id": "scope-too-thin",
+      "description": "Preserves the causal spine but compresses a Confident Readers edition below the expected narrative scope.",
+      "expectation": {
+        "assessmentScope": "edition",
+        "editionKey": "confident-readers",
+        "expectedResult": "needs_review",
+        "requiredFindingCodes": [
+          "scope_too_thin"
+        ],
+        "forbiddenFindingCodes": []
+      },
+      "editions": [
+        {
+          "editionKey": "confident-readers",
+          "path": "editions/scope-too-thin.md"
+        }
+      ]
+    },
+    {
+      "id": "progression-not-distinct",
+      "description": "Uses exactly the same adaptation text for all four derived editions.",
+      "expectation": {
+        "assessmentScope": "bundle",
+        "editionKeys": [
+          "confident-readers",
+          "growing-readers",
+          "story-explorers",
+          "little-listeners"
+        ],
+        "expectedResult": "fail",
+        "requiredFindingCodes": [
+          "edition_progression_not_distinct"
+        ],
+        "forbiddenFindingCodes": []
+      },
+      "editions": [
+        {
+          "editionKey": "confident-readers",
+          "path": "editions/progression-not-distinct.md"
+        },
+        {
+          "editionKey": "growing-readers",
+          "path": "editions/progression-not-distinct.md"
+        },
+        {
+          "editionKey": "story-explorers",
+          "path": "editions/progression-not-distinct.md"
+        },
+        {
+          "editionKey": "little-listeners",
+          "path": "editions/progression-not-distinct.md"
+        }
+      ]
+    },
+    {
+      "id": "progression-inverted",
+      "description": "Makes the Confident Readers edition much simpler and thinner than the Growing Readers edition.",
+      "expectation": {
+        "assessmentScope": "bundle",
+        "editionKeys": [
+          "confident-readers",
+          "growing-readers"
+        ],
+        "expectedResult": "fail",
+        "requiredFindingCodes": [
+          "edition_progression_inverted"
+        ],
+        "forbiddenFindingCodes": []
+      },
+      "editions": [
+        {
+          "editionKey": "confident-readers",
+          "path": "editions/progression-inverted-confident.md"
+        },
+        {
+          "editionKey": "growing-readers",
+          "path": "editions/progression-inverted-growing.md"
+        }
+      ]
+    }
+  ]
+}
