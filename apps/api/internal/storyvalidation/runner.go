@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	editionAssessmentSchemaNameV2 = "panda_pages_edition_semantic_assessment_v2"
-	bundleAssessmentSchemaNameV2  = "panda_pages_bundle_semantic_assessment_v2"
+	editionJudgementSchemaNameV3 = "panda_pages_edition_semantic_judgement_v3"
+	bundleJudgementSchemaNameV3  = "panda_pages_bundle_semantic_judgement_v3"
 )
 
 type RunnerConfig struct {
@@ -80,9 +80,33 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 }
 
 func (runner *Runner) ValidateEdition(ctx context.Context, input EditionValidationPromptInput) (AssessmentArtifact, error) {
-	prompt, err := BuildEditionValidationPromptV2(input)
+	if err := validateEditionValidationInput(input); err != nil {
+		return AssessmentArtifact{}, fmt.Errorf("validate edition semantic-validation input: %w", err)
+	}
+
+	editions := []storygeneration.GeneratedEditionArtifact{input.GeneratedEdition}
+	index, err := BuildEvidenceIndex(
+		input.CanonicalSource,
+		input.AnalysisArtifact.Analysis,
+		editions,
+	)
 	if err != nil {
-		return AssessmentArtifact{}, fmt.Errorf("build edition semantic-validation prompt: %w", err)
+		return AssessmentArtifact{}, fmt.Errorf("build edition semantic evidence index: %w", err)
+	}
+
+	prompt, err := BuildEditionJudgementPromptV3(EditionJudgementPromptInput{
+		Title:            input.Title,
+		Author:           input.Author,
+		CanonicalSource:  input.CanonicalSource,
+		AnalysisArtifact: input.AnalysisArtifact,
+		GeneratedEdition: input.GeneratedEdition,
+	}, index)
+	if err != nil {
+		return AssessmentArtifact{}, fmt.Errorf("build edition semantic-judgement prompt: %w", err)
+	}
+	schema, err := EditionJudgementJSONSchema(index)
+	if err != nil {
+		return AssessmentArtifact{}, fmt.Errorf("build edition semantic-judgement schema: %w", err)
 	}
 
 	result, err := runner.gateway.Create(ctx, storygeneration.ResponsesCall{
@@ -91,29 +115,34 @@ func (runner *Runner) ValidateEdition(ctx context.Context, input EditionValidati
 		MaxOutputTokens: runner.maxOutputTokens,
 		Prompt:          prompt,
 		StructuredOutput: &storygeneration.StructuredOutput{
-			Name:   editionAssessmentSchemaNameV2,
-			Schema: EditionAssessmentJSONSchema(),
+			Name:   editionJudgementSchemaNameV3,
+			Schema: schema,
 		},
 	})
 	if err != nil {
-		return AssessmentArtifact{}, fmt.Errorf("run edition semantic validation: %w", err)
+		return AssessmentArtifact{}, fmt.Errorf("run edition semantic judgement: %w", err)
 	}
 
-	assessment, err := DecodeAssessmentJSON([]byte(result.OutputText))
+	judgement, err := DecodeSemanticJudgementJSON([]byte(result.OutputText))
 	if err != nil {
-		return AssessmentArtifact{}, fmt.Errorf("decode edition semantic assessment: %w", err)
+		return AssessmentArtifact{}, fmt.Errorf("decode edition semantic judgement: %w", err)
 	}
-	if assessment.AssessmentScope != adaptationcontract.AssessmentScopeEdition {
-		return AssessmentArtifact{}, fmt.Errorf("edition semantic assessor returned scope %q", assessment.AssessmentScope)
+	if judgement.AssessmentScope != adaptationcontract.AssessmentScopeEdition {
+		return AssessmentArtifact{}, fmt.Errorf("edition semantic judge returned scope %q", judgement.AssessmentScope)
 	}
-	if assessment.EditionKey == nil || *assessment.EditionKey != input.GeneratedEdition.EditionKey {
-		return AssessmentArtifact{}, fmt.Errorf("edition semantic assessor returned the wrong edition target")
+	if judgement.EditionKey == nil || *judgement.EditionKey != input.GeneratedEdition.EditionKey {
+		return AssessmentArtifact{}, fmt.Errorf("edition semantic judge returned the wrong edition target")
+	}
+
+	assessment, err := ResolveSemanticJudgement(judgement, index)
+	if err != nil {
+		return AssessmentArtifact{}, fmt.Errorf("resolve edition semantic judgement: %w", err)
 	}
 	if err := validateAssessmentEvidence(
 		assessment,
 		input.CanonicalSource,
 		input.AnalysisArtifact.Analysis,
-		[]storygeneration.GeneratedEditionArtifact{input.GeneratedEdition},
+		editions,
 	); err != nil {
 		return AssessmentArtifact{}, fmt.Errorf("edition semantic assessment evidence is invalid: %w", err)
 	}
@@ -124,7 +153,7 @@ func (runner *Runner) ValidateEdition(ctx context.Context, input EditionValidati
 		runner.reasoningEffort,
 		result,
 		input.AnalysisArtifact,
-		[]storygeneration.GeneratedEditionArtifact{input.GeneratedEdition},
+		editions,
 		assessment,
 	)
 	if err != nil {
@@ -134,9 +163,32 @@ func (runner *Runner) ValidateEdition(ctx context.Context, input EditionValidati
 }
 
 func (runner *Runner) ValidateBundle(ctx context.Context, input BundleValidationPromptInput) (AssessmentArtifact, error) {
-	prompt, err := BuildBundleValidationPromptV2(input)
+	if err := validateBundleValidationInput(input); err != nil {
+		return AssessmentArtifact{}, fmt.Errorf("validate bundle semantic-validation input: %w", err)
+	}
+
+	index, err := BuildEvidenceIndex(
+		input.CanonicalSource,
+		input.AnalysisArtifact.Analysis,
+		input.GeneratedEditions,
+	)
 	if err != nil {
-		return AssessmentArtifact{}, fmt.Errorf("build bundle semantic-validation prompt: %w", err)
+		return AssessmentArtifact{}, fmt.Errorf("build bundle semantic evidence index: %w", err)
+	}
+
+	prompt, err := BuildBundleJudgementPromptV3(BundleJudgementPromptInput{
+		Title:             input.Title,
+		Author:            input.Author,
+		CanonicalSource:   input.CanonicalSource,
+		AnalysisArtifact:  input.AnalysisArtifact,
+		GeneratedEditions: input.GeneratedEditions,
+	}, index)
+	if err != nil {
+		return AssessmentArtifact{}, fmt.Errorf("build bundle semantic-judgement prompt: %w", err)
+	}
+	schema, err := BundleJudgementJSONSchema(index)
+	if err != nil {
+		return AssessmentArtifact{}, fmt.Errorf("build bundle semantic-judgement schema: %w", err)
 	}
 
 	result, err := runner.gateway.Create(ctx, storygeneration.ResponsesCall{
@@ -145,28 +197,33 @@ func (runner *Runner) ValidateBundle(ctx context.Context, input BundleValidation
 		MaxOutputTokens: runner.maxOutputTokens,
 		Prompt:          prompt,
 		StructuredOutput: &storygeneration.StructuredOutput{
-			Name:   bundleAssessmentSchemaNameV2,
-			Schema: BundleAssessmentJSONSchema(),
+			Name:   bundleJudgementSchemaNameV3,
+			Schema: schema,
 		},
 	})
 	if err != nil {
-		return AssessmentArtifact{}, fmt.Errorf("run bundle semantic validation: %w", err)
+		return AssessmentArtifact{}, fmt.Errorf("run bundle semantic judgement: %w", err)
 	}
 
-	assessment, err := DecodeAssessmentJSON([]byte(result.OutputText))
+	judgement, err := DecodeSemanticJudgementJSON([]byte(result.OutputText))
 	if err != nil {
-		return AssessmentArtifact{}, fmt.Errorf("decode bundle semantic assessment: %w", err)
+		return AssessmentArtifact{}, fmt.Errorf("decode bundle semantic judgement: %w", err)
 	}
-	if assessment.AssessmentScope != adaptationcontract.AssessmentScopeBundle {
-		return AssessmentArtifact{}, fmt.Errorf("bundle semantic assessor returned scope %q", assessment.AssessmentScope)
+	if judgement.AssessmentScope != adaptationcontract.AssessmentScopeBundle {
+		return AssessmentArtifact{}, fmt.Errorf("bundle semantic judge returned scope %q", judgement.AssessmentScope)
 	}
 
 	expectedKeys := make([]model.AdminStoryEditionKey, 0, len(input.GeneratedEditions))
 	for _, edition := range input.GeneratedEditions {
 		expectedKeys = append(expectedKeys, edition.EditionKey)
 	}
-	if !sameEditionKeys(assessment.EditionKeys, expectedKeys) {
-		return AssessmentArtifact{}, fmt.Errorf("bundle semantic assessor returned the wrong edition targets")
+	if !sameEditionKeys(judgement.EditionKeys, expectedKeys) {
+		return AssessmentArtifact{}, fmt.Errorf("bundle semantic judge returned the wrong edition targets")
+	}
+
+	assessment, err := ResolveSemanticJudgement(judgement, index)
+	if err != nil {
+		return AssessmentArtifact{}, fmt.Errorf("resolve bundle semantic judgement: %w", err)
 	}
 	if err := validateAssessmentEvidence(
 		assessment,
@@ -215,7 +272,7 @@ func buildAssessmentArtifact(
 	}
 
 	artifact := AssessmentArtifact{
-		ValidationVersion:    ValidationV2,
+		ValidationVersion:    assessment.ValidationVersion,
 		SpecificationVersion: storygeneration.SpecificationV2,
 		PromptVersion:        promptVersion,
 		AssessmentScope:      assessment.AssessmentScope,
@@ -239,8 +296,18 @@ func buildAssessmentArtifact(
 }
 
 func (artifact AssessmentArtifact) Validate() error {
-	if artifact.ValidationVersion != ValidationV2 {
-		return fmt.Errorf("assessment artifact validation version must equal %q", ValidationV2)
+	var expectedAssessmentVersion ValidationVersion
+	switch artifact.ValidationVersion {
+	case ValidationV2:
+		expectedAssessmentVersion = ValidationV2
+	case ValidationV3:
+		expectedAssessmentVersion = ValidationV3
+	default:
+		return fmt.Errorf(
+			"assessment artifact validation version must equal %q or %q",
+			ValidationV2,
+			ValidationV3,
+		)
 	}
 	if artifact.SpecificationVersion != storygeneration.SpecificationV2 {
 		return fmt.Errorf("assessment artifact specification version must equal %q", storygeneration.SpecificationV2)
@@ -266,10 +333,10 @@ func (artifact AssessmentArtifact) Validate() error {
 	if strings.TrimSpace(artifact.ResponseID) == "" {
 		return fmt.Errorf("assessment artifact response ID is required")
 	}
-	if artifact.Assessment.ValidationVersion != ValidationV2 {
+	if artifact.Assessment.ValidationVersion != expectedAssessmentVersion {
 		return fmt.Errorf(
-			"assessment artifact assessment validation version must equal %q",
-			ValidationV2,
+			"assessment artifact assessment validation version must equal artifact validation version %q",
+			expectedAssessmentVersion,
 		)
 	}
 	if err := artifact.Assessment.Validate(); err != nil {
@@ -285,10 +352,18 @@ func (artifact AssessmentArtifact) Validate() error {
 		return fmt.Errorf("assessment artifact bundle targets do not match assessment")
 	}
 
+	expectedPromptVersion, err := assessmentArtifactPromptVersion(
+		artifact.ValidationVersion,
+		artifact.AssessmentScope,
+	)
+	if err != nil {
+		return err
+	}
+
 	switch artifact.AssessmentScope {
 	case adaptationcontract.AssessmentScopeEdition:
-		if artifact.PromptVersion != EditionValidationPromptVersionV2 {
-			return fmt.Errorf("edition assessment artifact prompt version must equal %q", EditionValidationPromptVersionV2)
+		if artifact.PromptVersion != expectedPromptVersion {
+			return fmt.Errorf("edition assessment artifact prompt version must equal %q", expectedPromptVersion)
 		}
 		if len(artifact.EditionBindings) != 1 {
 			return fmt.Errorf("edition assessment artifact requires exactly one edition binding")
@@ -297,8 +372,8 @@ func (artifact AssessmentArtifact) Validate() error {
 			return fmt.Errorf("edition assessment artifact binding does not match edition target")
 		}
 	case adaptationcontract.AssessmentScopeBundle:
-		if artifact.PromptVersion != BundleValidationPromptVersionV2 {
-			return fmt.Errorf("bundle assessment artifact prompt version must equal %q", BundleValidationPromptVersionV2)
+		if artifact.PromptVersion != expectedPromptVersion {
+			return fmt.Errorf("bundle assessment artifact prompt version must equal %q", expectedPromptVersion)
 		}
 		if len(artifact.EditionBindings) != len(artifact.EditionKeys) {
 			return fmt.Errorf("bundle assessment artifact bindings do not match target count")
@@ -327,6 +402,91 @@ func (artifact AssessmentArtifact) Validate() error {
 	}
 
 	return nil
+}
+
+func validateEditionValidationInput(input EditionValidationPromptInput) error {
+	if err := validateCommonValidationInput(
+		input.Title,
+		input.Author,
+		input.CanonicalSource,
+		input.AnalysisArtifact,
+	); err != nil {
+		return err
+	}
+	return validateGeneratedEditionForSemanticAssessment(
+		input.GeneratedEdition,
+		input.AnalysisArtifact,
+	)
+}
+
+func validateBundleValidationInput(input BundleValidationPromptInput) error {
+	if err := validateCommonValidationInput(
+		input.Title,
+		input.Author,
+		input.CanonicalSource,
+		input.AnalysisArtifact,
+	); err != nil {
+		return err
+	}
+	if len(input.GeneratedEditions) < 2 {
+		return fmt.Errorf("bundle semantic validation requires at least two generated editions")
+	}
+
+	rank := make(map[model.AdminStoryEditionKey]int)
+	for position, key := range storygeneration.DerivedEditionKeysV2() {
+		rank[key] = position
+	}
+
+	lastRank := -1
+	for position, edition := range input.GeneratedEditions {
+		if err := validateGeneratedEditionForSemanticAssessment(
+			edition,
+			input.AnalysisArtifact,
+		); err != nil {
+			return fmt.Errorf("generated edition %d: %w", position+1, err)
+		}
+		currentRank, ok := rank[edition.EditionKey]
+		if !ok {
+			return fmt.Errorf(
+				"generated edition %d has invalid edition key %q",
+				position+1,
+				edition.EditionKey,
+			)
+		}
+		if currentRank <= lastRank {
+			return fmt.Errorf("bundle generated editions must follow canonical modern edition order without duplicates")
+		}
+		lastRank = currentRank
+	}
+
+	return nil
+}
+
+func assessmentArtifactPromptVersion(
+	validationVersion ValidationVersion,
+	scope adaptationcontract.AssessmentScope,
+) (storygeneration.PromptVersion, error) {
+	switch validationVersion {
+	case ValidationV2:
+		switch scope {
+		case adaptationcontract.AssessmentScopeEdition:
+			return EditionValidationPromptVersionV2, nil
+		case adaptationcontract.AssessmentScopeBundle:
+			return BundleValidationPromptVersionV2, nil
+		}
+	case ValidationV3:
+		switch scope {
+		case adaptationcontract.AssessmentScopeEdition:
+			return EditionJudgementPromptVersionV3, nil
+		case adaptationcontract.AssessmentScopeBundle:
+			return BundleJudgementPromptVersionV3, nil
+		}
+	}
+	return "", fmt.Errorf(
+		"assessment artifact has unsupported validation version %q or scope %q",
+		validationVersion,
+		scope,
+	)
 }
 
 func validateAssessmentEvidence(
