@@ -51,7 +51,7 @@ func (runner *V2Runner) GenerateEdition(ctx context.Context, input GenerateEditi
 		return GeneratedEditionArtifact{}, fmt.Errorf("StoryAnalysis artifact does not match canonical source")
 	}
 
-	prompt, err := BuildEditionPromptV2(EditionPromptInput{
+	prompt, err := BuildEditionPromptV3(EditionPromptInput{
 		EditionKey:      input.EditionKey,
 		Title:           input.Title,
 		Author:          input.Author,
@@ -59,7 +59,7 @@ func (runner *V2Runner) GenerateEdition(ctx context.Context, input GenerateEditi
 		StoryAnalysis:   input.AnalysisArtifact.Analysis,
 	})
 	if err != nil {
-		return GeneratedEditionArtifact{}, fmt.Errorf("build v2 edition prompt: %w", err)
+		return GeneratedEditionArtifact{}, fmt.Errorf("build v3 edition prompt: %w", err)
 	}
 
 	result, err := runner.gateway.Create(ctx, ResponsesCall{
@@ -86,7 +86,7 @@ func (runner *V2Runner) GenerateEdition(ctx context.Context, input GenerateEditi
 
 	artifact := GeneratedEditionArtifact{
 		SpecificationVersion: SpecificationV2,
-		PromptVersion:        EditionPromptVersionV2,
+		PromptVersion:        EditionPromptVersionV3,
 		EditionKey:           input.EditionKey,
 		RequestedModel:       GenerationModelV2,
 		ReturnedModel:        result.Model,
@@ -114,8 +114,8 @@ func (artifact GeneratedEditionArtifact) Validate() error {
 	if artifact.SpecificationVersion != SpecificationV2 {
 		return fmt.Errorf("generated-edition artifact specification must equal %q", SpecificationV2)
 	}
-	if artifact.PromptVersion != EditionPromptVersionV2 {
-		return fmt.Errorf("generated-edition artifact prompt version must equal %q", EditionPromptVersionV2)
+	if !validEditionPromptVersion(artifact.PromptVersion) {
+		return fmt.Errorf("generated-edition artifact prompt version %q is unsupported", artifact.PromptVersion)
 	}
 	if !ValidV2DerivedEditionKey(artifact.EditionKey) {
 		return fmt.Errorf("generated-edition artifact edition key is invalid")
@@ -159,6 +159,15 @@ func (artifact GeneratedEditionArtifact) Validate() error {
 	}
 
 	return nil
+}
+
+func validEditionPromptVersion(version PromptVersion) bool {
+	switch version {
+	case EditionPromptVersionV2, EditionPromptVersionV3:
+		return true
+	default:
+		return false
+	}
 }
 
 func summarizeStructuralFindings(findings []adaptationcontract.Finding) string {
