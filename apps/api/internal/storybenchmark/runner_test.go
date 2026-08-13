@@ -348,7 +348,8 @@ func TestRunConfigValidationDoesNotLockValidatorModel(t *testing.T) {
 }
 
 type passValidationGateway struct {
-	calls int
+	calls          int
+	includeFinding bool
 }
 
 func (gateway *passValidationGateway) Create(
@@ -361,43 +362,67 @@ func (gateway *passValidationGateway) Create(
 	gateway.calls++
 
 	var input struct {
-		Edition struct {
-			EditionKey model.AdminStoryEditionKey `json:"editionKey"`
-		} `json:"edition"`
-		Editions []struct {
-			EditionKey model.AdminStoryEditionKey `json:"editionKey"`
-		} `json:"editions"`
+		EditionKey        model.AdminStoryEditionKey   `json:"editionKey"`
+		EditionKeys       []model.AdminStoryEditionKey `json:"editionKeys"`
+		EvidenceCatalogue []struct {
+			SegmentID storyvalidation.EvidenceSegmentID `json:"segmentId"`
+		} `json:"evidenceCatalogue"`
 	}
 	if err := json.Unmarshal([]byte(call.Prompt.UserInputJSON), &input); err != nil {
 		return storygeneration.ResponsesResult{}, fmt.Errorf("decode validation prompt input: %w", err)
 	}
+	if len(input.EvidenceCatalogue) == 0 {
+		return storygeneration.ResponsesResult{}, fmt.Errorf("validation prompt contains no evidence catalogue")
+	}
 
 	var output map[string]any
 	switch call.Prompt.Version {
-	case storyvalidation.EditionValidationPromptVersionV2:
+	case storyvalidation.EditionJudgementPromptVersionV3:
 		output = map[string]any{
-			"validationVersion":    storyvalidation.ValidationV2,
+			"validationVersion":    storyvalidation.ValidationV3,
 			"specificationVersion": storygeneration.SpecificationV2,
 			"assessmentScope":      adaptationcontract.AssessmentScopeEdition,
-			"editionKey":           input.Edition.EditionKey,
+			"editionKey":           input.EditionKey,
 			"result":               adaptationcontract.ResultPass,
 			"findings":             []any{},
 		}
-	case storyvalidation.BundleValidationPromptVersionV2:
-		keys := make([]model.AdminStoryEditionKey, 0, len(input.Editions))
-		for _, edition := range input.Editions {
-			keys = append(keys, edition.EditionKey)
-		}
+	case storyvalidation.BundleJudgementPromptVersionV3:
 		output = map[string]any{
-			"validationVersion":    storyvalidation.ValidationV2,
+			"validationVersion":    storyvalidation.ValidationV3,
 			"specificationVersion": storygeneration.SpecificationV2,
 			"assessmentScope":      adaptationcontract.AssessmentScopeBundle,
-			"editionKeys":          keys,
+			"editionKeys":          input.EditionKeys,
 			"result":               adaptationcontract.ResultPass,
 			"findings":             []any{},
 		}
 	default:
 		return storygeneration.ResponsesResult{}, fmt.Errorf("unexpected validation prompt version %q", call.Prompt.Version)
+	}
+	if gateway.includeFinding {
+		switch call.Prompt.Version {
+		case storyvalidation.EditionJudgementPromptVersionV3:
+			output["result"] = adaptationcontract.ResultNeedsReview
+			output["findings"] = []any{map[string]any{
+				"code":     adaptationcontract.FindingScopeTooRich,
+				"severity": adaptationcontract.FindingSeverityReview,
+				"message":  "Fixture evidence reference.",
+				"evidence": []any{map[string]any{
+					"segmentId":   input.EvidenceCatalogue[0].SegmentID,
+					"explanation": "The reference came from the supplied catalogue.",
+				}},
+			}}
+		case storyvalidation.BundleJudgementPromptVersionV3:
+			output["result"] = adaptationcontract.ResultFail
+			output["findings"] = []any{map[string]any{
+				"code":     adaptationcontract.FindingEditionProgressionNotDistinct,
+				"severity": adaptationcontract.FindingSeverityBlocking,
+				"message":  "Fixture evidence reference.",
+				"evidence": []any{map[string]any{
+					"segmentId":   input.EvidenceCatalogue[0].SegmentID,
+					"explanation": "The reference came from the supplied catalogue.",
+				}},
+			}}
+		}
 	}
 	encoded, err := json.Marshal(output)
 	if err != nil {
@@ -413,6 +438,27 @@ func (gateway *passValidationGateway) Create(
 			TotalTokens:  120,
 		},
 	}, nil
+}
+
+func TestPassValidationGatewayBuildsV3JudgementWithPermittedReference(t *testing.T) {
+	gateway := &passValidationGateway{includeFinding: true}
+	result, err := gateway.Create(context.Background(), storygeneration.ResponsesCall{
+		Model: "validator-model",
+		Prompt: storygeneration.Prompt{
+			Version:       storyvalidation.EditionJudgementPromptVersionV3,
+			UserInputJSON: `{"editionKey":"growing-readers","evidenceCatalogue":[{"segmentId":"src:p0007"}]}`,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	judgement, err := storyvalidation.DecodeSemanticJudgementJSON([]byte(result.OutputText))
+	if err != nil {
+		t.Fatalf("DecodeSemanticJudgementJSON() error = %v", err)
+	}
+	if judgement.Findings[0].Evidence[0].SegmentID != "src:p0007" {
+		t.Fatalf("segment ID = %q, want supplied catalogue ID", judgement.Findings[0].Evidence[0].SegmentID)
+	}
 }
 
 func passValidatorFactoryForTest(gateways *[]*passValidationGateway) ValidatorFactory {
