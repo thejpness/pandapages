@@ -560,10 +560,24 @@ func TestAssessmentArtifactValidateDetectsAssessmentTampering(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ValidateEdition() error = %v", err)
 	}
+	if err := artifact.Validate(); err != nil {
+		t.Fatalf("valid V2 artifact.Validate() error = %v", err)
+	}
 
 	artifact.Assessment.Result = adaptationcontract.ResultNeedsReview
 	err = artifact.Validate()
 	if err == nil {
 		t.Fatal("tampered assessment must fail validation")
+	}
+
+	artifact.Assessment.Result = adaptationcontract.ResultPass
+	artifact.Assessment.ValidationVersion = ValidationV3
+	artifact.AssessmentSHA256, err = assessmentSHA256(artifact.Assessment)
+	if err != nil {
+		t.Fatalf("assessmentSHA256(V3 assessment) error = %v", err)
+	}
+	err = artifact.Validate()
+	if err == nil || !strings.Contains(err.Error(), "assessment validation version must equal") {
+		t.Fatalf("V3 nested artifact.Validate() error = %v, want V2-only failure", err)
 	}
 }

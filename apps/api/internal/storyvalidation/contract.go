@@ -46,8 +46,14 @@ type Assessment struct {
 }
 
 func (assessment Assessment) Validate() error {
-	if assessment.ValidationVersion != ValidationV2 {
-		return fmt.Errorf("validation version must equal %q", ValidationV2)
+	switch assessment.ValidationVersion {
+	case ValidationV2, ValidationV3:
+	default:
+		return fmt.Errorf(
+			"validation version must equal %q or %q",
+			ValidationV2,
+			ValidationV3,
+		)
 	}
 	if assessment.SpecificationVersion != storygeneration.SpecificationV2 {
 		return fmt.Errorf("specification version must equal %q", storygeneration.SpecificationV2)

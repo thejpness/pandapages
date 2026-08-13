@@ -266,6 +266,12 @@ func (artifact AssessmentArtifact) Validate() error {
 	if strings.TrimSpace(artifact.ResponseID) == "" {
 		return fmt.Errorf("assessment artifact response ID is required")
 	}
+	if artifact.Assessment.ValidationVersion != ValidationV2 {
+		return fmt.Errorf(
+			"assessment artifact assessment validation version must equal %q",
+			ValidationV2,
+		)
+	}
 	if err := artifact.Assessment.Validate(); err != nil {
 		return fmt.Errorf("assessment artifact assessment is invalid: %w", err)
 	}

@@ -121,6 +121,12 @@ func DecodeAssessmentJSON(data []byte) (Assessment, error) {
 	if err := ensureJSONDecoderEOF(decoder); err != nil {
 		return Assessment{}, err
 	}
+	if assessment.ValidationVersion != ValidationV2 {
+		return Assessment{}, fmt.Errorf(
+			"semantic assessment JSON validation version must equal %q",
+			ValidationV2,
+		)
+	}
 	if err := assessment.Validate(); err != nil {
 		return Assessment{}, fmt.Errorf("invalid semantic assessment object: %w", err)
 	}
