@@ -62,6 +62,18 @@ func TestDecodeStoryAnalysisJSONAcceptsExplicitEmptyOptionalArrays(t *testing.T)
 	}
 }
 
+func TestDecodeStoryAnalysisJSONRejectsGroupedRelationshipParty(t *testing.T) {
+	data, err := json.Marshal(groupedRelationshipPartyStoryAnalysis())
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	_, err = DecodeStoryAnalysisJSON(data)
+	if err == nil || !strings.Contains(err.Error(), `unknown character "Benjamin Bunny and Peter Rabbit"`) {
+		t.Fatalf("DecodeStoryAnalysisJSON() error = %v, want grouped relationship party rejection", err)
+	}
+
+}
 func TestDecodeStoryAnalysisJSONRejectsNonExactBoundary(t *testing.T) {
 	base := string(validStoryAnalysisJSON(t))
 

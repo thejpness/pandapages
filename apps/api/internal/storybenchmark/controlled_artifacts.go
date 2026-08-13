@@ -55,7 +55,7 @@ func buildControlledCaseArtifacts(
 
 	responses := make([]controlledFixtureResponse, 0, 1+len(fixtureCase.Editions))
 	responses = append(responses, controlledFixtureResponse{
-		promptVersion: storygeneration.SourceAnalysisPromptVersionV2,
+		promptVersion: storygeneration.SourceAnalysisPromptVersionV3,
 		result: storygeneration.ResponsesResult{
 			ResponseID: "benchmark-fixture-analysis-" + fixtureCase.ID,
 			Model:      storygeneration.GenerationModelV2,

@@ -70,7 +70,7 @@ func NewV2Runner(cfg V2RunnerConfig) (*V2Runner, error) {
 }
 
 func (runner *V2Runner) AnalyseSource(ctx context.Context, input SourceAnalysisPromptInput) (StoryAnalysisArtifact, error) {
-	prompt, err := BuildSourceAnalysisPromptV2(input)
+	prompt, err := BuildSourceAnalysisPromptV3(input)
 	if err != nil {
 		return StoryAnalysisArtifact{}, fmt.Errorf("build v2 source-analysis prompt: %w", err)
 	}
@@ -101,7 +101,7 @@ func (runner *V2Runner) AnalyseSource(ctx context.Context, input SourceAnalysisP
 
 	return StoryAnalysisArtifact{
 		SpecificationVersion: SpecificationV2,
-		PromptVersion:        SourceAnalysisPromptVersionV2,
+		PromptVersion:        SourceAnalysisPromptVersionV3,
 		RequestedModel:       GenerationModelV2,
 		ReturnedModel:        result.Model,
 		ReasoningEffort:      runner.analysisReasoningEffort,
@@ -117,8 +117,8 @@ func (artifact StoryAnalysisArtifact) Validate() error {
 	if artifact.SpecificationVersion != SpecificationV2 {
 		return fmt.Errorf("StoryAnalysis artifact specification must equal %q", SpecificationV2)
 	}
-	if artifact.PromptVersion != SourceAnalysisPromptVersionV2 {
-		return fmt.Errorf("StoryAnalysis artifact prompt version must equal %q", SourceAnalysisPromptVersionV2)
+	if !validSourceAnalysisPromptVersion(artifact.PromptVersion) {
+		return fmt.Errorf("StoryAnalysis artifact prompt version %q is unsupported", artifact.PromptVersion)
 	}
 	if artifact.RequestedModel != GenerationModelV2 {
 		return fmt.Errorf("StoryAnalysis artifact requested model must equal %q", GenerationModelV2)
@@ -151,6 +151,15 @@ func (artifact StoryAnalysisArtifact) Validate() error {
 	}
 
 	return nil
+}
+
+func validSourceAnalysisPromptVersion(version PromptVersion) bool {
+	switch version {
+	case SourceAnalysisPromptVersionV2, SourceAnalysisPromptVersionV3:
+		return true
+	default:
+		return false
+	}
 }
 
 func (artifact StoryAnalysisArtifact) MatchesCanonicalSource(canonicalSource string) bool {

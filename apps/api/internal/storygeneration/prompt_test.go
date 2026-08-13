@@ -48,6 +48,37 @@ func TestBuildSourceAnalysisPromptV2SeparatesInstructionsFromUntrustedSource(t *
 	}
 }
 
+func TestBuildSourceAnalysisPromptV3RequiresAtomicRelationshipPartyReferences(t *testing.T) {
+	source := "# Story\n\nCanonical source."
+	prompt, err := BuildSourceAnalysisPromptV3(SourceAnalysisPromptInput{
+		Title:           "Story",
+		Author:          "Author",
+		CanonicalSource: source,
+	})
+	if err != nil {
+		t.Fatalf("BuildSourceAnalysisPromptV3() error = %v", err)
+	}
+	if prompt.Version != SourceAnalysisPromptVersionV3 {
+		t.Fatalf("version = %q, want %q", prompt.Version, SourceAnalysisPromptVersionV3)
+	}
+
+	for _, marker := range []string{
+		"exactly one individual character",
+		"exactly from one declared characters[].name",
+		"separate array element",
+		`"A and B"`,
+		`"the rabbits"`,
+		"roles, collective descriptions",
+		"alias not declared",
+		"Before returning, verify that every relationship party exactly corresponds to one declared character name",
+		"no relationship-party element contains multiple people",
+	} {
+		if !strings.Contains(prompt.DeveloperInstructions, marker) {
+			t.Fatalf("developer instructions missing %q", marker)
+		}
+	}
+}
+
 func TestBuildEditionPromptV2UsesCanonicalSourceAnalysisAndOneEditionObjective(t *testing.T) {
 	analysis := validStoryAnalysis()
 	source := "# Jack and the Beanstalk\n\nCanonical source text."
@@ -200,6 +231,10 @@ func TestPromptVersionsAreLocked(t *testing.T) {
 	if SourceAnalysisPromptVersionV2 != "panda-pages-source-analysis-prompt-v2" {
 		t.Fatalf("SourceAnalysisPromptVersionV2 = %q", SourceAnalysisPromptVersionV2)
 	}
+	if SourceAnalysisPromptVersionV3 != "panda-pages-source-analysis-prompt-v3" {
+		t.Fatalf("SourceAnalysisPromptVersionV3 = %q", SourceAnalysisPromptVersionV3)
+	}
+
 	if EditionPromptVersionV2 != "panda-pages-edition-generation-prompt-v2" {
 		t.Fatalf("EditionPromptVersionV2 = %q", EditionPromptVersionV2)
 	}

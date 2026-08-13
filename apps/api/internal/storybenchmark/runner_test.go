@@ -492,7 +492,7 @@ func (gateway *deterministicGenerationGateway) Create(
 	gateway.calls++
 	output := ""
 	switch call.Prompt.Version {
-	case storygeneration.SourceAnalysisPromptVersionV2:
+	case storygeneration.SourceAnalysisPromptVersionV3:
 		output = gateway.analysisJSON
 	case storygeneration.EditionPromptVersionV2:
 		output = gateway.markdown
