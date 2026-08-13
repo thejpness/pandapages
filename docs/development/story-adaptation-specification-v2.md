@@ -191,10 +191,12 @@ It MUST also consider whether the requested edition is materially distinct in na
 
 ## 6. Prompt contract
 
-The v2 pipeline uses two separately versioned prompts:
+The v2 pipeline uses separately versioned prompts. The active prompts are:
 
-- `panda-pages-source-analysis-prompt-v2`;
-- `panda-pages-edition-generation-prompt-v2`.
+- `panda-pages-source-analysis-prompt-v3`;
+- `panda-pages-edition-generation-prompt-v3`.
+
+The corresponding V2 prompt versions remain valid only as historical artifact provenance. Prompt-version calibration does not change the `panda-pages-adaptation-v2` specification identifier.
 
 Source analysis and edition generation are separate calls.
 
@@ -262,7 +264,7 @@ Source analysis and edition generation remain separate runner operations.
 
 `AnalyseSource`:
 
-1. builds `panda-pages-source-analysis-prompt-v2`;
+1. builds `panda-pages-source-analysis-prompt-v3`;
 2. requests the locked `gpt-5.6-terra` model;
 3. requests strict StoryAnalysis Structured Output;
 4. decodes and validates the StoryAnalysis;
@@ -308,7 +310,7 @@ Before any model call it rejects:
 
 It then:
 
-1. builds `panda-pages-edition-generation-prompt-v2`;
+1. builds `panda-pages-edition-generation-prompt-v3`;
 2. requests exactly one `gpt-5.6-terra` generation;
 3. requests plain Markdown output, not JSON Structured Output;
 4. runs the PR91 deterministic generated-edition validator;

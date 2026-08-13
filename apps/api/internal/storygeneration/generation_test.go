@@ -87,7 +87,7 @@ func TestGenerateEditionUsesOneLockedTerraPlainTextCallAndDeterministicValidatio
 	if call.MaxOutputTokens != 32000 {
 		t.Fatalf("max output tokens = %d", call.MaxOutputTokens)
 	}
-	if call.Prompt.Version != EditionPromptVersionV2 {
+	if call.Prompt.Version != EditionPromptVersionV3 {
 		t.Fatalf("prompt version = %q", call.Prompt.Version)
 	}
 	if call.StructuredOutput != nil {
@@ -105,7 +105,7 @@ func TestGenerateEditionUsesOneLockedTerraPlainTextCallAndDeterministicValidatio
 	}
 
 	if artifact.SpecificationVersion != SpecificationV2 ||
-		artifact.PromptVersion != EditionPromptVersionV2 ||
+		artifact.PromptVersion != EditionPromptVersionV3 ||
 		artifact.EditionKey != model.AdminStoryEditionStoryExplorers ||
 		artifact.RequestedModel != GenerationModelV2 ||
 		artifact.ReturnedModel != GenerationModelV2 ||
@@ -293,5 +293,46 @@ func TestGeneratedEditionArtifactValidateDetectsMarkdownTampering(t *testing.T) 
 	err = artifact.Validate()
 	if err == nil || !strings.Contains(err.Error(), "content digest does not match Markdown") {
 		t.Fatalf("Validate() error = %v, want digest mismatch", err)
+	}
+}
+
+func TestGeneratedEditionArtifactValidateSupportsKnownPromptVersions(t *testing.T) {
+	source := "# Story\n\nCanonical source."
+	gateway := &fakeResponsesGateway{
+		result: ResponsesResult{
+			ResponseID: "resp_generation",
+			Model:      GenerationModelV2,
+			OutputText: "# Story\n\nGenerated story.",
+		},
+	}
+	runner, err := NewV2Runner(validV2RunnerConfig(gateway))
+	if err != nil {
+		t.Fatalf("NewV2Runner() error = %v", err)
+	}
+
+	input := validGenerateEditionInput(t, source)
+	input.Title = "Story"
+	input.Slug = "story"
+	artifact, err := runner.GenerateEdition(context.Background(), input)
+	if err != nil {
+		t.Fatalf("GenerateEdition() error = %v", err)
+	}
+	if artifact.PromptVersion != EditionPromptVersionV3 {
+		t.Fatalf("active artifact prompt version = %q", artifact.PromptVersion)
+	}
+	if err := artifact.Validate(); err != nil {
+		t.Fatalf("V3 artifact.Validate() error = %v", err)
+	}
+
+	historical := artifact
+	historical.PromptVersion = EditionPromptVersionV2
+	if err := historical.Validate(); err != nil {
+		t.Fatalf("historical V2 artifact.Validate() error = %v", err)
+	}
+
+	unknown := artifact
+	unknown.PromptVersion = "panda-pages-edition-generation-prompt-unknown"
+	if err := unknown.Validate(); err == nil || !strings.Contains(err.Error(), "prompt version") {
+		t.Fatalf("unknown prompt artifact.Validate() error = %v", err)
 	}
 }

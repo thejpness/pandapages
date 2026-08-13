@@ -494,7 +494,7 @@ func (gateway *deterministicGenerationGateway) Create(
 	switch call.Prompt.Version {
 	case storygeneration.SourceAnalysisPromptVersionV3:
 		output = gateway.analysisJSON
-	case storygeneration.EditionPromptVersionV2:
+	case storygeneration.EditionPromptVersionV3:
 		output = gateway.markdown
 	default:
 		return storygeneration.ResponsesResult{}, fmt.Errorf("unexpected generation prompt version %q", call.Prompt.Version)
