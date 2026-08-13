@@ -1,0 +1,109 @@
+{
+  "benchmarkVersion": "panda-pages-story-benchmark-v1",
+  "fixtureKind": "eligible_public_domain",
+  "source": {
+    "id": "benjamin-bunny-project-gutenberg-14407",
+    "slug": "the-tale-of-benjamin-bunny",
+    "title": "The Tale of Benjamin Bunny",
+    "author": "Beatrix Potter",
+    "language": "en-GB",
+    "sourceUrl": "https://www.gutenberg.org/ebooks/14407",
+    "provider": "project-gutenberg",
+    "externalId": "14407",
+    "canonicalSourcePath": "source.md",
+    "canonicalSourceSha256": "5c3a4a4312e3bf8a89e7fc13c8da287625c5f20d1b9f1570aac25a2903abf6c5",
+    "canonicalisation": "Reviewed benchmark projection of the story body from Project Gutenberg ebook 14407. Project Gutenberg boilerplate, publisher/copyright front matter, illustration placeholders, and typographic display headings are omitted; the story title is normalized to one Markdown H1 and the narrative wording is otherwise retained."
+  },
+  "eligibility": {
+    "policyVersion": "panda-pages-copyright-v3",
+    "evaluationDate": "2026-08-12",
+    "us": {
+      "opdsRights": "public_domain",
+      "rdfRights": "public_domain",
+      "headerRights": "public_domain"
+    },
+    "uk": {
+      "workTitle": "The Tale of Benjamin Bunny",
+      "workCategory": "ordinary_literary",
+      "authorship": "single_known",
+      "workCategoryReferences": [
+        {
+          "source": "Project Gutenberg",
+          "fact": "Project Gutenberg classifies ebook 14407 as English juvenile belles lettres and Category: Text.",
+          "locator": "https://www.gutenberg.org/ebooks/14407",
+          "identifier": "14407"
+        }
+      ],
+      "authorshipReferences": [
+        {
+          "source": "Project Gutenberg",
+          "fact": "Project Gutenberg identifies Beatrix Potter as the sole author of The Tale of Benjamin Bunny.",
+          "locator": "https://www.gutenberg.org/ebooks/14407",
+          "identifier": "14407"
+        }
+      ],
+      "author": {
+        "name": "Beatrix Potter",
+        "deathYear": 1943,
+        "references": [
+          {
+            "source": "Project Gutenberg",
+            "fact": "Project Gutenberg identifies the author as Potter, Beatrix, 1866-1943.",
+            "locator": "https://www.gutenberg.org/ebooks/14407",
+            "identifier": "14407"
+          }
+        ]
+      },
+      "firstPublication": {
+        "year": 1904,
+        "references": [
+          {
+            "source": "West Sussex Libraries",
+            "fact": "The library catalogue describes The Tale of Benjamin Bunny as first published in 1904.",
+            "locator": "https://libraries.westsussex.gov.uk/",
+            "identifier": "The Tale of Benjamin Bunny"
+          },
+          {
+            "source": "Project Gutenberg source front matter",
+            "fact": "The scanned source front matter for ebook 14407 records Copyright, 1904 by Frederick Warne & Co.",
+            "locator": "https://www.gutenberg.org/cache/epub/14407/pg14407-images.html",
+            "identifier": "14407"
+          }
+        ]
+      },
+      "translation": {
+        "state": "none_confirmed",
+        "references": [
+          {
+            "source": "Project Gutenberg",
+            "fact": "Ebook 14407 is English, identifies Beatrix Potter as author, and lists no translator for the source text.",
+            "locator": "https://www.gutenberg.org/ebooks/14407",
+            "identifier": "14407"
+          }
+        ]
+      },
+      "additionalTextualContribution": {
+        "state": "none_confirmed",
+        "references": [
+          {
+            "source": "Project Gutenberg",
+            "fact": "Ebook 14407 identifies Beatrix Potter as author and credits the Project Gutenberg team for digital production rather than an additional textual contribution.",
+            "locator": "https://www.gutenberg.org/ebooks/14407",
+            "identifier": "14407"
+          }
+        ]
+      },
+      "unpublishedAtEnd1988": {
+        "state": "none_confirmed",
+        "references": [
+          {
+            "source": "West Sussex Libraries",
+            "fact": "The work is recorded as first published in 1904, so it was not unpublished at the end of 1988.",
+            "locator": "https://libraries.westsussex.gov.uk/",
+            "identifier": "The Tale of Benjamin Bunny"
+          }
+        ]
+      }
+    }
+  }
+}
