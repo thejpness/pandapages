@@ -132,6 +132,31 @@ func TestGenerateEditionUsesOneLockedTerraPlainTextCallAndDeterministicValidatio
 	}
 }
 
+func TestGenerateEditionAcceptsV3SourceAnalysisArtifact(t *testing.T) {
+	source := "# Jack and the Beanstalk\n\nCanonical source."
+	markdown := "# Jack and the Beanstalk\n\nGenerated story."
+	gateway := &fakeResponsesGateway{
+		result: ResponsesResult{
+			ResponseID: "resp_generation",
+			Model:      GenerationModelV2,
+			OutputText: markdown,
+		},
+	}
+	runner, err := NewV2Runner(validV2RunnerConfig(gateway))
+	if err != nil {
+		t.Fatalf("NewV2Runner() error = %v", err)
+	}
+
+	input := validGenerateEditionInput(t, source)
+	input.AnalysisArtifact.PromptVersion = SourceAnalysisPromptVersionV3
+	if _, err := runner.GenerateEdition(context.Background(), input); err != nil {
+		t.Fatalf("GenerateEdition() error = %v", err)
+	}
+	if len(gateway.calls) != 1 {
+		t.Fatalf("gateway calls = %d, want 1", len(gateway.calls))
+	}
+}
+
 func TestGenerateEditionRejectsSourceOrAnalysisMismatchBeforeGateway(t *testing.T) {
 	source := "# Story\n\nCanonical source."
 	gateway := &fakeResponsesGateway{}

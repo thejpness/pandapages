@@ -141,7 +141,7 @@ func TestAnalyseSourceUsesLockedTerraStructuredOutputCall(t *testing.T) {
 	if call.MaxOutputTokens != 12000 {
 		t.Fatalf("max output tokens = %d", call.MaxOutputTokens)
 	}
-	if call.Prompt.Version != SourceAnalysisPromptVersionV2 {
+	if call.Prompt.Version != SourceAnalysisPromptVersionV3 {
 		t.Fatalf("prompt version = %q", call.Prompt.Version)
 	}
 	if call.StructuredOutput == nil {
@@ -155,7 +155,7 @@ func TestAnalyseSourceUsesLockedTerraStructuredOutputCall(t *testing.T) {
 	}
 
 	if artifact.SpecificationVersion != SpecificationV2 ||
-		artifact.PromptVersion != SourceAnalysisPromptVersionV2 ||
+		artifact.PromptVersion != SourceAnalysisPromptVersionV3 ||
 		artifact.RequestedModel != GenerationModelV2 ||
 		artifact.ReturnedModel != "gpt-5.6-terra" ||
 		artifact.ResponseID != "resp_analysis" {
@@ -243,6 +243,37 @@ func TestAnalyseSourceFailsClosed(t *testing.T) {
 			t.Fatalf("AnalyseSource() error = %v", err)
 		}
 	})
+
+	t.Run("grouped relationship party rejected without retry", func(t *testing.T) {
+		analysisJSON, err := json.Marshal(groupedRelationshipPartyStoryAnalysis())
+		if err != nil {
+			t.Fatalf("json.Marshal() error = %v", err)
+		}
+		gateway := &fakeResponsesGateway{
+			result: ResponsesResult{
+				ResponseID: "resp_grouped_party",
+				Model:      GenerationModelV2,
+				OutputText: string(analysisJSON),
+			},
+		}
+		runner, err := NewV2Runner(validV2RunnerConfig(gateway))
+		if err != nil {
+			t.Fatalf("NewV2Runner() error = %v", err)
+		}
+		artifact, err := runner.AnalyseSource(context.Background(), SourceAnalysisPromptInput{
+			Title:           "Benjamin Bunny",
+			CanonicalSource: "# Benjamin Bunny\n\nCanonical source.",
+		})
+		if err == nil || !strings.Contains(err.Error(), `unknown character "Benjamin Bunny and Peter Rabbit"`) {
+			t.Fatalf("AnalyseSource() error = %v, want grouped relationship party rejection", err)
+		}
+		if len(gateway.calls) != 1 {
+			t.Fatalf("gateway calls = %d, want 1", len(gateway.calls))
+		}
+		if artifact.ResponseID != "" || artifact.Analysis.CentralPlot != "" {
+			t.Fatalf("AnalyseSource() returned artifact = %#v, want zero artifact", artifact)
+		}
+	})
 }
 
 func TestStoryAnalysisArtifactValidateDetectsTampering(t *testing.T) {
@@ -271,5 +302,25 @@ func TestStoryAnalysisArtifactValidateDetectsTampering(t *testing.T) {
 	err = artifact.Validate()
 	if err == nil || !strings.Contains(err.Error(), "digest does not match") {
 		t.Fatalf("Validate() error = %v, want digest mismatch", err)
+	}
+}
+
+func TestStoryAnalysisArtifactValidateSupportsKnownPromptVersions(t *testing.T) {
+	source := "# Story\n\nCanonical source."
+	for _, version := range []PromptVersion{SourceAnalysisPromptVersionV2, SourceAnalysisPromptVersionV3} {
+		t.Run(string(version), func(t *testing.T) {
+			artifact := validStoryAnalysisArtifactForSource(t, source)
+			artifact.PromptVersion = version
+			if err := artifact.Validate(); err != nil {
+				t.Fatalf("Validate() error = %v", err)
+			}
+		})
+	}
+
+	artifact := validStoryAnalysisArtifactForSource(t, source)
+	artifact.PromptVersion = "panda-pages-source-analysis-prompt-unknown"
+	err := artifact.Validate()
+	if err == nil || !strings.Contains(err.Error(), "prompt version") {
+		t.Fatalf("Validate() error = %v, want unknown prompt version rejection", err)
 	}
 }

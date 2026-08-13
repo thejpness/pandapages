@@ -13,6 +13,7 @@ type PromptVersion string
 
 const (
 	SourceAnalysisPromptVersionV2 PromptVersion = "panda-pages-source-analysis-prompt-v2"
+	SourceAnalysisPromptVersionV3 PromptVersion = "panda-pages-source-analysis-prompt-v3"
 	EditionPromptVersionV2        PromptVersion = "panda-pages-edition-generation-prompt-v2"
 )
 
@@ -67,6 +68,30 @@ func BuildSourceAnalysisPromptV2(input SourceAnalysisPromptInput) (Prompt, error
 	return Prompt{
 		Version:               SourceAnalysisPromptVersionV2,
 		DeveloperInstructions: sourceAnalysisInstructionsV2,
+		UserInputJSON:         string(userInput),
+	}, nil
+}
+
+// BuildSourceAnalysisPromptV3 builds the active source-analysis prompt. The
+// v3 prompt retains the v2 StoryAnalysis shape while making relationship-party
+// references explicit for the model.
+func BuildSourceAnalysisPromptV3(input SourceAnalysisPromptInput) (Prompt, error) {
+	if err := validatePromptSource(input.Title, input.Author, input.CanonicalSource); err != nil {
+		return Prompt{}, err
+	}
+
+	userInput, err := json.Marshal(sourceAnalysisUserInput{
+		Title:           strings.TrimSpace(input.Title),
+		Author:          strings.TrimSpace(input.Author),
+		CanonicalSource: input.CanonicalSource,
+	})
+	if err != nil {
+		return Prompt{}, fmt.Errorf("encode source-analysis input: %w", err)
+	}
+
+	return Prompt{
+		Version:               SourceAnalysisPromptVersionV3,
+		DeveloperInstructions: sourceAnalysisInstructionsV3,
 		UserInputJSON:         string(userInput),
 	}, nil
 }
@@ -198,6 +223,16 @@ Do not fill an analysis field merely because the field exists.
 When the source contains no material for an optional collection, return an empty array.
 
 Return only the structured StoryAnalysis required by the supplied response schema.`
+
+const sourceAnalysisInstructionsV3 = sourceAnalysisInstructionsV2 + `
+
+RELATIONSHIP PARTY REFERENCES
+
+Every relationships[].parties[] entry represents exactly one individual character. Copy every relationship party value exactly from one declared characters[].name. Put each person in a separate array element.
+
+Never combine multiple names into one string, such as "A and B". Never use grouped labels such as "the rabbits" or "the children", roles, collective descriptions, or an alias not declared as a character name for relationship parties.
+
+Before returning, verify that every relationship party exactly corresponds to one declared character name and that no relationship-party element contains multiple people.`
 
 func editionInstructionsV2(objective string) string {
 	return `You are generating one modern Panda Pages edition under Story Adaptation Specification v2.

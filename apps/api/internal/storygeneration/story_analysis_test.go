@@ -126,6 +126,39 @@ func TestStoryAnalysisValidateAcceptsSourceGroundedMap(t *testing.T) {
 	}
 }
 
+func groupedRelationshipPartyStoryAnalysis() StoryAnalysis {
+	analysis := validStoryAnalysis()
+	analysis.Characters = []Character{
+		{
+			Name:                "Benjamin Bunny",
+			Role:                "protagonist",
+			ExplicitMotivations: []string{},
+			FlawsOrAmbiguities:  []string{},
+		},
+		{
+			Name:                "Peter Rabbit",
+			Role:                "friend",
+			ExplicitMotivations: []string{},
+			FlawsOrAmbiguities:  []string{},
+		},
+	}
+	analysis.Relationships = []Relationship{
+		{
+			Parties:       []string{"Benjamin Bunny and Peter Rabbit", "Peter Rabbit"},
+			Nature:        "friends",
+			PowerDynamics: "They act together.",
+		},
+	}
+	return analysis
+}
+
+func TestStoryAnalysisValidateRejectsGroupedRelationshipParty(t *testing.T) {
+	err := groupedRelationshipPartyStoryAnalysis().Validate()
+	if err == nil || !strings.Contains(err.Error(), `unknown character "Benjamin Bunny and Peter Rabbit"`) {
+		t.Fatalf("Validate() error = %v, want grouped relationship party rejection", err)
+	}
+
+}
 func TestStoryAnalysisValidateRejectsInvalidAnalysis(t *testing.T) {
 	tests := []struct {
 		name   string
