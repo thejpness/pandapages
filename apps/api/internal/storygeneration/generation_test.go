@@ -87,7 +87,7 @@ func TestGenerateEditionUsesOneLockedTerraPlainTextCallAndDeterministicValidatio
 	if call.MaxOutputTokens != 32000 {
 		t.Fatalf("max output tokens = %d", call.MaxOutputTokens)
 	}
-	if call.Prompt.Version != EditionPromptVersionV3 {
+	if call.Prompt.Version != EditionPromptVersionV4 {
 		t.Fatalf("prompt version = %q", call.Prompt.Version)
 	}
 	if call.StructuredOutput != nil {
@@ -105,7 +105,7 @@ func TestGenerateEditionUsesOneLockedTerraPlainTextCallAndDeterministicValidatio
 	}
 
 	if artifact.SpecificationVersion != SpecificationV2 ||
-		artifact.PromptVersion != EditionPromptVersionV3 ||
+		artifact.PromptVersion != EditionPromptVersionV4 ||
 		artifact.EditionKey != model.AdminStoryEditionStoryExplorers ||
 		artifact.RequestedModel != GenerationModelV2 ||
 		artifact.ReturnedModel != GenerationModelV2 ||
@@ -317,17 +317,19 @@ func TestGeneratedEditionArtifactValidateSupportsKnownPromptVersions(t *testing.
 	if err != nil {
 		t.Fatalf("GenerateEdition() error = %v", err)
 	}
-	if artifact.PromptVersion != EditionPromptVersionV3 {
+	if artifact.PromptVersion != EditionPromptVersionV4 {
 		t.Fatalf("active artifact prompt version = %q", artifact.PromptVersion)
 	}
 	if err := artifact.Validate(); err != nil {
-		t.Fatalf("V3 artifact.Validate() error = %v", err)
+		t.Fatalf("V4 artifact.Validate() error = %v", err)
 	}
 
-	historical := artifact
-	historical.PromptVersion = EditionPromptVersionV2
-	if err := historical.Validate(); err != nil {
-		t.Fatalf("historical V2 artifact.Validate() error = %v", err)
+	for _, version := range []PromptVersion{EditionPromptVersionV2, EditionPromptVersionV3} {
+		historical := artifact
+		historical.PromptVersion = version
+		if err := historical.Validate(); err != nil {
+			t.Fatalf("historical %s artifact.Validate() error = %v", version, err)
+		}
 	}
 
 	unknown := artifact
