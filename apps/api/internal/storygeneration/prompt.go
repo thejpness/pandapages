@@ -16,6 +16,7 @@ const (
 	SourceAnalysisPromptVersionV3 PromptVersion = "panda-pages-source-analysis-prompt-v3"
 	EditionPromptVersionV2        PromptVersion = "panda-pages-edition-generation-prompt-v2"
 	EditionPromptVersionV3        PromptVersion = "panda-pages-edition-generation-prompt-v3"
+	EditionPromptVersionV4        PromptVersion = "panda-pages-edition-generation-prompt-v4"
 )
 
 type Prompt struct {
@@ -435,4 +436,98 @@ OUTPUT
 Return only the generated Markdown content for this one edition.
 The first Markdown block must be an H1 containing the story title.
 Do not return JSON, commentary, explanations, analysis, or Markdown fences around the story.`
+}
+
+// BuildEditionPromptV4 builds the active edition-generation prompt. The v4
+// prompt retains the v3 qualitative ladder while strengthening Story Explorers
+// scope selection and preserving ownership of explicit character agency.
+func BuildEditionPromptV4(input EditionPromptInput) (Prompt, error) {
+	if !ValidV2DerivedEditionKey(input.EditionKey) {
+		return Prompt{}, fmt.Errorf("edition key must be a canonical v2 derived edition key")
+	}
+	if err := validatePromptSource(input.Title, input.Author, input.CanonicalSource); err != nil {
+		return Prompt{}, err
+	}
+	if err := input.StoryAnalysis.Validate(); err != nil {
+		return Prompt{}, fmt.Errorf("StoryAnalysis is invalid: %w", err)
+	}
+
+	userInput, err := json.Marshal(editionUserInput{
+		Title:           strings.TrimSpace(input.Title),
+		Author:          strings.TrimSpace(input.Author),
+		EditionKey:      input.EditionKey,
+		CanonicalSource: input.CanonicalSource,
+		StoryAnalysis:   input.StoryAnalysis,
+	})
+	if err != nil {
+		return Prompt{}, fmt.Errorf("encode edition-generation input: %w", err)
+	}
+
+	objective, ok := editionObjectiveV4(input.EditionKey)
+	if !ok {
+		return Prompt{}, fmt.Errorf("edition key must be a canonical v2 derived edition key")
+	}
+
+	return Prompt{
+		Version:               EditionPromptVersionV4,
+		DeveloperInstructions: editionInstructionsV4(objective),
+		UserInputJSON:         string(userInput),
+	}, nil
+}
+
+func editionObjectiveV4(key model.AdminStoryEditionKey) (string, bool) {
+	switch key {
+	case model.AdminStoryEditionConfidentReaders:
+		return `CONFIDENT READERS (9-11)
+Produce a rich, near-complete literary adaptation with the complete central causal story.
+Retain important development and worthwhile enrichment where it adds atmosphere, nuanced motivation, dialogue, or story texture.
+Modernise obstructive language while retaining a rich reading experience.
+Reduce narrative scope only lightly.`, true
+
+	case model.AdminStoryEditionGrowingReaders:
+		return `GROWING READERS (7-9)
+Produce the full causal story with key development in a materially tighter form.
+Selectively retain enrichment rather than preserving it by default.
+Omit optional incidental scenes and optional side-character functions. Reduce descriptive aftermath, repeated exchanges, and non-essential connective detail.
+Use shorter paragraphs and sentences, accessible vocabulary, and sufficiently explicit causality.`, true
+
+	case model.AdminStoryEditionStoryExplorers:
+		return `STORY EXPLORERS (5-7)
+Produce a satisfying central narrative journey with the complete central causal plot.
+Preserve required source-grounded motivations, emotional logic, iconic story identity, and causal links.
+Normally omit enrichmentMaterial, incidental scenes, secondary character functions, secondary aftermath, household or detail resolution, optional connective staging, repeated exchanges, and repeated actions serving the same causal function unless they are needed for causality, coherence, motivation, emotional logic, or iconic identity.
+When repeated actions, exchanges, or staging serve the same causal function, compress them to one representative beat that preserves the causal meaning.
+Do not reproduce nearly every Growing Readers scene merely in shorter or easier language.
+Use clear concrete language and explicit cause and effect.
+The result must remain enjoyable fiction rather than collapse into a plot synopsis.`, true
+
+	case model.AdminStoryEditionLittleListeners:
+		return `LITTLE LISTENERS (3-5)
+Produce a read-aloud retelling built around the essential narrative spine:
+beginning -> problem -> action/escalation -> climax -> resolution.
+Use a very small active cast, simple causal relationships, short natural sentences, and useful repetition or rhythm.
+Retain only supporting material needed for coherent and emotionally intelligible read-aloud storytelling.
+Threatening material may be substantially softened, but its story function must survive when required for motivation, causality, escalation, or resolution.`, true
+
+	default:
+		return "", false
+	}
+}
+
+func editionInstructionsV4(objective string) string {
+	const ownership = `OWNERSHIP OF EXPLICIT AGENCY
+
+Do not transfer explicit source-grounded motivation, intention, choice, decision, proposal, fear, refusal, or agency from one character to another.
+
+When retaining or compressing any such material, keep it attached to the same character.
+
+Do not recast who initiates, decides, wants, fears, proposes, refuses, or acts merely to simplify narration.`
+	const marker = `Character flaws and moral ambiguity must survive when they materially drive the source story. Greed, selfishness, foolishness, impulsiveness, coercion, poor judgement, rivalry, and similar imperfect motives must not be silently rewritten into nobler behaviour.`
+
+	return strings.Replace(
+		editionInstructionsV3(objective),
+		marker,
+		ownership+"\n\n"+marker,
+		1,
+	)
 }

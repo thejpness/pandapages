@@ -51,7 +51,7 @@ func (runner *V2Runner) GenerateEdition(ctx context.Context, input GenerateEditi
 		return GeneratedEditionArtifact{}, fmt.Errorf("StoryAnalysis artifact does not match canonical source")
 	}
 
-	prompt, err := BuildEditionPromptV3(EditionPromptInput{
+	prompt, err := BuildEditionPromptV4(EditionPromptInput{
 		EditionKey:      input.EditionKey,
 		Title:           input.Title,
 		Author:          input.Author,
@@ -59,7 +59,7 @@ func (runner *V2Runner) GenerateEdition(ctx context.Context, input GenerateEditi
 		StoryAnalysis:   input.AnalysisArtifact.Analysis,
 	})
 	if err != nil {
-		return GeneratedEditionArtifact{}, fmt.Errorf("build v3 edition prompt: %w", err)
+		return GeneratedEditionArtifact{}, fmt.Errorf("build v4 edition prompt: %w", err)
 	}
 
 	result, err := runner.gateway.Create(ctx, ResponsesCall{
@@ -86,7 +86,7 @@ func (runner *V2Runner) GenerateEdition(ctx context.Context, input GenerateEditi
 
 	artifact := GeneratedEditionArtifact{
 		SpecificationVersion: SpecificationV2,
-		PromptVersion:        EditionPromptVersionV3,
+		PromptVersion:        EditionPromptVersionV4,
 		EditionKey:           input.EditionKey,
 		RequestedModel:       GenerationModelV2,
 		ReturnedModel:        result.Model,
@@ -163,7 +163,7 @@ func (artifact GeneratedEditionArtifact) Validate() error {
 
 func validEditionPromptVersion(version PromptVersion) bool {
 	switch version {
-	case EditionPromptVersionV2, EditionPromptVersionV3:
+	case EditionPromptVersionV2, EditionPromptVersionV3, EditionPromptVersionV4:
 		return true
 	default:
 		return false

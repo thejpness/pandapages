@@ -64,7 +64,7 @@ func buildControlledCaseArtifacts(
 	})
 	for _, edition := range fixtureCase.Editions {
 		responses = append(responses, controlledFixtureResponse{
-			promptVersion: storygeneration.EditionPromptVersionV3,
+			promptVersion: storygeneration.EditionPromptVersionV4,
 			result: storygeneration.ResponsesResult{
 				ResponseID: "benchmark-fixture-edition-" + fixtureCase.ID + "-" + string(edition.EditionKey),
 				Model:      storygeneration.GenerationModelV2,

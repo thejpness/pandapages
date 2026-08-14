@@ -243,6 +243,9 @@ func TestPromptVersionsAreLocked(t *testing.T) {
 	if EditionPromptVersionV3 != "panda-pages-edition-generation-prompt-v3" {
 		t.Fatalf("EditionPromptVersionV3 = %q", EditionPromptVersionV3)
 	}
+	if EditionPromptVersionV4 != "panda-pages-edition-generation-prompt-v4" {
+		t.Fatalf("EditionPromptVersionV4 = %q", EditionPromptVersionV4)
+	}
 }
 
 func TestBuildEditionPromptV3UsesUntrustedJSONInputsAndOneObjective(t *testing.T) {
@@ -380,6 +383,100 @@ func TestBuildEditionPromptV3HasQualitativeScopeLadder(t *testing.T) {
 				if strings.Contains(prompt.DeveloperInstructions, objective) {
 					t.Fatalf("prompt unexpectedly contains another edition objective %q", objective)
 				}
+			}
+		})
+	}
+}
+
+func TestBuildEditionPromptV4UsesUntrustedJSONInputsAndStrengthensStoryExplorers(t *testing.T) {
+	analysis := validStoryAnalysis()
+	source := "# Story\n\nCanonical source text."
+
+	prompt, err := BuildEditionPromptV4(EditionPromptInput{
+		EditionKey:      model.AdminStoryEditionStoryExplorers,
+		Title:           "Story",
+		Author:          "Author",
+		CanonicalSource: source,
+		StoryAnalysis:   analysis,
+	})
+	if err != nil {
+		t.Fatalf("BuildEditionPromptV4() error = %v", err)
+	}
+	if prompt.Version != EditionPromptVersionV4 {
+		t.Fatalf("version = %q, want %q", prompt.Version, EditionPromptVersionV4)
+	}
+
+	for _, marker := range []string{
+		"untrusted data",
+		"Generate exactly one requested edition.",
+		"OWNERSHIP OF EXPLICIT AGENCY",
+		"Do not transfer explicit source-grounded motivation, intention, choice, decision, proposal, fear, refusal, or agency from one character to another.",
+		"When retaining or compressing any such material, keep it attached to the same character.",
+		"Do not recast who initiates, decides, wants, fears, proposes, refuses, or acts merely to simplify narration.",
+		"complete central causal plot",
+		"Preserve required source-grounded motivations, emotional logic, iconic story identity, and causal links.",
+		"Normally omit enrichmentMaterial, incidental scenes, secondary character functions, secondary aftermath, household or detail resolution, optional connective staging, repeated exchanges, and repeated actions serving the same causal function",
+		"causality, coherence, motivation, emotional logic, or iconic identity.",
+		"repeated actions, exchanges, or staging serve the same causal function",
+		"one representative beat that preserves the causal meaning.",
+		"Growing Readers scene merely in shorter or easier language.",
+		"enjoyable fiction rather than collapse into a plot synopsis.",
+	} {
+		if !strings.Contains(prompt.DeveloperInstructions, marker) {
+			t.Fatalf("developer instructions missing %q", marker)
+		}
+	}
+	if strings.Count(prompt.DeveloperInstructions, "STORY EXPLORERS (5-7)") != 1 {
+		t.Fatalf("Story Explorers objective count = %d, want 1", strings.Count(prompt.DeveloperInstructions, "STORY EXPLORERS (5-7)"))
+	}
+	for _, forbidden := range []string{
+		"CONFIDENT READERS (9-11)",
+		"GROWING READERS (7-9)",
+		"LITTLE LISTENERS (3-5)",
+	} {
+		if strings.Contains(prompt.DeveloperInstructions, forbidden) {
+			t.Fatalf("developer instructions unexpectedly contain %q", forbidden)
+		}
+	}
+
+	var input editionUserInput
+	if err := json.Unmarshal([]byte(prompt.UserInputJSON), &input); err != nil {
+		t.Fatalf("json.Unmarshal(UserInputJSON) error = %v", err)
+	}
+	if input.CanonicalSource != source {
+		t.Fatal("canonical source must survive JSON encoding exactly")
+	}
+	if !reflect.DeepEqual(input.StoryAnalysis, analysis) {
+		t.Fatal("StoryAnalysis must survive JSON encoding exactly")
+	}
+}
+
+func TestBuildEditionPromptV4RetainsOtherEditionObjectives(t *testing.T) {
+	tests := []struct {
+		key    model.AdminStoryEditionKey
+		marker string
+	}{
+		{model.AdminStoryEditionConfidentReaders, "rich, near-complete literary adaptation with the complete central causal story"},
+		{model.AdminStoryEditionGrowingReaders, "Selectively retain enrichment rather than preserving it by default."},
+		{model.AdminStoryEditionLittleListeners, "Retain only supporting material needed for coherent and emotionally intelligible read-aloud storytelling."},
+	}
+
+	for _, test := range tests {
+		t.Run(string(test.key), func(t *testing.T) {
+			prompt, err := BuildEditionPromptV4(EditionPromptInput{
+				EditionKey:      test.key,
+				Title:           "Story",
+				CanonicalSource: "# Story\n\nSource.",
+				StoryAnalysis:   validStoryAnalysis(),
+			})
+			if err != nil {
+				t.Fatalf("BuildEditionPromptV4() error = %v", err)
+			}
+			if prompt.Version != EditionPromptVersionV4 {
+				t.Fatalf("version = %q, want %q", prompt.Version, EditionPromptVersionV4)
+			}
+			if !strings.Contains(prompt.DeveloperInstructions, test.marker) {
+				t.Fatalf("prompt missing retained ladder marker %q", test.marker)
 			}
 		})
 	}
