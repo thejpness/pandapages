@@ -148,7 +148,6 @@ func loadStoryOrchestrationSourceVersion(
 		SELECT source_id, story_id
 		FROM story_source_versions
 		WHERE id = $1
-		FOR SHARE
 	`, sourceVersionID).Scan(&sourceID, &storyID); err != nil {
 		return adminSourceSnapshot{}, err
 	}

@@ -171,6 +171,7 @@ WITH runtime_table(name, can_update, can_delete) AS (
     ('story_contributors', true, true),
     ('story_sections', true, true),
     ('story_source_versions', false, false),
+    ('story_orchestration_runs', false, false),
     ('story_sources', true, true),
     ('story_segments', true, true),
     ('story_versions', true, true)
@@ -194,7 +195,7 @@ WITH runtime_table(name, can_update, can_delete) AS (
     AND class.relkind IN ('r', 'p')
 )
 SELECT
-  count(*) = 21
+  count(*) = 22
   AND to_regclass('public.child_profiles') IS NULL
   AND to_regclass('public.prompt_profiles') IS NULL
   AND to_regclass('public.profile_settings') IS NULL
@@ -263,6 +264,7 @@ WITH runtime_table(name) AS (
     ('story_contributors'),
     ('story_sections'),
     ('story_source_versions'),
+    ('story_orchestration_runs'),
     ('story_sources'),
     ('goose_db_version'),
     ('story_segments'),
