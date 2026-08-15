@@ -117,7 +117,7 @@ query() {
 [[ $(query "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='story_segments' AND column_name='locator';") == 0 ]]
 [[ $(query "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='story_segments' AND column_name IN ('segment_kind','heading_level','content_key','content_occurrence','chapter_key','chapter_occurrence');") == 6 ]]
 [[ $(query "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='story_releases' AND column_name='migration_backfill';") == 0 ]]
-[[ $(query "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('story_editions','story_releases','story_release_editions','story_sources','story_source_versions','source_acquisitions','source_acquisition_eligibility_assessments','source_acquisition_quality_reviews','reader_story_edition_overrides','reading_progress');") == 10 ]]
+[[ $(query "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('story_editions','story_releases','story_release_editions','story_sources','story_source_versions','story_orchestration_runs','source_acquisitions','source_acquisition_eligibility_assessments','source_acquisition_quality_reviews','reader_story_edition_overrides','reading_progress');") == 11 ]]
 [[ $(query "SELECT count(*) FROM source_acquisitions;") == 0 ]]
 [[ $(query "SELECT count(*) FROM source_acquisition_eligibility_assessments;") == 0 ]]
 [[ $(query "SELECT count(*) FROM source_acquisition_quality_reviews;") == 0 ]]
@@ -132,7 +132,7 @@ database_url="postgres://$database_user:$database_password@127.0.0.1:$published_
   PP_READER_STORE_TEST_DISPOSABLE=1 \
     PP_READER_STORE_TEST_DATABASE_URL="$database_url" \
     go test ./internal/db \
-      -run '^(TestReaderStoreIntegration|TestAdminEditionBundleIntegration|TestAdminReleaseIntegration|TestAdminSourceAcquisitionIntegration|TestAdminSourceAcquisitionPromotionIntegration|TestAdminSourceAcquisitionPromotionAndQualityReviewSerializeIntegration|TestReaderEditionOverrideIntegration|TestReaderResolutionIntegration|TestReaderLibraryIntegration)$' \
+      -run '^(TestReaderStoreIntegration|TestAdminEditionBundleIntegration|TestAdminReleaseIntegration|TestAdminSourceAcquisitionIntegration|TestAdminSourceAcquisitionPromotionIntegration|TestAdminSourceAcquisitionPromotionAndQualityReviewSerializeIntegration|TestReaderEditionOverrideIntegration|TestReaderResolutionIntegration|TestReaderLibraryIntegration|TestStoryOrchestrationRunsIntegration)$' \
       -count=1
 )
 

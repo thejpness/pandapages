@@ -730,6 +730,48 @@ CREATE INDEX story_sources_current_version_idx
   ON story_sources(current_version_id)
   WHERE current_version_id IS NOT NULL;
 
+-- Completed orchestration evidence is immutable and retained against the exact
+-- canonical source version used to produce it. It does not represent draft or
+-- publication state.
+CREATE TABLE story_orchestration_runs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  source_version_id uuid NOT NULL,
+  source_sha256 text NOT NULL,
+  semantic_result text NOT NULL,
+  artifacts jsonb NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+
+  CONSTRAINT story_orchestration_runs_source_version_fkey
+    FOREIGN KEY (source_version_id) REFERENCES story_source_versions(id)
+    ON UPDATE NO ACTION ON DELETE RESTRICT,
+
+  CONSTRAINT story_orchestration_runs_source_sha256_check
+    CHECK (source_sha256 ~ '^[0-9a-f]{64}$'),
+
+  CONSTRAINT story_orchestration_runs_semantic_result_check
+    CHECK (semantic_result IN ('pass', 'needs_review', 'fail')),
+
+  CONSTRAINT story_orchestration_runs_artifacts_shape_check
+    CHECK (
+      jsonb_typeof(artifacts) = 'object'
+      AND COALESCE(jsonb_typeof(artifacts -> 'analysisArtifact') = 'object', false)
+      AND CASE
+        WHEN jsonb_typeof(artifacts -> 'editions') = 'array'
+          THEN jsonb_array_length(artifacts -> 'editions') = 4
+        ELSE false
+      END
+      AND CASE
+        WHEN jsonb_typeof(artifacts -> 'editionAssessments') = 'array'
+          THEN jsonb_array_length(artifacts -> 'editionAssessments') = 4
+        ELSE false
+      END
+      AND COALESCE(jsonb_typeof(artifacts -> 'bundleAssessment') = 'object', false)
+    )
+);
+
+CREATE INDEX story_orchestration_runs_source_created_idx
+  ON story_orchestration_runs(source_version_id, created_at DESC, id DESC);
+
 -- Immutable release manifests. current_release_id is the modern authority.
 CREATE TABLE story_releases (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -810,6 +852,7 @@ ALTER TABLE story_sources
 
 DROP TABLE story_release_editions;
 DROP TABLE story_releases;
+DROP TABLE story_orchestration_runs;
 DROP TABLE story_source_versions;
 DROP TABLE story_sources;
 DROP TABLE source_acquisition_quality_reviews;

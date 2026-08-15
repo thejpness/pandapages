@@ -36,6 +36,42 @@ func TestNewRequiresHighLevelServices(t *testing.T) {
 	}
 }
 
+func TestValidateCompletedResult(t *testing.T) {
+	input, generator, validator := testServices(t, nil, adaptationcontract.ResultPass)
+	result, err := newOrchestrator(t, generator, validator).Run(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if err := ValidateCompletedResult(result, input.SourceIdentity, input.CanonicalSource); err != nil {
+		t.Fatalf("ValidateCompletedResult() error = %v", err)
+	}
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*Result)
+	}{
+		{"source identity", func(value *Result) { value.SourceIdentity = "other-source-version" }},
+		{"source SHA", func(value *Result) { value.SourceSHA256 = sha256Hex("other source") }},
+		{"missing edition", func(value *Result) { value.Editions = value.Editions[:3] }},
+		{"wrong edition order", func(value *Result) { value.Editions[0], value.Editions[1] = value.Editions[1], value.Editions[0] }},
+		{"invalid edition assessment", func(value *Result) { value.EditionAssessments[0] = storyvalidation.AssessmentArtifact{} }},
+		{"invalid bundle assessment", func(value *Result) { value.BundleAssessment = storyvalidation.AssessmentArtifact{} }},
+		{"semantic result", func(value *Result) { value.SemanticResult = adaptationcontract.ResultFail }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input, generator, validator := testServices(t, nil, adaptationcontract.ResultPass)
+			value, err := newOrchestrator(t, generator, validator).Run(context.Background(), input)
+			if err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			test.mutate(&value)
+			if err := ValidateCompletedResult(value, input.SourceIdentity, input.CanonicalSource); err == nil {
+				t.Fatal("ValidateCompletedResult() unexpectedly succeeded")
+			}
+		})
+	}
+}
+
 func TestRunCompletesCanonicalFlowInOrderAndKeepsEditionsIndependent(t *testing.T) {
 	input, generator, validator := testServices(t, nil, adaptationcontract.ResultPass)
 	orchestrator := newOrchestrator(t, generator, validator)
