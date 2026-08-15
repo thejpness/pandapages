@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"pandapages/api/internal/adaptationcontract"
 	"pandapages/api/internal/model"
@@ -80,6 +81,15 @@ type Result struct {
 	EditionAssessments []storyvalidation.AssessmentArtifact
 	BundleAssessment   storyvalidation.AssessmentArtifact
 	SemanticResult     adaptationcontract.Result
+}
+
+// PersistedRun is immutable completed orchestration evidence retained against
+// one authoritative canonical source version.
+type PersistedRun struct {
+	ID              string
+	SourceVersionID string
+	Result          Result
+	CreatedAt       time.Time
 }
 
 // Orchestrator composes one source analysis, four independent edition
@@ -212,6 +222,49 @@ func validateInput(input Input) error {
 	}
 	if strings.TrimSpace(input.CanonicalSource) == "" {
 		return fmt.Errorf("canonical source text is required")
+	}
+	return nil
+}
+
+// ValidateCompletedResult verifies a fully completed orchestration result
+// against the exact immutable canonical source and source-version identity.
+// Valid semantic pass, needs_review, and fail outcomes are all complete
+// editorial states; this does not make a publication decision.
+func ValidateCompletedResult(result Result, sourceIdentity, canonicalSource string) error {
+	if strings.TrimSpace(sourceIdentity) == "" {
+		return fmt.Errorf("canonical source identity is required")
+	}
+	if result.SourceIdentity != sourceIdentity {
+		return fmt.Errorf("orchestration result source identity does not match canonical source version")
+	}
+	if err := validateAnalysisArtifact(result.AnalysisArtifact, canonicalSource); err != nil {
+		return fmt.Errorf("orchestration result StoryAnalysis artifact is invalid: %w", err)
+	}
+	if result.SourceSHA256 != result.AnalysisArtifact.SourceSHA256 {
+		return fmt.Errorf("orchestration result source SHA-256 does not match StoryAnalysis")
+	}
+
+	editionKeys := storygeneration.DerivedEditionKeysV2()
+	if len(result.Editions) != len(editionKeys) {
+		return fmt.Errorf("orchestration result edition count is %d, want %d", len(result.Editions), len(editionKeys))
+	}
+	if len(result.EditionAssessments) != len(editionKeys) {
+		return fmt.Errorf("orchestration result edition assessment count is %d, want %d", len(result.EditionAssessments), len(editionKeys))
+	}
+	for index, editionKey := range editionKeys {
+		edition := result.Editions[index]
+		if err := validateGeneratedEditionArtifact(edition, editionKey, result.AnalysisArtifact); err != nil {
+			return fmt.Errorf("orchestration result edition %d is invalid: %w", index+1, err)
+		}
+		if err := validateEditionAssessmentArtifact(result.EditionAssessments[index], result.AnalysisArtifact, edition); err != nil {
+			return fmt.Errorf("orchestration result edition assessment %d is invalid: %w", index+1, err)
+		}
+	}
+	if err := validateBundleAssessmentArtifact(result.BundleAssessment, result.AnalysisArtifact, result.Editions); err != nil {
+		return fmt.Errorf("orchestration result bundle assessment is invalid: %w", err)
+	}
+	if expected := worstSemanticResult(result.EditionAssessments, result.BundleAssessment); result.SemanticResult != expected {
+		return fmt.Errorf("orchestration result semantic result %q does not match assessments %q", result.SemanticResult, expected)
 	}
 	return nil
 }
