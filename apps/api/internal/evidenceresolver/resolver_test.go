@@ -330,6 +330,63 @@ func TestResolveSourceFailureIsInsufficientNotFatal(t *testing.T) {
 	if err != nil || len(resolution.Diagnostics) != 1 || resolution.Diagnostics[0] != (Diagnostic{Source: SourceOpenLibrary, Reason: ReasonSourceUnavailable}) || resolution.WorkCategory.Status != ResolutionInsufficient {
 		t.Fatalf("resolution=%#v err=%v", resolution, err)
 	}
+	assessment := copyrighteligibility.Evaluate(copyrighteligibility.Input{EvaluationDate: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), UK: ToUKEvidence(resolution)})
+	if assessment.UK.Status != copyrighteligibility.JurisdictionIndeterminate {
+		t.Fatalf("assessment=%#v", assessment)
+	}
+}
+
+func TestResolveUnsupportedQueryIsInvalidDiagnosticNotSourceOutage(t *testing.T) {
+	resolver, err := New(Config{Sources: []BibliographicSource{sourceStub{class: SourceOpenLibrary, err: ErrUnsupportedQuery}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolution, err := resolver.Resolve(context.Background(), aliceContext())
+	if err != nil || len(resolution.Diagnostics) != 1 || resolution.Diagnostics[0] != (Diagnostic{Source: SourceOpenLibrary, Reason: ReasonSourceInvalid}) || resolution.WorkCategory.Status != ResolutionInsufficient {
+		t.Fatalf("resolution=%#v err=%v", resolution, err)
+	}
+}
+
+func TestResolvePostMarkerPositiveSignalsBlockContributorAbsence(t *testing.T) {
+	exact := aliceContext()
+	exact.SourceText = "Project Gutenberg wrapper\n*** START OF THE PROJECT GUTENBERG EBOOK EXAMPLE ***\nwith a Preface by\nGeorge Saintsbury\n\nThe text is based on translations from\nthe Grimms' Kinder und Hausmärchen by\nEdgar Taylor and Marian Edwardes.\n"
+	resolution, err := newResolver(t).Resolve(context.Background(), exact)
+	if err != nil || resolution.AdditionalTextual.Status != ResolutionEstablished || resolution.AdditionalTextual.State != copyrighteligibility.FactPresent || resolution.Translation.Status != ResolutionEstablished || resolution.Translation.State != copyrighteligibility.FactPresent {
+		t.Fatalf("resolution=%#v err=%v", resolution, err)
+	}
+	uk := ToUKEvidence(resolution)
+	if uk.AdditionalTextualContribution.State != copyrighteligibility.FactPresent || uk.Translation.State != copyrighteligibility.FactPresent {
+		t.Fatalf("UK evidence=%#v", uk)
+	}
+}
+
+func TestResolvePostMarkerAbsenceDoesNotCreateTranslationAbsence(t *testing.T) {
+	exact := aliceContext()
+	exact.SourceText = "Project Gutenberg wrapper\n*** START OF THE PROJECT GUTENBERG EBOOK EXAMPLE ***\nNo title-page contributor statement.\n"
+	resolution, err := newResolver(t).Resolve(context.Background(), exact)
+	if err != nil || resolution.Translation.Status != ResolutionInsufficient || resolution.Translation.State != copyrighteligibility.FactUnknown {
+		t.Fatalf("resolution=%#v err=%v", resolution, err)
+	}
+}
+
+func TestResolveJointAuthorshipKeepsUnsupportedLookupDistinctFromOutage(t *testing.T) {
+	jacobDeath, wilhelmDeath := 1863, 1859
+	exact := exactContext("2591", "Grimms' Fairy Tales", []copyrighteligibility.ContributorEvidence{
+		{Name: "Jacob Grimm", Role: "author", DeathYear: &jacobDeath},
+		{Name: "Wilhelm Grimm", Role: "author", DeathYear: &wilhelmDeath},
+	})
+	exact.SourceText = "Project Gutenberg wrapper\n*** START OF THE PROJECT GUTENBERG EBOOK GRIMMS' FAIRY TALES ***\nThe text is based on translations from\nthe Grimms' Kinder und Hausmärchen by\nEdgar Taylor and Marian Edwardes.\n"
+	resolver, err := New(Config{Sources: []BibliographicSource{
+		sourceStub{class: SourceBibliothequeNationaleDeFrance, err: ErrUnsupportedQuery},
+		sourceStub{class: SourceOpenLibrary, err: ErrUnsupportedQuery},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolution, err := resolver.Resolve(context.Background(), exact)
+	if err != nil || resolution.Authorship.Status != ResolutionEstablished || resolution.Authorship.Value != copyrighteligibility.AuthorshipJoint || resolution.Translation.Status != ResolutionEstablished || resolution.Translation.State != copyrighteligibility.FactPresent || len(resolution.Diagnostics) != 2 || resolution.Diagnostics[0].Reason != ReasonSourceInvalid || resolution.Diagnostics[1].Reason != ReasonSourceInvalid {
+		t.Fatalf("resolution=%#v err=%v", resolution, err)
+	}
 }
 
 func TestResolveAuthoritativeSourceFailureLeavesPublicationInsufficient(t *testing.T) {

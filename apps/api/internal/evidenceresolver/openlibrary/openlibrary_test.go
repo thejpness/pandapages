@@ -141,8 +141,20 @@ func TestLookupRejectsInvalidQueryBeforeNetwork(t *testing.T) {
 	adapter := New(Config{HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return nil, errors.New("request must not be sent")
 	})}})
-	if _, err := adapter.Lookup(context.Background(), evidenceresolver.Query{Title: "Alice"}); !errors.Is(err, ErrInvalid) {
+	if _, err := adapter.Lookup(context.Background(), evidenceresolver.Query{Title: "Alice"}); !errors.Is(err, ErrInvalid) || !errors.Is(err, evidenceresolver.ErrUnsupportedQuery) {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestLookupRejectsTwoAuthorQueryBeforeNetwork(t *testing.T) {
+	calls := 0
+	adapter := New(Config{HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		return nil, errors.New("request must not be sent")
+	})}})
+	query := evidenceresolver.Query{Title: "Grimms' Fairy Tales", Authors: []evidenceresolver.Person{{Name: "Jacob Grimm"}, {Name: "Wilhelm Grimm"}}}
+	if _, err := adapter.Lookup(context.Background(), query); !errors.Is(err, ErrInvalid) || !errors.Is(err, evidenceresolver.ErrUnsupportedQuery) || calls != 0 {
+		t.Fatalf("error=%v calls=%d", err, calls)
 	}
 }
 

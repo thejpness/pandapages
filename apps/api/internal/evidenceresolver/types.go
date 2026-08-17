@@ -2,6 +2,7 @@ package evidenceresolver
 
 import (
 	"context"
+	"errors"
 
 	"pandapages/api/internal/copyrighteligibility"
 )
@@ -117,6 +118,11 @@ type BibliographicSource interface {
 	SourceClass() SourceClass
 	Lookup(context.Context, Query) ([]BibliographicRecord, error)
 }
+
+// ErrUnsupportedQuery distinguishes an adapter precondition failure from an
+// outage of the external bibliographic source. Adapters should wrap it when
+// they reject an exact query before making a network request.
+var ErrUnsupportedQuery = errors.New("bibliographic source does not support the exact query")
 
 // ExactSourceContext is assembled from the exact provider work and source
 // material already acquired by Panda Pages. SourceText is inspected only by

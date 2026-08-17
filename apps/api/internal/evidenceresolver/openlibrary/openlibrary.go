@@ -72,7 +72,7 @@ func (*Adapter) SourceClass() evidenceresolver.SourceClass { return evidencereso
 // exact-title candidate.
 func (a *Adapter) Lookup(ctx context.Context, query evidenceresolver.Query) ([]evidenceresolver.BibliographicRecord, error) {
 	if !validQuery(query) {
-		return nil, ErrInvalid
+		return nil, errors.Join(ErrInvalid, evidenceresolver.ErrUnsupportedQuery)
 	}
 	searchURL := searchURL(query)
 	body, err := a.fetch(ctx, searchURL)
@@ -143,7 +143,7 @@ type authorResponse struct {
 
 func exactDocument(documents []searchDocument, query evidenceresolver.Query) (searchDocument, bool) {
 	for _, document := range documents {
-		if workKeyPattern.MatchString(document.Key) && canonicalName(document.Title) == canonicalName(query.Title) && len(document.AuthorNames) == 1 && canonicalName(document.AuthorNames[0]) == canonicalName(query.Authors[0].Name) {
+		if workKeyPattern.MatchString(document.Key) && evidenceresolver.NormalisedTitle(document.Title) == evidenceresolver.NormalisedTitle(query.Title) && len(document.AuthorNames) == 1 && canonicalName(document.AuthorNames[0]) == canonicalName(query.Authors[0].Name) {
 			return document, true
 		}
 	}
