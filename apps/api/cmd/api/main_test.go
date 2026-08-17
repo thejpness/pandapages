@@ -2,12 +2,50 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"pandapages/api/internal/storygeneration"
+	"pandapages/api/internal/storyorchestration"
 )
+
+type generationSourceLoaderStub struct{}
+
+func (generationSourceLoaderStub) LoadGenerationSourceVersionContext(context.Context, string) (storyorchestration.Input, error) {
+	return storyorchestration.Input{}, nil
+}
+
+type completedRunStoreStub struct{}
+
+func (completedRunStoreStub) PersistCompletedStoryOrchestrationRunContext(context.Context, string, storyorchestration.Result) (storyorchestration.PersistedRun, error) {
+	return storyorchestration.PersistedRun{}, nil
+}
+
+func TestProductionStoryGenerationPolicyV1(t *testing.T) {
+	policy := productionStoryGenerationPolicyV1()
+	if storygeneration.GenerationModelV2 != "gpt-5.6-terra" || policy.AnalysisReasoningEffort != "medium" || policy.AnalysisMaxOutputTokens != 16_384 ||
+		policy.EditionReasoningEffort != "medium" || policy.EditionMaxOutputTokens != 32_768 ||
+		policy.ValidatorModel != "gpt-5.6-luna" || policy.ValidatorReasoning != "medium" || policy.ValidatorMaxOutputTokens != 16_384 {
+		t.Fatalf("production story generation policy = %#v", policy)
+	}
+}
+
+func TestNewStoryGenerationServiceIsOptionalAndOffline(t *testing.T) {
+	loader := generationSourceLoaderStub{}
+	runStore := completedRunStoreStub{}
+	service, err := newStoryGenerationService(" ", loader, runStore)
+	if err != nil || service != nil {
+		t.Fatalf("missing key service/error = %#v / %v", service, err)
+	}
+	service, err = newStoryGenerationService("test-openai-key", loader, runStore)
+	if err != nil || service == nil {
+		t.Fatalf("configured offline service/error = %#v / %v", service, err)
+	}
+}
 
 func TestNewServerHasBoundedTimeouts(t *testing.T) {
 	server := newServer(http.NotFoundHandler())
@@ -96,6 +134,7 @@ func TestLoadRuntimeConfigAcceptsValidAuthenticationSettings(t *testing.T) {
 	values := map[string]string{
 		"DATABASE_URL":         "test-database-url",
 		"PP_ADMIN_KEY":         "  admin-key  ",
+		"OPENAI_API_KEY":       "  test-openai-key  ",
 		"PP_LOG_LEVEL":         "debug",
 		"PP_SUPABASE_ISSUER":   "https://project-ref.supabase.co/auth/v1",
 		"PP_SUPABASE_AUDIENCE": "authenticated",
@@ -110,6 +149,9 @@ func TestLoadRuntimeConfigAcceptsValidAuthenticationSettings(t *testing.T) {
 	}
 	if cfg.adminKey != "admin-key" {
 		t.Errorf("adminKey = %q", cfg.adminKey)
+	}
+	if cfg.openAIAPIKey != "test-openai-key" {
+		t.Errorf("openAIAPIKey = %q", cfg.openAIAPIKey)
 	}
 	if cfg.logLevel != slog.LevelDebug {
 		t.Errorf("logLevel = %v, want debug", cfg.logLevel)

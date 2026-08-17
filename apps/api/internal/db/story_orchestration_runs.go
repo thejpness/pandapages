@@ -26,12 +26,23 @@ func (s *Store) PersistCompletedStoryOrchestrationRun(
 	sourceVersionID string,
 	result storyorchestration.Result,
 ) (storyorchestration.PersistedRun, error) {
+	return s.PersistCompletedStoryOrchestrationRunContext(context.Background(), sourceVersionID, result)
+}
+
+// PersistCompletedStoryOrchestrationRunContext atomically stores one fully
+// validated orchestration result using a caller-owned lifecycle context.
+// The transaction stays short and is never held while model calls execute.
+func (s *Store) PersistCompletedStoryOrchestrationRunContext(
+	parent context.Context,
+	sourceVersionID string,
+	result storyorchestration.Result,
+) (storyorchestration.PersistedRun, error) {
 	sourceVersionID = strings.TrimSpace(sourceVersionID)
 	if !accountIDRe.MatchString(sourceVersionID) {
 		return storyorchestration.PersistedRun{}, fmt.Errorf("source version ID is invalid")
 	}
 
-	ctx, cancel := s.ctx()
+	ctx, cancel := s.ctxFrom(parent)
 	defer cancel()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

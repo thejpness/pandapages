@@ -16,10 +16,12 @@ type fakeSourceLoader struct {
 	input storyorchestration.Input
 	err   error
 	calls []string
+	ctx   []context.Context
 }
 
-func (fake *fakeSourceLoader) LoadGenerationSourceVersion(sourceVersionID string) (storyorchestration.Input, error) {
+func (fake *fakeSourceLoader) LoadGenerationSourceVersionContext(ctx context.Context, sourceVersionID string) (storyorchestration.Input, error) {
 	fake.calls = append(fake.calls, sourceVersionID)
+	fake.ctx = append(fake.ctx, ctx)
 	return fake.input, fake.err
 }
 
@@ -39,11 +41,13 @@ type fakeRunStore struct {
 	err       error
 	ids       []string
 	results   []storyorchestration.Result
+	ctx       []context.Context
 }
 
-func (fake *fakeRunStore) PersistCompletedStoryOrchestrationRun(sourceVersionID string, result storyorchestration.Result) (storyorchestration.PersistedRun, error) {
+func (fake *fakeRunStore) PersistCompletedStoryOrchestrationRunContext(ctx context.Context, sourceVersionID string, result storyorchestration.Result) (storyorchestration.PersistedRun, error) {
 	fake.ids = append(fake.ids, sourceVersionID)
 	fake.results = append(fake.results, result)
+	fake.ctx = append(fake.ctx, ctx)
 	return fake.persisted, fake.err
 }
 
@@ -190,6 +194,24 @@ func TestRunAllowsIndependentRepeatedCalls(t *testing.T) {
 	}
 	if len(loader.calls) != 2 || len(orchestrator.calls) != 2 || len(store.ids) != 2 {
 		t.Fatalf("repeated calls = loader:%d orchestration:%d persistence:%d", len(loader.calls), len(orchestrator.calls), len(store.ids))
+	}
+}
+
+func TestRunPassesOneLifecycleContextToEveryStage(t *testing.T) {
+	type contextKey struct{}
+	input := storyorchestration.Input{SourceIdentity: testSourceVersionID}
+	result := storyorchestration.Result{SourceIdentity: testSourceVersionID, SemanticResult: adaptationcontract.ResultPass}
+	loader := &fakeSourceLoader{input: input}
+	orchestrator := &fakeOrchestrator{result: result}
+	store := &fakeRunStore{persisted: storyorchestration.PersistedRun{SourceVersionID: testSourceVersionID, Result: result}}
+	service := newTestService(t, loader, orchestrator, store)
+
+	ctx := context.WithValue(context.Background(), contextKey{}, "request")
+	if _, err := service.Run(ctx, testSourceVersionID); err != nil {
+		t.Fatal(err)
+	}
+	if len(loader.ctx) != 1 || len(store.ctx) != 1 || loader.ctx[0] != ctx || store.ctx[0] != ctx {
+		t.Fatalf("loader/store contexts = %#v/%#v, want the caller context", loader.ctx, store.ctx)
 	}
 }
 

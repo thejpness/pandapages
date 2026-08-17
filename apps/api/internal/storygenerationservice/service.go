@@ -13,7 +13,7 @@ import (
 
 // SourceVersionLoader returns an already-validated immutable generation input.
 type SourceVersionLoader interface {
-	LoadGenerationSourceVersion(sourceVersionID string) (storyorchestration.Input, error)
+	LoadGenerationSourceVersionContext(context.Context, string) (storyorchestration.Input, error)
 }
 
 // OrchestrationRunner executes the independent in-memory generation flow.
@@ -23,7 +23,7 @@ type OrchestrationRunner interface {
 
 // CompletedRunStore retains a fully completed, validated orchestration result.
 type CompletedRunStore interface {
-	PersistCompletedStoryOrchestrationRun(sourceVersionID string, result storyorchestration.Result) (storyorchestration.PersistedRun, error)
+	PersistCompletedStoryOrchestrationRunContext(context.Context, string, storyorchestration.Result) (storyorchestration.PersistedRun, error)
 }
 
 // Config supplies the high-level application dependencies.
@@ -63,7 +63,7 @@ func New(cfg Config) (*Service, error) {
 // database transaction, and persists the completed result. Semantic pass,
 // needs_review, and fail are all valid completed states and are persisted.
 func (service *Service) Run(ctx context.Context, sourceVersionID string) (storyorchestration.PersistedRun, error) {
-	input, err := service.sourceLoader.LoadGenerationSourceVersion(sourceVersionID)
+	input, err := service.sourceLoader.LoadGenerationSourceVersionContext(ctx, sourceVersionID)
 	if err != nil {
 		return storyorchestration.PersistedRun{}, fmt.Errorf("load generation source version: %w", err)
 	}
@@ -79,7 +79,7 @@ func (service *Service) Run(ctx context.Context, sourceVersionID string) (storyo
 		return storyorchestration.PersistedRun{}, fmt.Errorf("orchestration result source identity does not match requested source version")
 	}
 
-	persisted, err := service.runStore.PersistCompletedStoryOrchestrationRun(sourceVersionID, result)
+	persisted, err := service.runStore.PersistCompletedStoryOrchestrationRunContext(ctx, sourceVersionID, result)
 	if err != nil {
 		return storyorchestration.PersistedRun{}, fmt.Errorf("persist completed story orchestration run: %w", err)
 	}

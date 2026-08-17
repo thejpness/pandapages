@@ -81,11 +81,21 @@ func MustOpenWithOptions(url string, opt Options) *Store {
 func (s *Store) Close() error { return s.db.Close() }
 
 func (s *Store) ctx() (context.Context, context.CancelFunc) {
+	return s.ctxFrom(context.Background())
+}
+
+// ctxFrom applies the Store's short query deadline to a caller-owned context.
+// It preserves cancellation and any earlier deadline already imposed by the
+// caller.
+func (s *Store) ctxFrom(parent context.Context) (context.Context, context.CancelFunc) {
 	qt := s.queryTimeout
 	if qt <= 0 {
 		qt = 3 * time.Second
 	}
-	return context.WithTimeout(context.Background(), qt)
+	if parent == nil {
+		parent = context.Background()
+	}
+	return context.WithTimeout(parent, qt)
 }
 
 func clamp01(p float64) float64 {

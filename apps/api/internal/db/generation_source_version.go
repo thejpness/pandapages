@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -17,12 +18,19 @@ import (
 // only a short database read transaction; callers must complete it before
 // invoking model-backed orchestration.
 func (s *Store) LoadGenerationSourceVersion(sourceVersionID string) (storyorchestration.Input, error) {
+	return s.LoadGenerationSourceVersionContext(context.Background(), sourceVersionID)
+}
+
+// LoadGenerationSourceVersionContext is LoadGenerationSourceVersion with a
+// caller-owned lifecycle context. Its database work remains a short
+// read-only transaction and must complete before model-backed orchestration.
+func (s *Store) LoadGenerationSourceVersionContext(parent context.Context, sourceVersionID string) (storyorchestration.Input, error) {
 	sourceVersionID = strings.TrimSpace(sourceVersionID)
 	if !accountIDRe.MatchString(sourceVersionID) {
 		return storyorchestration.Input{}, fmt.Errorf("source version ID is invalid")
 	}
 
-	ctx, cancel := s.ctx()
+	ctx, cancel := s.ctxFrom(parent)
 	defer cancel()
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 	if err != nil {
