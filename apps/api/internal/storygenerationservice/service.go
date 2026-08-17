@@ -1,0 +1,90 @@
+// Package storygenerationservice composes trusted source loading, in-memory
+// generation orchestration, and completed-run persistence. It deliberately
+// owns no HTTP, authorization, transport, model configuration, or database
+// transaction spanning orchestration.
+package storygenerationservice
+
+import (
+	"context"
+	"fmt"
+
+	"pandapages/api/internal/storyorchestration"
+)
+
+// SourceVersionLoader returns an already-validated immutable generation input.
+type SourceVersionLoader interface {
+	LoadGenerationSourceVersion(sourceVersionID string) (storyorchestration.Input, error)
+}
+
+// OrchestrationRunner executes the independent in-memory generation flow.
+type OrchestrationRunner interface {
+	Run(context.Context, storyorchestration.Input) (storyorchestration.Result, error)
+}
+
+// CompletedRunStore retains a fully completed, validated orchestration result.
+type CompletedRunStore interface {
+	PersistCompletedStoryOrchestrationRun(sourceVersionID string, result storyorchestration.Result) (storyorchestration.PersistedRun, error)
+}
+
+// Config supplies the high-level application dependencies.
+type Config struct {
+	SourceLoader SourceVersionLoader
+	Orchestrator OrchestrationRunner
+	RunStore     CompletedRunStore
+}
+
+// Service is the production application seam between trusted source evidence,
+// generation orchestration, and durable completed-run evidence.
+type Service struct {
+	sourceLoader SourceVersionLoader
+	orchestrator OrchestrationRunner
+	runStore     CompletedRunStore
+}
+
+// New constructs a generation service from high-level dependencies.
+func New(cfg Config) (*Service, error) {
+	if cfg.SourceLoader == nil {
+		return nil, fmt.Errorf("generation source loader is required")
+	}
+	if cfg.Orchestrator == nil {
+		return nil, fmt.Errorf("story orchestration runner is required")
+	}
+	if cfg.RunStore == nil {
+		return nil, fmt.Errorf("completed orchestration run store is required")
+	}
+	return &Service{
+		sourceLoader: cfg.SourceLoader,
+		orchestrator: cfg.Orchestrator,
+		runStore:     cfg.RunStore,
+	}, nil
+}
+
+// Run loads one trusted promoted source version, runs orchestration outside a
+// database transaction, and persists the completed result. Semantic pass,
+// needs_review, and fail are all valid completed states and are persisted.
+func (service *Service) Run(ctx context.Context, sourceVersionID string) (storyorchestration.PersistedRun, error) {
+	input, err := service.sourceLoader.LoadGenerationSourceVersion(sourceVersionID)
+	if err != nil {
+		return storyorchestration.PersistedRun{}, fmt.Errorf("load generation source version: %w", err)
+	}
+	if input.SourceIdentity != sourceVersionID {
+		return storyorchestration.PersistedRun{}, fmt.Errorf("loaded generation source identity does not match requested source version")
+	}
+
+	result, err := service.orchestrator.Run(ctx, input)
+	if err != nil {
+		return storyorchestration.PersistedRun{}, fmt.Errorf("run story orchestration: %w", err)
+	}
+	if result.SourceIdentity != sourceVersionID {
+		return storyorchestration.PersistedRun{}, fmt.Errorf("orchestration result source identity does not match requested source version")
+	}
+
+	persisted, err := service.runStore.PersistCompletedStoryOrchestrationRun(sourceVersionID, result)
+	if err != nil {
+		return storyorchestration.PersistedRun{}, fmt.Errorf("persist completed story orchestration run: %w", err)
+	}
+	if persisted.SourceVersionID != sourceVersionID || persisted.Result.SourceIdentity != sourceVersionID {
+		return storyorchestration.PersistedRun{}, fmt.Errorf("persisted story orchestration run does not match requested source version")
+	}
+	return persisted, nil
+}
