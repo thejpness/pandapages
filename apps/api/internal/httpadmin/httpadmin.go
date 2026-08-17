@@ -93,6 +93,7 @@ func New(cfg Config, store Store) http.Handler {
 
 	mux.HandleFunc("POST /api/v1/admin/source-versions/{sourceVersionID}/generate", withAdmin(storyGenerationHandler(cfg.StoryGeneration)))
 	mux.HandleFunc("GET /api/v1/admin/story-orchestration-runs/{runID}", withAdmin(storyOrchestrationRunHandler(cfg.StoryOrchestrationRuns)))
+	mux.HandleFunc("GET /api/v1/admin/source-versions/{sourceVersionID}/orchestration-runs", withAdmin(storyOrchestrationRunHistoryHandler(cfg.StoryOrchestrationRunHistory)))
 
 	// POST /api/v1/admin/preview
 	mux.HandleFunc("POST /api/v1/admin/preview", withAdmin(func(w http.ResponseWriter, r *http.Request) {
