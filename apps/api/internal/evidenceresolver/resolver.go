@@ -64,12 +64,16 @@ func (s *Service) Resolve(ctx context.Context, exact ExactSourceContext) (Resolu
 	for _, source := range s.sources {
 		found, err := source.Lookup(ctx, query)
 		if err != nil {
-			diagnostics = append(diagnostics, Diagnostic{Source: source.SourceClass(), Reason: ReasonSourceUnavailable})
-			s.log("source_failed", exact.ProviderEvidence, "source", string(source.SourceClass()), "failure_class", string(ReasonSourceUnavailable))
+			reason := ReasonSourceUnavailable
+			if errors.Is(err, ErrUnsupportedQuery) {
+				reason = ReasonSourceInvalid
+			}
+			diagnostics = append(diagnostics, Diagnostic{Source: source.SourceClass(), Reason: reason})
+			s.log("source_failed", exact.ProviderEvidence, "source", string(source.SourceClass()), "failure_class", string(reason))
 			continue
 		}
 		for _, record := range found {
-			if record.Source != source.SourceClass() || !validRecord(record) || normalisedTitle(record.Title) != normalisedTitle(query.Title) {
+			if record.Source != source.SourceClass() || !validRecord(record) || NormalisedTitle(record.Title) != NormalisedTitle(query.Title) {
 				diagnostics = append(diagnostics, Diagnostic{Source: source.SourceClass(), Reason: ReasonSourceInvalid})
 				s.log("source_invalid", exact.ProviderEvidence, "source", string(source.SourceClass()), "failure_class", string(ReasonSourceInvalid))
 				continue
@@ -83,13 +87,14 @@ func (s *Service) Resolve(ctx context.Context, exact ExactSourceContext) (Resolu
 		frontSource = exact.SourceText
 	}
 	front := ExtractFrontMatter(frontSource)
+	postMarker := ExtractPostMarkerSignals(frontSource)
 	resolution := Resolution{
 		WorkTitle:         strings.TrimSpace(exact.ProviderEvidence.Title),
 		WorkCategory:      resolveWorkCategory(records),
 		Authorship:        resolveAuthorship(exact.ProviderEvidence, records),
 		FirstPublication:  resolveFirstPublication(records),
-		Translation:       resolveTranslation(exact.ProviderEvidence, records, front),
-		AdditionalTextual: resolveAdditionalTextual(exact.ProviderEvidence, records, front),
+		Translation:       resolveTranslation(exact.ProviderEvidence, records, front, postMarker),
+		AdditionalTextual: resolveAdditionalTextual(exact.ProviderEvidence, records, front, postMarker),
 		Diagnostics:       diagnostics,
 	}
 	resolution.Author = resolveAuthor(exact.ProviderEvidence, records, resolution.Authorship)
@@ -284,12 +289,15 @@ func resolveFirstPublication(records []BibliographicRecord) ResolvedYear {
 	return ResolvedYear{Status: ResolutionEstablished, Year: *values[0].FirstPublicationYear, Reason: ReasonEstablished, Evidence: recordReferences(values, "An authoritative bibliographic source and an independent source agree on first publication year.")}
 }
 
-func resolveTranslation(provider copyrighteligibility.ProviderEvidence, records []BibliographicRecord, front FrontMatter) ResolvedFact {
+func resolveTranslation(provider copyrighteligibility.ProviderEvidence, records []BibliographicRecord, front FrontMatter, postMarker PostMarkerSignals) ResolvedFact {
 	if hasProviderRole(provider.Contributors, "translator") {
 		return ResolvedFact{Status: ResolutionEstablished, State: copyrighteligibility.FactPresent, Reason: ReasonProviderContributorPresent, Evidence: []EvidenceItem{providerReference(provider, "Project Gutenberg RDF identifies a translator.")}}
 	}
 	if len(front.Translators) > 0 {
 		return ResolvedFact{Status: ResolutionEstablished, State: copyrighteligibility.FactPresent, Reason: ReasonFrontMatterContributorPresent, Evidence: []EvidenceItem{{Class: SourceProjectGutenberg, Source: "Project Gutenberg source front matter", Digest: front.Digest, Fact: "Provider front matter identifies a translator."}}}
+	}
+	if len(postMarker.Translators) > 0 {
+		return ResolvedFact{Status: ResolutionEstablished, State: copyrighteligibility.FactPresent, Reason: ReasonFrontMatterContributorPresent, Evidence: []EvidenceItem{{Class: SourceProjectGutenberg, Source: "Project Gutenberg title page", Digest: postMarker.Digest, Fact: "Bounded provider title-page material identifies a translator."}}}
 	}
 	if record, ok := firstBibliographicContributor(records, "translator"); ok {
 		return ResolvedFact{Status: ResolutionEstablished, State: copyrighteligibility.FactPresent, Reason: ReasonProviderContributorPresent, Evidence: []EvidenceItem{recordReference(record, "Structured bibliographic contributor data identifies a translator.")}}
@@ -297,12 +305,15 @@ func resolveTranslation(provider copyrighteligibility.ProviderEvidence, records 
 	return resolveTranslationAbsence(provider, records, front)
 }
 
-func resolveAdditionalTextual(provider copyrighteligibility.ProviderEvidence, records []BibliographicRecord, front FrontMatter) ResolvedFact {
+func resolveAdditionalTextual(provider copyrighteligibility.ProviderEvidence, records []BibliographicRecord, front FrontMatter, postMarker PostMarkerSignals) ResolvedFact {
 	if hasProviderTextualRole(provider.Contributors) {
 		return ResolvedFact{Status: ResolutionEstablished, State: copyrighteligibility.FactPresent, Reason: ReasonProviderContributorPresent, Evidence: []EvidenceItem{providerReference(provider, "Project Gutenberg RDF identifies an additional textual contributor.")}}
 	}
 	if len(front.TextualContributors) > 0 {
 		return ResolvedFact{Status: ResolutionEstablished, State: copyrighteligibility.FactPresent, Reason: ReasonFrontMatterContributorPresent, Evidence: []EvidenceItem{{Class: SourceProjectGutenberg, Source: "Project Gutenberg source front matter", Digest: front.Digest, Fact: "Provider front matter identifies an additional textual contributor."}}}
+	}
+	if len(postMarker.TextualContributors) > 0 {
+		return ResolvedFact{Status: ResolutionEstablished, State: copyrighteligibility.FactPresent, Reason: ReasonFrontMatterContributorPresent, Evidence: []EvidenceItem{{Class: SourceProjectGutenberg, Source: "Project Gutenberg title page", Digest: postMarker.Digest, Fact: "Bounded provider title-page material identifies an additional textual contributor."}}}
 	}
 	if record, ok := firstBibliographicTextualContributor(records); ok {
 		return ResolvedFact{Status: ResolutionEstablished, State: copyrighteligibility.FactPresent, Reason: ReasonProviderContributorPresent, Evidence: []EvidenceItem{recordReference(record, "Structured bibliographic contributor data identifies an additional textual contributor.")}}
@@ -547,16 +558,6 @@ func normalisedName(value string) string {
 	if parts := strings.Split(value, ","); len(parts) == 2 {
 		value = strings.TrimSpace(parts[1]) + " " + strings.TrimSpace(parts[0])
 	}
-	var result strings.Builder
-	for _, r := range strings.ToLower(value) {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			result.WriteRune(r)
-		}
-	}
-	return result.String()
-}
-
-func normalisedTitle(value string) string {
 	var result strings.Builder
 	for _, r := range strings.ToLower(value) {
 		if unicode.IsLetter(r) || unicode.IsDigit(r) {

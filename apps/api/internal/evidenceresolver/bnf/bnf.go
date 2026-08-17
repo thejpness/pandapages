@@ -32,8 +32,9 @@ const (
 )
 
 var (
-	arkPattern  = regexp.MustCompile(`^/ark:/12148/[A-Za-z0-9]+$`)
-	yearPattern = regexp.MustCompile(`^[0-9]{1,4}$`)
+	arkPattern       = regexp.MustCompile(`^/ark:/12148/[A-Za-z0-9]+$`)
+	yearPattern      = regexp.MustCompile(`^[0-9]{1,4}$`)
+	deathDatePattern = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}$`)
 
 	ErrUnavailable = errors.New("bibliotheque nationale de france evidence unavailable")
 	ErrInvalid     = errors.New("bibliotheque nationale de france evidence invalid")
@@ -69,7 +70,7 @@ func (*Adapter) SourceClass() evidenceresolver.SourceClass {
 // first-publication year; it deliberately does not use manifestation dates.
 func (a *Adapter) Lookup(ctx context.Context, query evidenceresolver.Query) ([]evidenceresolver.BibliographicRecord, error) {
 	if !validQuery(query) {
-		return nil, ErrInvalid
+		return nil, errors.Join(ErrInvalid, evidenceresolver.ErrUnsupportedQuery)
 	}
 	body, err := a.fetch(ctx, lookupURL(query.Title))
 	if err != nil {
@@ -105,6 +106,7 @@ type binding struct {
 	FirstYear term `json:"firstYear"`
 	Creator   term `json:"creator"`
 	Name      term `json:"creatorName"`
+	Death     term `json:"death"`
 	Language  term `json:"language"`
 	Subject   term `json:"subject"`
 }
@@ -120,6 +122,7 @@ type workCandidate struct {
 	year       int
 	creatorURI string
 	creator    string
+	deathYear  *int
 	languages  map[string]struct{}
 	subjects   map[string]struct{}
 	invalid    bool
@@ -151,6 +154,16 @@ func exactRecord(bindings []binding, query evidenceresolver.Query, body []byte) 
 		} else if candidate.title != strings.TrimSpace(value.Title.Value) || candidate.creatorURI != strings.TrimSpace(value.Creator.Value) || candidate.creator != strings.TrimSpace(value.Name.Value) || candidate.yearString() != strings.TrimSpace(value.FirstYear.Value) {
 			candidate.invalid = true
 		}
+		deathYear, ok := parseDeathYear(value.Death)
+		if !ok {
+			candidate.invalid = true
+		} else if deathYear != nil {
+			if candidate.deathYear != nil && *candidate.deathYear != *deathYear {
+				candidate.invalid = true
+			} else {
+				candidate.deathYear = deathYear
+			}
+		}
 		if language, ok := languageCode(value.Language); ok {
 			candidate.languages[language] = struct{}{}
 		}
@@ -161,7 +174,7 @@ func exactRecord(bindings []binding, query evidenceresolver.Query, body []byte) 
 
 	matching := make([]*workCandidate, 0, 1)
 	for _, candidate := range candidates {
-		if candidate.invalid || canonical(candidate.title) != canonical(query.Title) || canonical(candidate.creator) != canonical(query.Authors[0].Name) {
+		if candidate.invalid || evidenceresolver.NormalisedTitle(candidate.title) != evidenceresolver.NormalisedTitle(query.Title) || canonicalName(candidate.creator) != canonicalName(query.Authors[0].Name) {
 			continue
 		}
 		if _, _, ok := authorityIdentifier(candidate.workURI); !ok {
@@ -182,6 +195,7 @@ func exactRecord(bindings []binding, query evidenceresolver.Query, body []byte) 
 	author := evidenceresolver.Person{
 		Name:        candidate.creator,
 		Identifiers: []evidenceresolver.Identifier{{Source: evidenceresolver.SourceBibliothequeNationaleDeFrance, Value: creatorID}},
+		DeathYear:   candidate.deathYear,
 	}
 	return evidenceresolver.BibliographicRecord{
 		Source:               evidenceresolver.SourceBibliothequeNationaleDeFrance,
@@ -229,15 +243,21 @@ func lookupURL(title string) string {
 }
 
 func lookupQuery(title string) string {
+	filters := make([]string, 0, len(evidenceresolver.TitleQueryVariants(title)))
+	for _, variant := range evidenceresolver.TitleQueryVariants(title) {
+		filters = append(filters, "LCASE(STR(?title)) = LCASE("+sparqlLiteral(variant)+")")
+	}
 	return "PREFIX bnf: <http://data.bnf.fr/ontology/bnf-onto/>\n" +
+		"PREFIX bio: <http://vocab.org/bio/0.1/>\n" +
 		"PREFIX dcterms: <http://purl.org/dc/terms/>\n" +
 		"PREFIX foaf: <http://xmlns.com/foaf/0.1/>\n" +
-		"SELECT ?work ?title ?firstYear ?creator ?creatorName ?language ?subject WHERE {\n" +
+		"SELECT ?work ?title ?firstYear ?creator ?creatorName ?death ?language ?subject WHERE {\n" +
 		"  ?work bnf:firstYear ?firstYear ; dcterms:title ?title ; dcterms:creator ?creator .\n" +
 		"  ?creator foaf:name ?creatorName .\n" +
+		"  OPTIONAL { ?creator bio:death ?death . }\n" +
 		"  OPTIONAL { ?work dcterms:language ?language . }\n" +
 		"  OPTIONAL { ?work bnf:subject ?subject . }\n" +
-		"  FILTER(LCASE(STR(?title)) = LCASE(" + sparqlLiteral(title) + "))\n" +
+		"  FILTER(" + strings.Join(filters, " || ") + ")\n" +
 		"}\nLIMIT 51"
 }
 
@@ -290,6 +310,21 @@ func parseYear(value term) (int, bool) {
 	return year, true
 }
 
+func parseDeathYear(value term) (*int, bool) {
+	if value.Type == "" && strings.TrimSpace(value.Value) == "" {
+		return nil, true
+	}
+	if (value.Type != "literal" && value.Type != "typed-literal") || !deathDatePattern.MatchString(strings.TrimSpace(value.Value)) {
+		return nil, false
+	}
+	parsed, err := time.Parse("2006-01-02", value.Value)
+	if err != nil || parsed.Year() < 1 || parsed.Year() > 9999 {
+		return nil, false
+	}
+	year := parsed.Year()
+	return &year, true
+}
+
 func languageCode(value term) (string, bool) {
 	raw := strings.TrimSpace(value.Value)
 	if raw == "" {
@@ -323,7 +358,7 @@ func authorityIdentifier(raw string) (string, string, bool) {
 	return identifier, "https://" + host + value.Path, true
 }
 
-func canonical(value string) string {
+func canonicalName(value string) string {
 	if parts := strings.Split(value, ","); len(parts) == 2 {
 		value = strings.TrimSpace(parts[1]) + " " + strings.TrimSpace(parts[0])
 	}
