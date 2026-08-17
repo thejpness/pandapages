@@ -91,6 +91,8 @@ func New(cfg Config, store Store) http.Handler {
 		}
 	}
 
+	mux.HandleFunc("POST /api/v1/admin/source-versions/{sourceVersionID}/generate", withAdmin(storyGenerationHandler(cfg.StoryGeneration)))
+
 	// POST /api/v1/admin/preview
 	mux.HandleFunc("POST /api/v1/admin/preview", withAdmin(func(w http.ResponseWriter, r *http.Request) {
 		var body model.AdminPreviewRequest

@@ -56,6 +56,7 @@ services:
       PGAPPNAME: pandapages-api
       PP_ASSET_DIR: /data/assets
       PP_LOG_LEVEL: ${PP_LOG_LEVEL:-info}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       PP_ADMIN_KEY: ${PP_ADMIN_KEY:?PP_ADMIN_KEY is required}
       PP_SUPABASE_ISSUER: ${SUPABASE_URL:?SUPABASE_URL must be the exact HTTPS Auth origin}/auth/v1
       PP_SUPABASE_AUDIENCE: ${SUPABASE_JWT_AUDIENCE:?SUPABASE_JWT_AUDIENCE is required}

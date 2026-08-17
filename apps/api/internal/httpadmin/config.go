@@ -12,4 +12,5 @@ type Config struct {
 	SourceDiscovery     sourceprovider.Discovery
 	SourceAcquisition   sourceprovider.Acquisition
 	SourceEligibility   *sourceeligibility.Service
+	StoryGeneration     StoryGenerationService
 }

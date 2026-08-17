@@ -27,6 +27,10 @@ import (
 	"pandapages/api/internal/sourceeligibility"
 	"pandapages/api/internal/sourceprovider"
 	"pandapages/api/internal/sourceprovider/gutenberg"
+	"pandapages/api/internal/storygeneration"
+	"pandapages/api/internal/storygenerationservice"
+	"pandapages/api/internal/storyorchestration"
+	"pandapages/api/internal/storyvalidation"
 	"pandapages/api/internal/supabaseauth"
 )
 
@@ -43,8 +47,33 @@ const (
 type runtimeConfig struct {
 	databaseURL  string
 	adminKey     string
+	openAIAPIKey string
 	logLevel     slog.Level
 	supabaseAuth supabaseauth.Config
+}
+
+// storygeneration.V2Runner fixes generation to GenerationModelV2 (Terra).
+// This policy configures its remaining production-v1 execution settings.
+type productionStoryGenerationPolicy struct {
+	AnalysisReasoningEffort  storygeneration.ReasoningEffort
+	AnalysisMaxOutputTokens  int
+	EditionReasoningEffort   storygeneration.ReasoningEffort
+	EditionMaxOutputTokens   int
+	ValidatorModel           string
+	ValidatorReasoning       storygeneration.ReasoningEffort
+	ValidatorMaxOutputTokens int
+}
+
+func productionStoryGenerationPolicyV1() productionStoryGenerationPolicy {
+	return productionStoryGenerationPolicy{
+		AnalysisReasoningEffort:  storygeneration.ReasoningEffortMedium,
+		AnalysisMaxOutputTokens:  16_384,
+		EditionReasoningEffort:   storygeneration.ReasoningEffortMedium,
+		EditionMaxOutputTokens:   32_768,
+		ValidatorModel:           "gpt-5.6-luna",
+		ValidatorReasoning:       storygeneration.ReasoningEffortMedium,
+		ValidatorMaxOutputTokens: 16_384,
+	}
 }
 
 func loadRuntimeConfig(getenv func(string) string) (runtimeConfig, error) {
@@ -66,6 +95,7 @@ func loadRuntimeConfig(getenv func(string) string) (runtimeConfig, error) {
 	return runtimeConfig{
 		databaseURL:  getenv("DATABASE_URL"),
 		adminKey:     strings.TrimSpace(getenv("PP_ADMIN_KEY")),
+		openAIAPIKey: strings.TrimSpace(getenv("OPENAI_API_KEY")),
 		logLevel:     logLevel,
 		supabaseAuth: supabaseConfig,
 	}, nil
@@ -112,6 +142,54 @@ func newRootHandler(public, identity, admin http.Handler) http.Handler {
 	return httpmiddleware.Observe(root)
 }
 
+func newStoryGenerationService(
+	apiKey string,
+	sourceLoader storygenerationservice.SourceVersionLoader,
+	runStore storygenerationservice.CompletedRunStore,
+) (*storygenerationservice.Service, error) {
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return nil, nil
+	}
+	policy := productionStoryGenerationPolicyV1()
+	responses, err := storygeneration.NewResponsesClient(storygeneration.ResponsesClientConfig{APIKey: apiKey})
+	if err != nil {
+		return nil, fmt.Errorf("create OpenAI Responses client: %w", err)
+	}
+	generator, err := storygeneration.NewV2Runner(storygeneration.V2RunnerConfig{
+		Gateway:                 responses,
+		AnalysisReasoningEffort: policy.AnalysisReasoningEffort,
+		AnalysisMaxOutputTokens: policy.AnalysisMaxOutputTokens,
+		EditionReasoningEffort:  policy.EditionReasoningEffort,
+		EditionMaxOutputTokens:  policy.EditionMaxOutputTokens,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create story generation runner: %w", err)
+	}
+	validator, err := storyvalidation.NewRunner(storyvalidation.RunnerConfig{
+		Gateway:         responses,
+		Model:           policy.ValidatorModel,
+		ReasoningEffort: policy.ValidatorReasoning,
+		MaxOutputTokens: policy.ValidatorMaxOutputTokens,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create story semantic validator: %w", err)
+	}
+	orchestrator, err := storyorchestration.New(storyorchestration.Config{Generator: generator, Validator: validator})
+	if err != nil {
+		return nil, fmt.Errorf("create story orchestration: %w", err)
+	}
+	service, err := storygenerationservice.New(storygenerationservice.Config{
+		SourceLoader: sourceLoader,
+		Orchestrator: orchestrator,
+		RunStore:     runStore,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create story generation service: %w", err)
+	}
+	return service, nil
+}
+
 func run() error {
 	cfg, err := loadRuntimeConfig(os.Getenv)
 	if err != nil {
@@ -123,6 +201,13 @@ func run() error {
 
 	store := db.MustOpen(cfg.databaseURL)
 	defer store.Close()
+	storyGeneration, err := newStoryGenerationService(cfg.openAIAPIKey, store, store)
+	if err != nil {
+		return fmt.Errorf("configure story generation: %w", err)
+	}
+	if storyGeneration == nil {
+		slog.Warn("story generation is unavailable", "category", "openai_configuration")
+	}
 
 	verifier, err := supabaseauth.New(cfg.supabaseAuth)
 	if err != nil {
@@ -160,6 +245,7 @@ func run() error {
 		SourceDiscovery:     sourceDiscovery,
 		SourceAcquisition:   sourceDiscovery,
 		SourceEligibility:   sourceEligibility,
+		StoryGeneration:     storyGeneration,
 	}, store)
 
 	server := newServer(newRootHandler(public, identity, admin))
