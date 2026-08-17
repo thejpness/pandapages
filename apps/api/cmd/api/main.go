@@ -240,12 +240,13 @@ func run() error {
 	identity := httpidentity.New(bearerAuthenticator, store)
 
 	admin := httpadmin.New(httpadmin.Config{
-		AdminKey:            cfg.adminKey,
-		BearerAuthenticator: bearerAuthenticator,
-		SourceDiscovery:     sourceDiscovery,
-		SourceAcquisition:   sourceDiscovery,
-		SourceEligibility:   sourceEligibility,
-		StoryGeneration:     storyGeneration,
+		AdminKey:               cfg.adminKey,
+		BearerAuthenticator:    bearerAuthenticator,
+		SourceDiscovery:        sourceDiscovery,
+		SourceAcquisition:      sourceDiscovery,
+		SourceEligibility:      sourceEligibility,
+		StoryGeneration:        storyGeneration,
+		StoryOrchestrationRuns: store,
 	}, store)
 
 	server := newServer(newRootHandler(public, identity, admin))
