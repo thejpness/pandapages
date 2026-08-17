@@ -132,7 +132,7 @@ database_url="postgres://$database_user:$database_password@127.0.0.1:$published_
   PP_READER_STORE_TEST_DISPOSABLE=1 \
     PP_READER_STORE_TEST_DATABASE_URL="$database_url" \
     go test ./internal/db \
-      -run '^(TestReaderStoreIntegration|TestAdminEditionBundleIntegration|TestAdminReleaseIntegration|TestAdminSourceAcquisitionIntegration|TestAdminSourceAcquisitionPromotionIntegration|TestAdminSourceAcquisitionPromotionAndQualityReviewSerializeIntegration|TestGenerationSourceVersionIntegration|TestReaderEditionOverrideIntegration|TestReaderResolutionIntegration|TestReaderLibraryIntegration|TestStoryOrchestrationRunsIntegration)$' \
+      -run '^(TestReaderStoreIntegration|TestAdminEditionBundleIntegration|TestAdminReleaseIntegration|TestAdminSourceAcquisitionIntegration|TestAdminSourceAcquisitionPromotionIntegration|TestAdminSourceAcquisitionPromotionAndQualityReviewSerializeIntegration|TestGenerationSourceVersionIntegration|TestReaderEditionOverrideIntegration|TestReaderResolutionIntegration|TestReaderLibraryIntegration|TestStoryOrchestrationRunsIntegration|TestStoryOrchestrationRunHistoryIntegration)$' \
       -count=1
 )
 
