@@ -18,6 +18,7 @@ import (
 
 const searchFixture = `{"docs":[{"key":"/works/OL138052W","title":"Alice's Adventures in Wonderland","author_name":["Lewis Carroll"],"author_key":["OL22098A"],"first_publish_year":1865,"language":["eng"],"subject":["Fiction","Children's literature"]}]}`
 const authorFixture = `{"name":"Lewis Carroll","death_date":"1898"}`
+const wutheringSearchFixture = `{"docs":[{"key":"/works/OL21177W","title":"Wuthering Heights","author_name":["Emily Brontë"],"author_key":["OL24529A"],"first_publish_year":1846,"language":["eng"],"subject":["Fiction","Gothic fiction"]}]}`
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
@@ -60,6 +61,10 @@ func exactQuery() evidenceresolver.Query {
 	return evidenceresolver.Query{Provider: "project-gutenberg", ExternalID: "11", Title: "Alice's Adventures in Wonderland", Authors: []evidenceresolver.Person{{Name: "Carroll, Lewis"}}}
 }
 
+func wutheringQuery() evidenceresolver.Query {
+	return evidenceresolver.Query{Provider: "project-gutenberg", ExternalID: "768", Title: "Wuthering Heights", Authors: []evidenceresolver.Person{{Name: "Brontë, Emily"}}}
+}
+
 func TestLookupUsesOnlyFixedStructuredOpenLibraryEndpoints(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("User-Agent") != productUserAgent {
@@ -81,12 +86,198 @@ func TestLookupUsesOnlyFixedStructuredOpenLibraryEndpoints(t *testing.T) {
 	defer server.Close()
 	adapter, transport := adapterForServer(server)
 	records, err := adapter.Lookup(context.Background(), exactQuery())
-	if err != nil || len(records) != 1 || records[0].Source != evidenceresolver.SourceOpenLibrary || records[0].WorkID != "/works/OL138052W" || records[0].FirstPublicationYear == nil || *records[0].FirstPublicationYear != 1865 || len(records[0].Authors) != 1 || records[0].Authors[0].DeathYear == nil || *records[0].Authors[0].DeathYear != 1898 || len(records[0].Languages) != 1 || records[0].Languages[0] != "eng" || len(records[0].Subjects) != 2 || len(records[0].Contributors) != 1 || records[0].Digest == "" {
+	if err != nil || len(records) != 1 || records[0].Source != evidenceresolver.SourceOpenLibrary || records[0].SourceName != fullSourceName || records[0].WorkID != "/works/OL138052W" || records[0].FirstPublicationYear == nil || *records[0].FirstPublicationYear != 1865 || len(records[0].Authors) != 1 || records[0].Authors[0].Name != "Lewis Carroll" || records[0].Authors[0].DeathYear == nil || *records[0].Authors[0].DeathYear != 1898 || len(records[0].Languages) != 1 || records[0].Languages[0] != "eng" || len(records[0].Subjects) != 2 || len(records[0].Contributors) != 1 || records[0].Digest != digest(append([]byte(searchFixture), []byte(authorFixture)...)) {
 		t.Fatalf("records=%#v err=%v", records, err)
 	}
 	requests := transport.requests()
 	if len(requests) != 2 || requests[0].Scheme != "https" || requests[0].Host != host || requests[0].Path != "/search.json" || requests[1].String() != "https://openlibrary.org/authors/OL22098A.json" {
 		t.Fatalf("requests=%+v", requests)
+	}
+}
+
+func TestLookupRetainsSearchEvidenceWhenAuthorEndpointUnavailable(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		adapter func(*testing.T) (*Adapter, *fixedHostTransport)
+	}{
+		{
+			name: "upstream 503",
+			adapter: func(t *testing.T) (*Adapter, *fixedHostTransport) {
+				t.Helper()
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					switch r.URL.Path {
+					case "/search.json":
+						w.Header().Set("Content-Type", "application/json")
+						_, _ = io.WriteString(w, searchFixture)
+					case "/authors/OL22098A.json":
+						w.WriteHeader(http.StatusServiceUnavailable)
+					default:
+						t.Fatalf("path=%q", r.URL.Path)
+					}
+				}))
+				t.Cleanup(server.Close)
+				return adapterForServer(server)
+			},
+		},
+		{
+			name: "transport failure",
+			adapter: func(t *testing.T) (*Adapter, *fixedHostTransport) {
+				t.Helper()
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path != "/search.json" {
+						t.Fatalf("path=%q", r.URL.Path)
+					}
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = io.WriteString(w, searchFixture)
+				}))
+				t.Cleanup(server.Close)
+				target, _ := url.Parse(server.URL)
+				transport := &fixedHostTransport{target: target, base: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+					if request.URL.Path == "/authors/OL22098A.json" {
+						return nil, errors.New("author endpoint transport failure")
+					}
+					return http.DefaultTransport.RoundTrip(request)
+				})}
+				return New(Config{HTTPClient: &http.Client{Transport: transport}}), transport
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			adapter, transport := test.adapter(t)
+			records, err := adapter.Lookup(context.Background(), exactQuery())
+			if err != nil || len(records) != 1 {
+				t.Fatalf("records=%#v err=%v", records, err)
+			}
+			assertSearchOnlyRecord(t, records[0], searchFixture, "Lewis Carroll", "OL22098A", 1865)
+			if requests := transport.requests(); len(requests) != 2 || requests[1].Path != "/authors/OL22098A.json" {
+				t.Fatalf("requests=%+v", requests)
+			}
+		})
+	}
+}
+
+func TestLookupRejectsInvalidSearchCandidatesBeforeAuthorEnrichment(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		fixture string
+	}{
+		{
+			name:    "exact title with wrong author",
+			fixture: strings.Replace(searchFixture, "Lewis Carroll", "Other Author", 1),
+		},
+		{
+			name:    "invalid work key",
+			fixture: strings.Replace(searchFixture, "/works/OL138052W", "/books/OL138052W", 1),
+		},
+		{
+			name:    "invalid author key",
+			fixture: strings.Replace(searchFixture, "OL22098A", "not-an-open-library-author", 1),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				if request.URL.Path != "/search.json" {
+					t.Fatalf("unexpected author enrichment request: %q", request.URL.Path)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, test.fixture)
+			}))
+			defer server.Close()
+			adapter, transport := adapterForServer(server)
+			records, err := adapter.Lookup(context.Background(), exactQuery())
+			if err != nil || len(records) != 0 {
+				t.Fatalf("records=%#v err=%v", records, err)
+			}
+			if requests := transport.requests(); len(requests) != 1 || requests[0].Path != "/search.json" {
+				t.Fatalf("requests=%+v", requests)
+			}
+		})
+	}
+}
+
+func TestLookupRetainsSearchOnlyRecordWithoutSubjects(t *testing.T) {
+	fixture := strings.Replace(searchFixture, `,"subject":["Fiction","Children's literature"]`, "", 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/search.json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, fixture)
+		case "/authors/OL22098A.json":
+			w.WriteHeader(http.StatusServiceUnavailable)
+		default:
+			t.Fatalf("path=%q", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+	adapter, transport := adapterForServer(server)
+	records, err := adapter.Lookup(context.Background(), exactQuery())
+	if err != nil || len(records) != 1 {
+		t.Fatalf("records=%#v err=%v", records, err)
+	}
+	assertSearchOnlyRecord(t, records[0], fixture, "Lewis Carroll", "OL22098A", 1865)
+	if len(records[0].Subjects) != 0 {
+		t.Fatalf("subjects=%#v", records[0].Subjects)
+	}
+	if requests := transport.requests(); len(requests) != 2 || requests[1].Path != "/authors/OL22098A.json" {
+		t.Fatalf("requests=%+v", requests)
+	}
+}
+
+func TestLookupRejectsInvalidOrConflictingAuthorEnrichment(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		body string
+	}{
+		{name: "malformed author payload", body: "{"},
+		{name: "conflicting author identity", body: `{"name":"Other Author","death_date":"1900"}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/search.json":
+					_, _ = io.WriteString(w, searchFixture)
+				case "/authors/OL22098A.json":
+					_, _ = io.WriteString(w, test.body)
+				default:
+					t.Fatalf("path=%q", r.URL.Path)
+				}
+			}))
+			defer server.Close()
+			adapter, _ := adapterForServer(server)
+			records, err := adapter.Lookup(context.Background(), exactQuery())
+			if !errors.Is(err, ErrInvalid) || len(records) != 0 {
+				t.Fatalf("records=%#v err=%v", records, err)
+			}
+		})
+	}
+}
+
+func TestLookupAcceptsCanonicalEquivalentSearchNameWhenAuthorUnavailable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/search.json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, wutheringSearchFixture)
+		case "/authors/OL24529A.json":
+			w.WriteHeader(http.StatusServiceUnavailable)
+		default:
+			t.Fatalf("path=%q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	adapter, _ := adapterForServer(server)
+	records, err := adapter.Lookup(context.Background(), wutheringQuery())
+	if err != nil || len(records) != 1 {
+		t.Fatalf("records=%#v err=%v", records, err)
+	}
+	assertSearchOnlyRecord(t, records[0], wutheringSearchFixture, "Emily Brontë", "OL24529A", 1846)
+}
+
+func assertSearchOnlyRecord(t *testing.T, record evidenceresolver.BibliographicRecord, searchBody, name, authorID string, publication int) {
+	t.Helper()
+	if record.Source != evidenceresolver.SourceOpenLibrary || record.SourceName != searchSourceName || record.Digest != digest([]byte(searchBody)) || record.WorkID != record.Identifier || record.FirstPublicationYear == nil || *record.FirstPublicationYear != publication || len(record.Authors) != 1 || record.Authors[0].Name != name || len(record.Authors[0].Identifiers) != 1 || record.Authors[0].Identifiers[0] != (evidenceresolver.Identifier{Source: evidenceresolver.SourceOpenLibrary, Value: authorID}) || record.Authors[0].DeathYear != nil || len(record.Contributors) != 1 || record.Contributors[0].Name != name || record.Contributors[0].Role != "author" || len(record.OriginalLanguages) != 0 || len(record.MaterialTypes) != 0 {
+		t.Fatalf("record=%#v", record)
 	}
 }
 

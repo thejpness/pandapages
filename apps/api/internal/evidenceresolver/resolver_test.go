@@ -242,6 +242,45 @@ func TestResolveConflictingAndMissingPublicationCannotPass(t *testing.T) {
 	}
 }
 
+func TestResolveWutheringHeightsSearchOnlyOpenLibraryEvidenceKeepsPublicationConflict(t *testing.T) {
+	death := 1848
+	bnfPublication, openLibraryPublication := 1847, 1846
+	bnfRecord := record(SourceBibliothequeNationaleDeFrance, "ark:/12148/cb11926193t", "Brontë, Emily", &death, &bnfPublication)
+	bnfRecord.Title = "Wuthering Heights"
+	bnfRecord.OriginalLanguages = []string{"eng"}
+	bnfRecord.Subjects = []string{"Littératures"}
+	openLibraryRecord := record(SourceOpenLibrary, "/works/OL21177W", "Emily Brontë", nil, &openLibraryPublication)
+	openLibraryRecord.SourceName = "Open Library search"
+	openLibraryRecord.Title = "Wuthering Heights"
+	openLibraryRecord.Languages = []string{"eng"}
+	openLibraryRecord.Subjects = []string{"Fiction", "Gothic fiction"}
+	if openLibraryRecord.Authors[0].DeathYear != nil {
+		t.Fatalf("search-only Open Library author death=%v", *openLibraryRecord.Authors[0].DeathYear)
+	}
+
+	exact := exactContext("768", "Wuthering Heights", []copyrighteligibility.ContributorEvidence{{Name: "Emily Brontë", Role: "author", DeathYear: &death}})
+	resolution, err := newResolver(t, bnfRecord, openLibraryRecord).Resolve(context.Background(), exact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolution.WorkCategory.Status != ResolutionEstablished || resolution.Authorship.Status != ResolutionEstablished || resolution.Authorship.Value != copyrighteligibility.AuthorshipSingleKnown || resolution.Author.Status != ResolutionEstablished || resolution.Author.DeathYear != death || resolution.FirstPublication.Status != ResolutionConflicting || resolution.Translation.State != copyrighteligibility.FactNoneConfirmed || resolution.AdditionalTextual.State != copyrighteligibility.FactNoneConfirmed || resolution.UnpublishedAtEnd1988.State != copyrighteligibility.FactUnknown {
+		t.Fatalf("resolution=%#v", resolution)
+	}
+
+	assessment := copyrighteligibility.Evaluate(copyrighteligibility.Input{
+		EvaluationDate: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		US: copyrighteligibility.USProviderEvidence{
+			OPDSRights:   copyrighteligibility.ProviderRightsPublicDomain,
+			RDFRights:    copyrighteligibility.ProviderRightsPublicDomain,
+			HeaderRights: copyrighteligibility.SourceHeaderRightsNoClassification,
+		},
+		UK: ToUKEvidence(resolution),
+	})
+	if assessment.US.Status != copyrighteligibility.JurisdictionEligible || assessment.UK.Status != copyrighteligibility.JurisdictionIndeterminate || assessment.UK.Reason != copyrighteligibility.ReasonUKUnpublishedHistoryUnsupported || assessment.Overall != copyrighteligibility.OverallBlocked {
+		t.Fatalf("assessment=%#v", assessment)
+	}
+}
+
 func TestResolveFirstPublicationRequiresAuthoritativeIndependentEvidence(t *testing.T) {
 	death := 1898
 	publication := 1865

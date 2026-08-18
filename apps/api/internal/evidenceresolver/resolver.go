@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode"
 
 	"pandapages/api/internal/copyrighteligibility"
 )
@@ -244,7 +243,7 @@ func matchingExternalAuthors(provider Person, records []BibliographicRecord) ([]
 			continue
 		}
 		author := record.Authors[0]
-		if normalisedName(author.Name) != normalisedName(provider.Name) {
+		if NormalisedPersonName(author.Name) != NormalisedPersonName(provider.Name) {
 			return nil, true
 		}
 		if len(author.Identifiers) == 0 || author.DeathYear == nil {
@@ -552,19 +551,6 @@ func recordReferences(records []BibliographicRecord, fact string) []EvidenceItem
 
 func personReferences(records []BibliographicRecord, fact string) []EvidenceItem {
 	return recordReferences(records, fact)
-}
-
-func normalisedName(value string) string {
-	if parts := strings.Split(value, ","); len(parts) == 2 {
-		value = strings.TrimSpace(parts[1]) + " " + strings.TrimSpace(parts[0])
-	}
-	var result strings.Builder
-	for _, r := range strings.ToLower(value) {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			result.WriteRune(r)
-		}
-	}
-	return result.String()
 }
 
 func canonicalRecord(record BibliographicRecord) BibliographicRecord {
