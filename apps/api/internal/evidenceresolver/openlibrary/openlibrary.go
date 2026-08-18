@@ -18,7 +18,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"pandapages/api/internal/evidenceresolver"
@@ -40,6 +39,11 @@ var (
 var (
 	ErrUnavailable = errors.New("open library evidence unavailable")
 	ErrInvalid     = errors.New("open library evidence invalid")
+)
+
+const (
+	searchSourceName = "Open Library search"
+	fullSourceName   = "Open Library"
 )
 
 type Config struct {
@@ -87,12 +91,16 @@ func (a *Adapter) Lookup(ctx context.Context, query evidenceresolver.Query) ([]e
 	if !ok {
 		return nil, nil
 	}
-	if len(document.AuthorKeys) != 1 || !authorKeyPattern.MatchString(document.AuthorKeys[0]) || len(document.AuthorNames) != 1 {
+	baseline, ok := searchRecord(document, body)
+	if !ok {
 		return nil, nil
 	}
-	authorKey := document.AuthorKeys[0]
+	authorKey := baseline.Authors[0].Identifiers[0].Value
 	authorBody, err := a.fetch(ctx, authorURL(authorKey))
 	if err != nil {
+		if errors.Is(err, ErrUnavailable) {
+			return []evidenceresolver.BibliographicRecord{baseline}, nil
+		}
 		return nil, err
 	}
 	var author authorResponse
@@ -100,26 +108,15 @@ func (a *Adapter) Lookup(ctx context.Context, query evidenceresolver.Query) ([]e
 		return nil, ErrInvalid
 	}
 	deathYear, _ := parseYear(author.DeathDate)
-	if canonicalName(author.Name) != canonicalName(document.AuthorNames[0]) {
-		return nil, nil
+	if evidenceresolver.NormalisedPersonName(author.Name) != evidenceresolver.NormalisedPersonName(baseline.Authors[0].Name) {
+		return nil, ErrInvalid
 	}
-	firstPublication, _ := parseYear(document.FirstPublishYear)
-	authorIdentity := evidenceresolver.Identifier{Source: evidenceresolver.SourceOpenLibrary, Value: authorKey}
-	record := evidenceresolver.BibliographicRecord{
-		Source:               evidenceresolver.SourceOpenLibrary,
-		SourceName:           "Open Library",
-		Identifier:           document.Key,
-		Locator:              "https://openlibrary.org" + document.Key,
-		Digest:               digest(append(body, authorBody...)),
-		Title:                document.Title,
-		WorkID:               document.Key,
-		Authors:              []evidenceresolver.Person{{Name: author.Name, Identifiers: []evidenceresolver.Identifier{authorIdentity}, DeathYear: deathYear}},
-		Contributors:         []evidenceresolver.Contributor{{Name: author.Name, Role: "author", Identifiers: []evidenceresolver.Identifier{authorIdentity}}},
-		FirstPublicationYear: firstPublication,
-		Languages:            append([]string(nil), document.Languages...),
-		Subjects:             append([]string(nil), document.Subjects...),
-	}
-	return []evidenceresolver.BibliographicRecord{record}, nil
+	baseline.SourceName = fullSourceName
+	baseline.Digest = digest(append(body, authorBody...))
+	baseline.Authors[0].Name = author.Name
+	baseline.Authors[0].DeathYear = deathYear
+	baseline.Contributors[0].Name = author.Name
+	return []evidenceresolver.BibliographicRecord{baseline}, nil
 }
 
 type searchResponse struct {
@@ -143,11 +140,34 @@ type authorResponse struct {
 
 func exactDocument(documents []searchDocument, query evidenceresolver.Query) (searchDocument, bool) {
 	for _, document := range documents {
-		if workKeyPattern.MatchString(document.Key) && evidenceresolver.NormalisedTitle(document.Title) == evidenceresolver.NormalisedTitle(query.Title) && len(document.AuthorNames) == 1 && canonicalName(document.AuthorNames[0]) == canonicalName(query.Authors[0].Name) {
+		if workKeyPattern.MatchString(document.Key) && evidenceresolver.NormalisedTitle(document.Title) == evidenceresolver.NormalisedTitle(query.Title) && len(document.AuthorNames) == 1 && evidenceresolver.NormalisedPersonName(document.AuthorNames[0]) == evidenceresolver.NormalisedPersonName(query.Authors[0].Name) {
 			return document, true
 		}
 	}
 	return searchDocument{}, false
+}
+
+func searchRecord(document searchDocument, body []byte) (evidenceresolver.BibliographicRecord, bool) {
+	if len(document.AuthorNames) != 1 || len(document.AuthorKeys) != 1 || !authorKeyPattern.MatchString(document.AuthorKeys[0]) {
+		return evidenceresolver.BibliographicRecord{}, false
+	}
+	firstPublication, _ := parseYear(document.FirstPublishYear)
+	authorIdentity := evidenceresolver.Identifier{Source: evidenceresolver.SourceOpenLibrary, Value: document.AuthorKeys[0]}
+	author := evidenceresolver.Person{Name: document.AuthorNames[0], Identifiers: []evidenceresolver.Identifier{authorIdentity}}
+	return evidenceresolver.BibliographicRecord{
+		Source:               evidenceresolver.SourceOpenLibrary,
+		SourceName:           searchSourceName,
+		Identifier:           document.Key,
+		Locator:              "https://openlibrary.org" + document.Key,
+		Digest:               digest(body),
+		Title:                document.Title,
+		WorkID:               document.Key,
+		Authors:              []evidenceresolver.Person{author},
+		Contributors:         []evidenceresolver.Contributor{{Name: author.Name, Role: "author", Identifiers: author.Identifiers}},
+		FirstPublicationYear: firstPublication,
+		Languages:            append([]string(nil), document.Languages...),
+		Subjects:             append([]string(nil), document.Subjects...),
+	}, true
 }
 
 func validQuery(query evidenceresolver.Query) bool {
@@ -247,19 +267,6 @@ func configuredUserAgent(contact string) string {
 		return productUserAgent
 	}
 	return productUserAgent + " (" + contact + ")"
-}
-
-func canonicalName(value string) string {
-	if parts := strings.Split(value, ","); len(parts) == 2 {
-		value = strings.TrimSpace(parts[1]) + " " + strings.TrimSpace(parts[0])
-	}
-	var result strings.Builder
-	for _, r := range strings.ToLower(value) {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			result.WriteRune(r)
-		}
-	}
-	return result.String()
 }
 
 func digest(value []byte) string {

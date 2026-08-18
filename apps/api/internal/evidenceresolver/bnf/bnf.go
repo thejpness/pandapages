@@ -174,7 +174,7 @@ func exactRecord(bindings []binding, query evidenceresolver.Query, body []byte) 
 
 	matching := make([]*workCandidate, 0, 1)
 	for _, candidate := range candidates {
-		if candidate.invalid || evidenceresolver.NormalisedTitle(candidate.title) != evidenceresolver.NormalisedTitle(query.Title) || canonicalName(candidate.creator) != canonicalName(query.Authors[0].Name) {
+		if candidate.invalid || evidenceresolver.NormalisedTitle(candidate.title) != evidenceresolver.NormalisedTitle(query.Title) || evidenceresolver.NormalisedPersonName(candidate.creator) != evidenceresolver.NormalisedPersonName(query.Authors[0].Name) {
 			continue
 		}
 		if _, _, ok := authorityIdentifier(candidate.workURI); !ok {
@@ -356,19 +356,6 @@ func authorityIdentifier(raw string) (string, string, bool) {
 	}
 	identifier := strings.TrimPrefix(value.Path, "/")
 	return identifier, "https://" + host + value.Path, true
-}
-
-func canonicalName(value string) string {
-	if parts := strings.Split(value, ","); len(parts) == 2 {
-		value = strings.TrimSpace(parts[1]) + " " + strings.TrimSpace(parts[0])
-	}
-	var result strings.Builder
-	for _, r := range strings.ToLower(value) {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			result.WriteRune(r)
-		}
-	}
-	return result.String()
 }
 
 func sortedKeys(values map[string]struct{}) []string {

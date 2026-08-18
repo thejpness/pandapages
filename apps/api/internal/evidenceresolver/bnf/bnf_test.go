@@ -244,6 +244,23 @@ func TestExactRecordRejectsMalformedOrConflictingAuthorityDeath(t *testing.T) {
 	})
 }
 
+func TestExactRecordAcceptsCanonicalEquivalentAuthorName(t *testing.T) {
+	var response selectResponse
+	if err := json.Unmarshal([]byte(aliceFixture), &response); err != nil {
+		t.Fatal(err)
+	}
+	bindings := append([]binding(nil), response.Results.Bindings...)
+	bindings[0].Name.Value = "Brontë, Emily"
+	query := evidenceresolver.Query{
+		Title:   "Alice's Adventures in Wonderland",
+		Authors: []evidenceresolver.Person{{Name: "Emily Brontë"}},
+	}
+	record, ok := exactRecord(bindings, query, []byte("fixture"))
+	if !ok || len(record.Authors) != 1 || record.Authors[0].Name != "Brontë, Emily" {
+		t.Fatalf("record=%#v ok=%v", record, ok)
+	}
+}
+
 func TestLookupRejectsTwoAuthorQueryBeforeNetwork(t *testing.T) {
 	calls := 0
 	adapter := New(Config{HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
