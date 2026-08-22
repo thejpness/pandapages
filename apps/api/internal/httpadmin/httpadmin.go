@@ -2,6 +2,7 @@ package httpadmin
 
 import (
 	"bytes"
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -16,6 +17,7 @@ import (
 	"pandapages/api/internal/appidentity"
 	"pandapages/api/internal/copyrighteligibility"
 	"pandapages/api/internal/evidenceresolver"
+	"pandapages/api/internal/httpbearer"
 	"pandapages/api/internal/model"
 	"pandapages/api/internal/sourceeligibility"
 	"pandapages/api/internal/sourceprovider"
@@ -87,13 +89,15 @@ func New(cfg Config, store Store) http.Handler {
 				return
 			}
 
-			next(w, r)
+			next(w, r.WithContext(context.WithValue(r.Context(), adminAccountContextKey{}, account)))
 		}
 	}
 
 	mux.HandleFunc("POST /api/v1/admin/source-versions/{sourceVersionID}/generate", withAdmin(storyGenerationHandler(cfg.StoryGeneration)))
 	mux.HandleFunc("GET /api/v1/admin/story-orchestration-runs/{runID}", withAdmin(storyOrchestrationRunHandler(cfg.StoryOrchestrationRuns)))
 	mux.HandleFunc("GET /api/v1/admin/source-versions/{sourceVersionID}/orchestration-runs", withAdmin(storyOrchestrationRunHistoryHandler(cfg.StoryOrchestrationRunHistory)))
+	mux.HandleFunc("GET /api/v1/admin/story-orchestration-runs/{runID}/editorial-reviews", withAdmin(storyOrchestrationEditorialReviewsHandler(cfg.StoryOrchestrationEditorialReviews)))
+	mux.HandleFunc("POST /api/v1/admin/story-orchestration-runs/{runID}/editorial-reviews", withAdmin(storyOrchestrationEditorialReviewsHandler(cfg.StoryOrchestrationEditorialReviews)))
 
 	// POST /api/v1/admin/preview
 	mux.HandleFunc("POST /api/v1/admin/preview", withAdmin(func(w http.ResponseWriter, r *http.Request) {
@@ -530,6 +534,23 @@ func New(cfg Config, store Store) http.Handler {
 
 	return h
 
+}
+
+type adminAccountContextKey struct{}
+
+func adminAccountFromRequest(request *http.Request) (httpbearer.AccountContext, bool) {
+	account, ok := request.Context().Value(adminAccountContextKey{}).(httpbearer.AccountContext)
+	if !ok || account.Role != appidentity.RoleOwner {
+		return httpbearer.AccountContext{}, false
+	}
+	principalID, principalOK := httpbearer.CanonicalUUID(account.PrincipalID)
+	accountID, accountOK := httpbearer.CanonicalUUID(account.AccountID)
+	if !principalOK || !accountOK {
+		return httpbearer.AccountContext{}, false
+	}
+	account.PrincipalID = principalID
+	account.AccountID = accountID
+	return account, true
 }
 
 /* ------------------------------ helpers ------------------------------ */

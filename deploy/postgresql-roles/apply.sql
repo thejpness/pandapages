@@ -319,6 +319,7 @@ WITH runtime_table(name) AS (
     ('story_sections'),
     ('story_source_versions'),
     ('story_orchestration_runs'),
+    ('story_orchestration_run_editorial_reviews'),
     ('story_sources'),
     ('story_segments'),
     ('story_versions')
@@ -336,10 +337,10 @@ WHERE namespace.nspname = 'public'
   AND class.relkind IN ('r', 'p')
 \gexec
 
--- Release history and acquisition evidence are immutable at the runtime
--- privilege boundary. Review state deliberately lives in its own table.
+-- Release history, acquisition evidence, and editorial review events are
+-- immutable at the runtime privilege boundary.
 WITH immutable_runtime_table(name) AS (
-  VALUES ('story_releases'), ('story_release_editions'), ('story_source_versions'), ('story_orchestration_runs'), ('source_acquisitions'), ('source_acquisition_eligibility_assessments')
+  VALUES ('story_releases'), ('story_release_editions'), ('story_source_versions'), ('story_orchestration_runs'), ('story_orchestration_run_editorial_reviews'), ('source_acquisitions'), ('source_acquisition_eligibility_assessments')
 )
 SELECT format(
   'REVOKE UPDATE, DELETE ON TABLE public.%I FROM %I',

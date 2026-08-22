@@ -164,7 +164,7 @@ verify_policy
 
 version=$(psql_as "$migration_role" --tuples-only --no-align \
   --command="SELECT version_id FROM goose_db_version WHERE is_applied ORDER BY id DESC LIMIT 1;")
-[[ "$version" == 1 ]]
+[[ "$version" == 2 ]]
 
 role_state=$(docker exec "$postgres_container" \
   psql -X --username="$admin_user" --dbname="$database" --tuples-only --no-align \
@@ -178,6 +178,14 @@ identity=$(psql_as "$migration_role" --tuples-only --no-align \
 psql_as "$application_role" --command="
   INSERT INTO accounts (id, name)
   VALUES ('a1500000-0000-4000-8000-000000000001', 'Runtime household');
+  INSERT INTO principals (id, display_name)
+  VALUES ('a1500000-0000-4000-8000-000000000041', 'Runtime editorial reviewer');
+  INSERT INTO account_memberships (principal_id, account_id, role)
+  VALUES (
+    'a1500000-0000-4000-8000-000000000041',
+    'a1500000-0000-4000-8000-000000000001',
+    'owner'
+  );
   INSERT INTO profiles (id, account_id, name, reading_level)
   VALUES (
     'a1500000-0000-4000-8000-000000000011',
@@ -219,6 +227,55 @@ psql_as "$application_role" --command="
   );
 " >/dev/null
 
+psql_as "$migration_role" --command="
+  INSERT INTO stories (id, visibility, owner_account_id, slug, title)
+  VALUES (
+    'a1500000-0000-4000-8000-000000000051',
+    'public',
+    NULL,
+    'runtime-editorial-review-story',
+    'Runtime editorial review story'
+  );
+  INSERT INTO story_sources (id, story_id)
+  VALUES (
+    'a1500000-0000-4000-8000-000000000052',
+    'a1500000-0000-4000-8000-000000000051'
+  );
+  INSERT INTO story_source_versions (
+    id, source_id, story_id, version, title, language, source_text, snapshot_hash
+  ) VALUES (
+    'a1500000-0000-4000-8000-000000000053',
+    'a1500000-0000-4000-8000-000000000052',
+    'a1500000-0000-4000-8000-000000000051',
+    1,
+    'Runtime editorial review source',
+    'en-GB',
+    'Runtime editorial review source text.',
+    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  );
+  INSERT INTO story_orchestration_runs (
+    id, source_version_id, source_sha256, semantic_result, artifacts
+  ) VALUES (
+    'a1500000-0000-4000-8000-000000000054',
+    'a1500000-0000-4000-8000-000000000053',
+    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'pass',
+    '{\"analysisArtifact\":{},\"editions\":[{},{},{},{}],\"editionAssessments\":[{},{},{},{}],\"bundleAssessment\":{}}'::jsonb
+  );
+" >/dev/null
+
+psql_as "$application_role" --command="
+  INSERT INTO story_orchestration_run_editorial_reviews (
+    run_id, decision, reviewer_principal_id, reviewer_account_id
+  ) VALUES (
+    'a1500000-0000-4000-8000-000000000054',
+    'approved',
+    'a1500000-0000-4000-8000-000000000041',
+    'a1500000-0000-4000-8000-000000000001'
+  );
+  SELECT count(*) FROM story_orchestration_run_editorial_reviews;
+" >/dev/null
+
 # The runtime role can use the mutable quality-review row as a transaction
 # mutex while moving the review through its ordinary lifecycle.
 psql_as "$application_role" --command="
@@ -242,6 +299,21 @@ expect_denied \
   'application acquisition mutation' \
   "$application_role" \
   "UPDATE source_acquisitions SET title='Mutation denied' WHERE id='a1500000-0000-4000-8000-000000000031';"
+
+expect_denied \
+  'application orchestration run mutation' \
+  "$application_role" \
+  "UPDATE story_orchestration_runs SET semantic_result='fail' WHERE id='a1500000-0000-4000-8000-000000000054';"
+
+expect_denied \
+  'application editorial review mutation' \
+  "$application_role" \
+  "UPDATE story_orchestration_run_editorial_reviews SET decision='rejected' WHERE run_id='a1500000-0000-4000-8000-000000000054';"
+
+expect_denied \
+  'application editorial review deletion' \
+  "$application_role" \
+  "DELETE FROM story_orchestration_run_editorial_reviews WHERE run_id='a1500000-0000-4000-8000-000000000054';"
 
 expect_denied \
   'application immutable acquisition lock' \

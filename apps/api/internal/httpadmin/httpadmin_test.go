@@ -17,6 +17,7 @@ import (
 const ownerAccount = "11111111-1111-4111-8111-111111111111"
 const adultAccount = "22222222-2222-4222-8222-222222222222"
 const secondOwnerAccount = "33333333-3333-4333-8333-333333333333"
+const ownerPrincipal = "44444444-4444-4444-8444-444444444444"
 
 type adminVerifier struct{}
 
@@ -28,6 +29,7 @@ func (adminVerifier) Verify(_ context.Context, token string) (appidentity.Extern
 }
 
 type adminStore struct {
+	principalID                      string
 	memberships                      []appidentity.Membership
 	listCalls                        int
 	editionSourceCalls               int
@@ -58,7 +60,11 @@ type adminStore struct {
 }
 
 func (s *adminStore) Identity(context.Context, appidentity.ExternalIdentity) (appidentity.Snapshot, error) {
-	return appidentity.Snapshot{PrincipalID: "principal", Memberships: s.memberships}, nil
+	principalID := s.principalID
+	if principalID == "" {
+		principalID = ownerPrincipal
+	}
+	return appidentity.Snapshot{PrincipalID: principalID, Memberships: s.memberships}, nil
 }
 func (*adminStore) AdminDraftUpsert(model.AdminDraftUpsertRequest) (model.AdminDraftUpsertResponse, error) {
 	return model.AdminDraftUpsertResponse{}, nil
