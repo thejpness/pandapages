@@ -1054,6 +1054,122 @@ export type AdminStoryStatusResponse = {
   releaseCount: number;
 };
 
+// These are the four derived editions defined by the generation contract.
+// Classic is canonical source content, not an orchestration generation target.
+export const adminGeneratedEditionKeys = [
+  "confident-readers",
+  "growing-readers",
+  "story-explorers",
+  "little-listeners",
+] as const;
+export type AdminGeneratedEditionKey = (typeof adminGeneratedEditionKeys)[number];
+export type AdminOrchestrationSemanticResult = "pass" | "needs_review" | "fail";
+export type AdminOrchestrationUsage = {
+  InputTokens: number; CachedTokens: number; OutputTokens: number;
+  ReasoningTokens: number; TotalTokens: number;
+};
+export type AdminOrchestrationStructuralFinding = {
+  code: string; severity: "blocking" | "review"; message: string;
+};
+export type AdminOrchestrationStructuralValidation = {
+  ContractVersion: string; EditionKey: AdminGeneratedEditionKey;
+  ContentSHA256: string; Findings: AdminOrchestrationStructuralFinding[];
+};
+export type AdminStoryAnalysisCharacter = {
+  name: string; role: string; explicitMotivations: string[]; flawsOrAmbiguities: string[];
+};
+export type AdminStoryAnalysisRelationship = {
+  parties: string[]; nature: string; powerDynamics: string;
+};
+export type AdminStoryAnalysisBeat = { summary: string };
+export type AdminStoryAnalysisCausalDependency = {
+  cause: string; effect: string; whyItMatters: string;
+};
+export type AdminStoryAnalysisIconicMaterial = {
+  kind: string; textOrDescription: string; importance: string;
+};
+export type AdminStoryAnalysisIntenseMaterial = {
+  kind: string; description: string; narrativeFunction: string;
+};
+export type AdminStoryAnalysisAdaptationRisk = {
+  kind: string; description: string; whatMustBePreserved: string;
+};
+export type AdminStoryOrchestrationAnalysis = {
+  centralPlot: string;
+  characters: AdminStoryAnalysisCharacter[];
+  relationships: AdminStoryAnalysisRelationship[];
+  coreStoryBeats: AdminStoryAnalysisBeat[];
+  developmentBeats: AdminStoryAnalysisBeat[];
+  enrichmentMaterial: AdminStoryAnalysisBeat[];
+  causalDependencies: AdminStoryAnalysisCausalDependency[];
+  iconicMaterial: AdminStoryAnalysisIconicMaterial[];
+  intenseMaterial: AdminStoryAnalysisIntenseMaterial[];
+  adaptationRisks: AdminStoryAnalysisAdaptationRisk[];
+};
+export type AdminStoryAnalysisArtifact = {
+  SpecificationVersion: string; PromptVersion: string; RequestedModel: string;
+  ReturnedModel: string; ReasoningEffort: string; SourceSHA256: string;
+  AnalysisSHA256: string; Analysis: AdminStoryOrchestrationAnalysis;
+  ResponseID: string; Usage: AdminOrchestrationUsage;
+};
+export type AdminGeneratedEditionArtifact = {
+  SpecificationVersion: string; PromptVersion: string; EditionKey: AdminGeneratedEditionKey;
+  RequestedModel: string; ReturnedModel: string; ReasoningEffort: string;
+  SourceSHA256: string; AnalysisSHA256: string; ContentSHA256: string;
+  Markdown: string; ResponseID: string; Usage: AdminOrchestrationUsage;
+  StructuralValidation: AdminOrchestrationStructuralValidation;
+};
+export type AdminSemanticEvidence = {
+  location: "canonical_source" | "story_analysis" | "generated_edition";
+  editionKey: AdminGeneratedEditionKey | null;
+  excerpt: string; explanation: string;
+};
+export type AdminSemanticFinding = {
+  code: string; severity: "blocking" | "review"; message: string;
+  evidence: AdminSemanticEvidence[];
+};
+export type AdminSemanticAssessment = {
+  validationVersion: string; specificationVersion: string;
+  assessmentScope: "edition" | "bundle";
+  editionKey: AdminGeneratedEditionKey | null;
+  editionKeys: AdminGeneratedEditionKey[];
+  result: AdminOrchestrationSemanticResult;
+  findings: AdminSemanticFinding[];
+};
+export type AdminOrchestrationEditionBinding = {
+  EditionKey: AdminGeneratedEditionKey; ContentSHA256: string;
+};
+export type AdminSemanticAssessmentArtifact = {
+  ValidationVersion: string; SpecificationVersion: string; PromptVersion: string;
+  AssessmentScope: "edition" | "bundle";
+  EditionKey: AdminGeneratedEditionKey | null;
+  EditionKeys: AdminGeneratedEditionKey[];
+  RequestedModel: string; ReturnedModel: string; ReasoningEffort: string;
+  SourceSHA256: string; AnalysisSHA256: string;
+  EditionBindings: AdminOrchestrationEditionBinding[];
+  AssessmentSHA256: string; Assessment: AdminSemanticAssessment;
+  ResponseID: string; Usage: AdminOrchestrationUsage;
+};
+export type AdminStoryOrchestrationRunSummary = {
+  id: string; sourceVersionId: string; sourceSha256: string;
+  semanticResult: AdminOrchestrationSemanticResult; createdAt: string;
+};
+export type AdminStoryOrchestrationRunsListResponse = {
+  items: AdminStoryOrchestrationRunSummary[];
+};
+export type AdminStoryOrchestrationRun = {
+  id: string; sourceVersionId: string; sourceSha256: string;
+  semanticResult: AdminOrchestrationSemanticResult; createdAt: string;
+  analysisArtifact: AdminStoryAnalysisArtifact;
+  editions: AdminGeneratedEditionArtifact[];
+  editionAssessments: AdminSemanticAssessmentArtifact[];
+  bundleAssessment: AdminSemanticAssessmentArtifact;
+};
+export type AdminSourceGenerationResponse = {
+  id: string; sourceVersionId: string;
+  semanticResult: AdminOrchestrationSemanticResult; createdAt: string;
+};
+
 export type AdminSourceProviderID = "project-gutenberg";
 export type AdminSourceProviderContributor = { name: string; role: string };
 export type AdminSourceProviderRepresentation = {
@@ -1741,6 +1857,404 @@ export function parseAdminSourceUpsertResponse(value: unknown): AdminSourceUpser
   const record = adminRecord(value); if (!isPositiveSafeInteger(record.version) || typeof record.outcome !== "string" || !adminSourceOutcomes.has(record.outcome as AdminSourceOutcome)) throw new Error("Invalid admin response");
   return { slug: parseAdminSlug(record.slug), versionId: parseAdminUUID(record.versionId), version: record.version, outcome: record.outcome as AdminSourceOutcome };
 }
+
+function parseAdminGeneratedEditionKey(value: unknown): AdminGeneratedEditionKey {
+  if (typeof value !== "string" || !(adminGeneratedEditionKeys as readonly string[]).includes(value)) {
+    throw new Error("Invalid admin response");
+  }
+  return value as AdminGeneratedEditionKey;
+}
+
+function parseAdminOrchestrationResult(value: unknown): AdminOrchestrationSemanticResult {
+  if (value !== "pass" && value !== "needs_review" && value !== "fail") {
+    throw new Error("Invalid admin response");
+  }
+  return value;
+}
+
+function parseAdminOrchestrationScope(value: unknown): "edition" | "bundle" {
+  if (value !== "edition" && value !== "bundle") throw new Error("Invalid admin response");
+  return value;
+}
+
+function parseAdminOrchestrationSeverity(value: unknown): "blocking" | "review" {
+  if (value !== "blocking" && value !== "review") throw new Error("Invalid admin response");
+  return value;
+}
+
+function parseAdminOrchestrationStringList(value: unknown): string[] {
+  if (value === null) return [];
+  if (!Array.isArray(value)) throw new Error("Invalid admin response");
+  return value.map((item) => requiredAdminString({ item }, "item"));
+}
+
+function parseAdminOrchestrationArray<T>(
+  value: unknown,
+  parse: (item: unknown) => T,
+): T[] {
+  if (value === null) return [];
+  if (!Array.isArray(value)) throw new Error("Invalid admin response");
+  return value.map(parse);
+}
+
+function parseAdminOrchestrationUsage(value: unknown): AdminOrchestrationUsage {
+  const record = adminRecord(value);
+  const tokenCount = (raw: unknown): number => {
+    if (!isNonNegativeInteger(raw)) throw new Error("Invalid admin response");
+    return raw;
+  };
+  return {
+    InputTokens: tokenCount(record.InputTokens),
+    CachedTokens: tokenCount(record.CachedTokens),
+    OutputTokens: tokenCount(record.OutputTokens),
+    ReasoningTokens: tokenCount(record.ReasoningTokens),
+    TotalTokens: tokenCount(record.TotalTokens),
+  };
+}
+
+function parseAdminOrchestrationFinding(value: unknown): AdminOrchestrationStructuralFinding {
+  const record = adminRecord(value);
+  return {
+    code: requiredAdminString(record, "code"),
+    severity: parseAdminOrchestrationSeverity(record.severity),
+    message: requiredAdminString(record, "message"),
+  };
+}
+
+function parseAdminOrchestrationStructuralValidation(value: unknown): AdminOrchestrationStructuralValidation {
+  const record = adminRecord(value);
+  return {
+    ContractVersion: requiredAdminString(record, "ContractVersion"),
+    EditionKey: parseAdminGeneratedEditionKey(record.EditionKey),
+    ContentSHA256: parseAdminSHA256(record.ContentSHA256),
+    Findings: parseAdminOrchestrationArray(record.Findings, parseAdminOrchestrationFinding),
+  };
+}
+
+function parseAdminStoryAnalysisCharacter(value: unknown): AdminStoryAnalysisCharacter {
+  const record = adminRecord(value);
+  return {
+    name: requiredAdminString(record, "name"),
+    role: requiredAdminString(record, "role"),
+    explicitMotivations: parseAdminOrchestrationStringList(record.explicitMotivations),
+    flawsOrAmbiguities: parseAdminOrchestrationStringList(record.flawsOrAmbiguities),
+  };
+}
+
+function parseAdminStoryAnalysisRelationship(value: unknown): AdminStoryAnalysisRelationship {
+  const record = adminRecord(value);
+  return {
+    parties: parseAdminOrchestrationStringList(record.parties),
+    nature: requiredAdminString(record, "nature"),
+    powerDynamics: requiredAdminString(record, "powerDynamics"),
+  };
+}
+
+function parseAdminStoryAnalysisBeat(value: unknown): AdminStoryAnalysisBeat {
+  const record = adminRecord(value);
+  return { summary: requiredAdminString(record, "summary") };
+}
+
+function parseAdminStoryAnalysisCausalDependency(value: unknown): AdminStoryAnalysisCausalDependency {
+  const record = adminRecord(value);
+  return {
+    cause: requiredAdminString(record, "cause"),
+    effect: requiredAdminString(record, "effect"),
+    whyItMatters: requiredAdminString(record, "whyItMatters"),
+  };
+}
+
+function parseAdminStoryAnalysisIconicMaterial(value: unknown): AdminStoryAnalysisIconicMaterial {
+  const record = adminRecord(value);
+  return {
+    kind: requiredAdminString(record, "kind"),
+    textOrDescription: requiredAdminString(record, "textOrDescription"),
+    importance: requiredAdminString(record, "importance"),
+  };
+}
+
+function parseAdminStoryAnalysisIntenseMaterial(value: unknown): AdminStoryAnalysisIntenseMaterial {
+  const record = adminRecord(value);
+  return {
+    kind: requiredAdminString(record, "kind"),
+    description: requiredAdminString(record, "description"),
+    narrativeFunction: requiredAdminString(record, "narrativeFunction"),
+  };
+}
+
+function parseAdminStoryAnalysisAdaptationRisk(value: unknown): AdminStoryAnalysisAdaptationRisk {
+  const record = adminRecord(value);
+  return {
+    kind: requiredAdminString(record, "kind"),
+    description: requiredAdminString(record, "description"),
+    whatMustBePreserved: requiredAdminString(record, "whatMustBePreserved"),
+  };
+}
+
+function parseAdminStoryOrchestrationAnalysis(value: unknown): AdminStoryOrchestrationAnalysis {
+  const record = adminRecord(value);
+  return {
+    centralPlot: requiredAdminString(record, "centralPlot"),
+    characters: parseAdminOrchestrationArray(record.characters, parseAdminStoryAnalysisCharacter),
+    relationships: parseAdminOrchestrationArray(record.relationships, parseAdminStoryAnalysisRelationship),
+    coreStoryBeats: parseAdminOrchestrationArray(record.coreStoryBeats, parseAdminStoryAnalysisBeat),
+    developmentBeats: parseAdminOrchestrationArray(record.developmentBeats, parseAdminStoryAnalysisBeat),
+    enrichmentMaterial: parseAdminOrchestrationArray(record.enrichmentMaterial, parseAdminStoryAnalysisBeat),
+    causalDependencies: parseAdminOrchestrationArray(record.causalDependencies, parseAdminStoryAnalysisCausalDependency),
+    iconicMaterial: parseAdminOrchestrationArray(record.iconicMaterial, parseAdminStoryAnalysisIconicMaterial),
+    intenseMaterial: parseAdminOrchestrationArray(record.intenseMaterial, parseAdminStoryAnalysisIntenseMaterial),
+    adaptationRisks: parseAdminOrchestrationArray(record.adaptationRisks, parseAdminStoryAnalysisAdaptationRisk),
+  };
+}
+
+function parseAdminStoryAnalysisArtifact(value: unknown): AdminStoryAnalysisArtifact {
+  const record = adminRecord(value);
+  return {
+    SpecificationVersion: requiredAdminString(record, "SpecificationVersion"),
+    PromptVersion: requiredAdminString(record, "PromptVersion"),
+    RequestedModel: requiredAdminString(record, "RequestedModel"),
+    ReturnedModel: requiredAdminString(record, "ReturnedModel"),
+    ReasoningEffort: requiredAdminString(record, "ReasoningEffort"),
+    SourceSHA256: parseAdminSHA256(record.SourceSHA256),
+    AnalysisSHA256: parseAdminSHA256(record.AnalysisSHA256),
+    Analysis: parseAdminStoryOrchestrationAnalysis(record.Analysis),
+    ResponseID: requiredAdminString(record, "ResponseID"),
+    Usage: parseAdminOrchestrationUsage(record.Usage),
+  };
+}
+
+function parseAdminGeneratedEditionArtifact(value: unknown): AdminGeneratedEditionArtifact {
+  const record = adminRecord(value, ["markdown"]);
+  if (typeof record.Markdown !== "string") throw new Error("Invalid admin response");
+  const artifact: AdminGeneratedEditionArtifact = {
+    SpecificationVersion: requiredAdminString(record, "SpecificationVersion"),
+    PromptVersion: requiredAdminString(record, "PromptVersion"),
+    EditionKey: parseAdminGeneratedEditionKey(record.EditionKey),
+    RequestedModel: requiredAdminString(record, "RequestedModel"),
+    ReturnedModel: requiredAdminString(record, "ReturnedModel"),
+    ReasoningEffort: requiredAdminString(record, "ReasoningEffort"),
+    SourceSHA256: parseAdminSHA256(record.SourceSHA256),
+    AnalysisSHA256: parseAdminSHA256(record.AnalysisSHA256),
+    ContentSHA256: parseAdminSHA256(record.ContentSHA256),
+    Markdown: record.Markdown,
+    ResponseID: requiredAdminString(record, "ResponseID"),
+    Usage: parseAdminOrchestrationUsage(record.Usage),
+    StructuralValidation: parseAdminOrchestrationStructuralValidation(record.StructuralValidation),
+  };
+  if (
+    artifact.StructuralValidation.EditionKey !== artifact.EditionKey ||
+    artifact.StructuralValidation.ContentSHA256 !== artifact.ContentSHA256
+  ) throw new Error("Invalid admin response");
+  return artifact;
+}
+
+function parseAdminNullableGeneratedEditionKey(record: Record<string, unknown>, key: string): AdminGeneratedEditionKey | null {
+  if (!(key in record) || record[key] === null) return null;
+  return parseAdminGeneratedEditionKey(record[key]);
+}
+
+function parseAdminGeneratedEditionKeys(value: unknown): AdminGeneratedEditionKey[] {
+  return parseAdminOrchestrationArray(value, parseAdminGeneratedEditionKey);
+}
+
+function assertAdminGeneratedEditionOrder(items: readonly { EditionKey: AdminGeneratedEditionKey }[]): void {
+  if (items.length !== adminGeneratedEditionKeys.length) throw new Error("Invalid admin response");
+  for (let index = 0; index < adminGeneratedEditionKeys.length; index += 1) {
+    if (items[index]?.EditionKey !== adminGeneratedEditionKeys[index]) throw new Error("Invalid admin response");
+  }
+}
+
+function assertAdminGeneratedEditionKeyOrder(keys: readonly AdminGeneratedEditionKey[]): void {
+  if (keys.length !== adminGeneratedEditionKeys.length) throw new Error("Invalid admin response");
+  for (let index = 0; index < adminGeneratedEditionKeys.length; index += 1) {
+    if (keys[index] !== adminGeneratedEditionKeys[index]) throw new Error("Invalid admin response");
+  }
+}
+
+function parseAdminSemanticEvidence(value: unknown): AdminSemanticEvidence {
+  const record = adminRecord(value);
+  const location = record.location;
+  if (location !== "canonical_source" && location !== "story_analysis" && location !== "generated_edition") {
+    throw new Error("Invalid admin response");
+  }
+  const editionKey = parseAdminNullableGeneratedEditionKey(record, "editionKey");
+  if ((location === "generated_edition") !== (editionKey !== null)) throw new Error("Invalid admin response");
+  return {
+    location,
+    editionKey,
+    excerpt: requiredAdminString(record, "excerpt"),
+    explanation: requiredAdminString(record, "explanation"),
+  };
+}
+
+function parseAdminSemanticFinding(value: unknown): AdminSemanticFinding {
+  const record = adminRecord(value);
+  return {
+    code: requiredAdminString(record, "code"),
+    severity: parseAdminOrchestrationSeverity(record.severity),
+    message: requiredAdminString(record, "message"),
+    evidence: parseAdminOrchestrationArray(record.evidence, parseAdminSemanticEvidence),
+  };
+}
+
+function parseAdminSemanticAssessment(value: unknown): AdminSemanticAssessment {
+  const record = adminRecord(value);
+  const assessmentScope = parseAdminOrchestrationScope(record.assessmentScope);
+  const editionKey = parseAdminNullableGeneratedEditionKey(record, "editionKey");
+  // PR104 omits editionKeys for an edition assessment. Bundle assessments
+  // require the canonical ordered list, so their missing field must still
+  // fail closed through the normal array parser below.
+  const editionKeys = assessmentScope === "edition" && !("editionKeys" in record)
+    ? []
+    : parseAdminGeneratedEditionKeys(record.editionKeys);
+  if ((assessmentScope === "edition") !== (editionKey !== null)) throw new Error("Invalid admin response");
+  if (assessmentScope === "bundle") assertAdminGeneratedEditionKeyOrder(editionKeys);
+  if (assessmentScope === "edition" && editionKeys.length !== 0) throw new Error("Invalid admin response");
+  return {
+    validationVersion: requiredAdminString(record, "validationVersion"),
+    specificationVersion: requiredAdminString(record, "specificationVersion"),
+    assessmentScope,
+    editionKey,
+    editionKeys,
+    result: parseAdminOrchestrationResult(record.result),
+    findings: parseAdminOrchestrationArray(record.findings, parseAdminSemanticFinding),
+  };
+}
+
+function parseAdminOrchestrationEditionBinding(value: unknown): AdminOrchestrationEditionBinding {
+  const record = adminRecord(value);
+  return {
+    EditionKey: parseAdminGeneratedEditionKey(record.EditionKey),
+    ContentSHA256: parseAdminSHA256(record.ContentSHA256),
+  };
+}
+
+function parseAdminSemanticAssessmentArtifact(value: unknown): AdminSemanticAssessmentArtifact {
+  const record = adminRecord(value);
+  const AssessmentScope = parseAdminOrchestrationScope(record.AssessmentScope);
+  const EditionKey = parseAdminNullableGeneratedEditionKey(record, "EditionKey");
+  const EditionKeys = parseAdminGeneratedEditionKeys(record.EditionKeys);
+  const Assessment = parseAdminSemanticAssessment(record.Assessment);
+  const EditionBindings = parseAdminOrchestrationArray(record.EditionBindings, parseAdminOrchestrationEditionBinding);
+  if (
+    AssessmentScope !== Assessment.assessmentScope ||
+    EditionKey !== Assessment.editionKey ||
+    EditionKeys.length !== Assessment.editionKeys.length ||
+    EditionKeys.some((key, index) => key !== Assessment.editionKeys[index])
+  ) throw new Error("Invalid admin response");
+  if (AssessmentScope === "edition") {
+    if (EditionKey === null || EditionKeys.length !== 0 || EditionBindings.length !== 1 || EditionBindings[0]?.EditionKey !== EditionKey) {
+      throw new Error("Invalid admin response");
+    }
+  } else {
+    if (EditionKey !== null || EditionBindings.length !== EditionKeys.length) throw new Error("Invalid admin response");
+    assertAdminGeneratedEditionKeyOrder(EditionKeys);
+    for (let index = 0; index < EditionBindings.length; index += 1) {
+      if (EditionBindings[index]?.EditionKey !== EditionKeys[index]) throw new Error("Invalid admin response");
+    }
+  }
+  return {
+    ValidationVersion: requiredAdminString(record, "ValidationVersion"),
+    SpecificationVersion: requiredAdminString(record, "SpecificationVersion"),
+    PromptVersion: requiredAdminString(record, "PromptVersion"),
+    AssessmentScope,
+    EditionKey,
+    EditionKeys,
+    RequestedModel: requiredAdminString(record, "RequestedModel"),
+    ReturnedModel: requiredAdminString(record, "ReturnedModel"),
+    ReasoningEffort: requiredAdminString(record, "ReasoningEffort"),
+    SourceSHA256: parseAdminSHA256(record.SourceSHA256),
+    AnalysisSHA256: parseAdminSHA256(record.AnalysisSHA256),
+    EditionBindings,
+    AssessmentSHA256: parseAdminSHA256(record.AssessmentSHA256),
+    Assessment,
+    ResponseID: requiredAdminString(record, "ResponseID"),
+    Usage: parseAdminOrchestrationUsage(record.Usage),
+  };
+}
+
+export function parseAdminSourceGenerationResponse(value: unknown): AdminSourceGenerationResponse {
+  const record = adminRecord(value);
+  if (!isRFC3339Timestamp(record.createdAt)) throw new Error("Invalid admin response");
+  return {
+    id: parseAdminUUID(record.id),
+    sourceVersionId: parseAdminUUID(record.sourceVersionId),
+    semanticResult: parseAdminOrchestrationResult(record.semanticResult),
+    createdAt: record.createdAt,
+  };
+}
+
+function parseAdminStoryOrchestrationRunSummary(value: unknown): AdminStoryOrchestrationRunSummary {
+  const record = adminRecord(value);
+  if (!isRFC3339Timestamp(record.createdAt)) throw new Error("Invalid admin response");
+  return {
+    id: parseAdminUUID(record.id),
+    sourceVersionId: parseAdminUUID(record.sourceVersionId),
+    sourceSha256: parseAdminSHA256(record.sourceSha256),
+    semanticResult: parseAdminOrchestrationResult(record.semanticResult),
+    createdAt: record.createdAt,
+  };
+}
+
+export function parseAdminStoryOrchestrationRunsListResponse(value: unknown): AdminStoryOrchestrationRunsListResponse {
+  const record = adminRecord(value);
+  const items = parseAdminOrchestrationArray(record.items, parseAdminStoryOrchestrationRunSummary);
+  const ids = new Set<string>();
+  let previousTime = Number.POSITIVE_INFINITY;
+  for (const item of items) {
+    const timestamp = Date.parse(item.createdAt);
+    if (ids.has(item.id) || timestamp > previousTime) throw new Error("Invalid admin response");
+    ids.add(item.id);
+    previousTime = timestamp;
+  }
+  return { items };
+}
+
+export function parseAdminStoryOrchestrationRun(value: unknown): AdminStoryOrchestrationRun {
+  const record = adminRecord(value, ["markdown"]);
+  if (!isRFC3339Timestamp(record.createdAt) || !Array.isArray(record.editions) || !Array.isArray(record.editionAssessments)) {
+    throw new Error("Invalid admin response");
+  }
+  const sourceSha256 = parseAdminSHA256(record.sourceSha256);
+  const analysisArtifact = parseAdminStoryAnalysisArtifact(record.analysisArtifact);
+  const editions = record.editions.map(parseAdminGeneratedEditionArtifact);
+  const editionAssessments = record.editionAssessments.map(parseAdminSemanticAssessmentArtifact);
+  const bundleAssessment = parseAdminSemanticAssessmentArtifact(record.bundleAssessment);
+  assertAdminGeneratedEditionOrder(editions);
+  if (editionAssessments.length !== editions.length) throw new Error("Invalid admin response");
+  for (let index = 0; index < editions.length; index += 1) {
+    const edition = editions[index];
+    const assessment = editionAssessments[index];
+    if (
+      !edition || !assessment ||
+      edition.SourceSHA256 !== sourceSha256 ||
+      edition.AnalysisSHA256 !== analysisArtifact.AnalysisSHA256 ||
+      assessment.AssessmentScope !== "edition" ||
+      assessment.EditionKey !== edition.EditionKey ||
+      assessment.SourceSHA256 !== sourceSha256 ||
+      assessment.AnalysisSHA256 !== analysisArtifact.AnalysisSHA256 ||
+      assessment.EditionBindings[0]?.ContentSHA256 !== edition.ContentSHA256
+    ) throw new Error("Invalid admin response");
+  }
+  if (
+    analysisArtifact.SourceSHA256 !== sourceSha256 ||
+    bundleAssessment.AssessmentScope !== "bundle" ||
+    bundleAssessment.SourceSHA256 !== sourceSha256 ||
+    bundleAssessment.AnalysisSHA256 !== analysisArtifact.AnalysisSHA256 ||
+    bundleAssessment.EditionBindings.some((binding, index) => binding.ContentSHA256 !== editions[index]?.ContentSHA256)
+  ) throw new Error("Invalid admin response");
+  return {
+    id: parseAdminUUID(record.id),
+    sourceVersionId: parseAdminUUID(record.sourceVersionId),
+    sourceSha256,
+    semanticResult: parseAdminOrchestrationResult(record.semanticResult),
+    createdAt: record.createdAt,
+    analysisArtifact,
+    editions,
+    editionAssessments,
+    bundleAssessment,
+  };
+}
 export async function adminPreview(payload: AdminPreviewRequest, signal?: AbortSignal): Promise<AdminPreviewResponse> {
   return parseAdminPreviewResponse(await request<unknown>("/api/v1/admin/preview", { method: "POST", body: JSON.stringify(payload), signal }));
 }
@@ -1765,6 +2279,49 @@ export async function adminGetVersionSource(slug: string, versionId: string, sig
 }
 export async function adminGetSource(slug: string, signal?: AbortSignal): Promise<AdminSourceDetail> {
   return parseAdminSourceDetail(await request<unknown>(`/api/v1/admin/stories/${encodeURIComponent(slug)}/source`, { signal }));
+}
+export async function adminGenerateSourceVersion(
+  sourceVersionId: string,
+  signal?: AbortSignal,
+): Promise<AdminSourceGenerationResponse> {
+  const requestedSourceVersionId = parseAdminUUID(sourceVersionId);
+  const result = parseAdminSourceGenerationResponse(await request<unknown>(
+    `/api/v1/admin/source-versions/${encodeURIComponent(requestedSourceVersionId)}/generate`,
+    { method: "POST", signal },
+  ));
+  if (result.sourceVersionId !== requestedSourceVersionId) throw new Error("Invalid admin response");
+  return result;
+}
+export async function adminListStoryOrchestrationRuns(
+  sourceVersionId: string,
+  limit?: number,
+  signal?: AbortSignal,
+): Promise<AdminStoryOrchestrationRunsListResponse> {
+  const requestedSourceVersionId = parseAdminUUID(sourceVersionId);
+  if (limit !== undefined && (!isPositiveSafeInteger(limit) || limit > 100)) {
+    throw new Error("Invalid orchestration run limit");
+  }
+  const query = limit === undefined ? "" : `?limit=${encodeURIComponent(String(limit))}`;
+  const result = parseAdminStoryOrchestrationRunsListResponse(await request<unknown>(
+    `/api/v1/admin/source-versions/${encodeURIComponent(requestedSourceVersionId)}/orchestration-runs${query}`,
+    { signal },
+  ));
+  if (result.items.some((item) => item.sourceVersionId !== requestedSourceVersionId)) {
+    throw new Error("Invalid admin response");
+  }
+  return result;
+}
+export async function adminGetStoryOrchestrationRun(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<AdminStoryOrchestrationRun> {
+  const requestedRunId = parseAdminUUID(runId);
+  const result = parseAdminStoryOrchestrationRun(await request<unknown>(
+    `/api/v1/admin/story-orchestration-runs/${encodeURIComponent(requestedRunId)}`,
+    { signal },
+  ));
+  if (result.id !== requestedRunId) throw new Error("Invalid admin response");
+  return result;
 }
 export async function adminGetSourceVersion(slug: string, versionId: string, signal?: AbortSignal): Promise<AdminSourceVersion> {
   return parseAdminSourceVersion(await request<unknown>(`/api/v1/admin/stories/${encodeURIComponent(slug)}/source/versions/${encodeURIComponent(versionId)}`, { signal }));

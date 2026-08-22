@@ -187,9 +187,24 @@ test('catalogue search and finite status filter preserve server order', async ()
 test('five edition keys have stable labels and every healthy edition can join a release', async () => {
   const navigation = await loadNavigation()
   assert.deepEqual(navigation.storyEditionOrder, ['classic','confident-readers','growing-readers','story-explorers','little-listeners'])
+  assert.deepEqual(navigation.generatedEditionOrder, ['confident-readers','growing-readers','story-explorers','little-listeners'])
   assert.deepEqual(navigation.storyEditionOrder.map(navigation.storyEditionLabel), ['Classic','Confident Readers','Growing Readers','Story Explorers','Little Listeners'])
   assert.equal(navigation.versionCanIncludeInRelease(version({ editionKey: 'growing-readers' })), true)
   assert.equal(navigation.versionCanIncludeInRelease(version({ health: 'repair_required' })), false)
+})
+
+test('generation error copy distinguishes operational timeout from a completed semantic fail', async () => {
+  const navigation = await loadNavigation()
+  const error = (status) => Object.assign(new Error('internal'), { status })
+  assert.match(navigation.projectStoryGenerationError(error(504), 'generation').message, /Refresh recent generations before retrying/)
+  assert.equal(navigation.projectStoryGenerationError(error(401), 'generation').kind, 'session')
+  assert.equal(navigation.projectStoryGenerationError(error(403), 'generation').kind, 'forbidden')
+  assert.equal(navigation.projectStoryGenerationError(error(429), 'generation').title, 'Generation service is busy')
+  assert.equal(navigation.projectStoryGenerationError(error(502), 'generation').kind, 'unavailable')
+  assert.equal(navigation.projectStoryGenerationError(error(503), 'history').retryable, true)
+  assert.equal(navigation.projectStoryGenerationError(error(500), 'detail').retryable, true)
+  assert.equal(navigation.projectStoryGenerationError(error(404), 'detail').kind, 'not-found')
+  assert.equal(navigation.projectStoryGenerationError(error(400), 'history').kind, 'validation')
 })
 
 test('story statuses and version health use human labels', async () => {
