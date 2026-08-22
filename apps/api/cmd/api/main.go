@@ -27,6 +27,7 @@ import (
 	"pandapages/api/internal/sourceeligibility"
 	"pandapages/api/internal/sourceprovider"
 	"pandapages/api/internal/sourceprovider/gutenberg"
+	"pandapages/api/internal/storyeditorialreview"
 	"pandapages/api/internal/storygeneration"
 	"pandapages/api/internal/storygenerationservice"
 	"pandapages/api/internal/storyorchestration"
@@ -201,6 +202,14 @@ func run() error {
 
 	store := db.MustOpen(cfg.databaseURL)
 	defer store.Close()
+	editorialReviews, err := storyeditorialreview.New(storyeditorialreview.Config{
+		ValidatedRunReader: store,
+		Writer:             store,
+		Reader:             store,
+	})
+	if err != nil {
+		return fmt.Errorf("configure story orchestration editorial reviews: %w", err)
+	}
 	storyGeneration, err := newStoryGenerationService(cfg.openAIAPIKey, store, store)
 	if err != nil {
 		return fmt.Errorf("configure story generation: %w", err)
@@ -240,14 +249,15 @@ func run() error {
 	identity := httpidentity.New(bearerAuthenticator, store)
 
 	admin := httpadmin.New(httpadmin.Config{
-		AdminKey:                     cfg.adminKey,
-		BearerAuthenticator:          bearerAuthenticator,
-		SourceDiscovery:              sourceDiscovery,
-		SourceAcquisition:            sourceDiscovery,
-		SourceEligibility:            sourceEligibility,
-		StoryGeneration:              storyGeneration,
-		StoryOrchestrationRuns:       store,
-		StoryOrchestrationRunHistory: store,
+		AdminKey:                           cfg.adminKey,
+		BearerAuthenticator:                bearerAuthenticator,
+		SourceDiscovery:                    sourceDiscovery,
+		SourceAcquisition:                  sourceDiscovery,
+		SourceEligibility:                  sourceEligibility,
+		StoryGeneration:                    storyGeneration,
+		StoryOrchestrationRuns:             store,
+		StoryOrchestrationRunHistory:       store,
+		StoryOrchestrationEditorialReviews: editorialReviews,
 	}, store)
 
 	server := newServer(newRootHandler(public, identity, admin))

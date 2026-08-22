@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
 	"pandapages/api/internal/adaptationcontract"
+	"pandapages/api/internal/model"
 	"pandapages/api/internal/storygeneration"
 	"pandapages/api/internal/storyorchestration"
 	"pandapages/api/internal/storyvalidation"
@@ -127,6 +129,9 @@ func (s *Store) GetCompletedStoryOrchestrationRun(runID string) (storyorchestrat
 	}
 	source, err := loadStoryOrchestrationSourceVersion(ctx, tx, persisted.SourceVersionID)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) || errors.Is(err, errStoredSourceInvalid) {
+			return storyorchestration.PersistedRun{}, fmt.Errorf("%w", model.ErrAdminStoryOrchestrationRunRepairRequired)
+		}
 		return storyorchestration.PersistedRun{}, err
 	}
 	result, err := unmarshalStoryOrchestrationArtifacts(
@@ -136,10 +141,10 @@ func (s *Store) GetCompletedStoryOrchestrationRun(runID string) (storyorchestrat
 		adaptationcontract.Result(semanticResult),
 	)
 	if err != nil {
-		return storyorchestration.PersistedRun{}, err
+		return storyorchestration.PersistedRun{}, fmt.Errorf("%w", model.ErrAdminStoryOrchestrationRunRepairRequired)
 	}
 	if err := storyorchestration.ValidateCompletedResult(result, persisted.SourceVersionID, source.SourceText); err != nil {
-		return storyorchestration.PersistedRun{}, fmt.Errorf("validate stored story orchestration result: %w", err)
+		return storyorchestration.PersistedRun{}, fmt.Errorf("%w", model.ErrAdminStoryOrchestrationRunRepairRequired)
 	}
 	persisted.Result = result
 	persisted.CreatedAt = persisted.CreatedAt.UTC()

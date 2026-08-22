@@ -7,12 +7,13 @@ import (
 )
 
 type Config struct {
-	AdminKey                     string
-	BearerAuthenticator          *httpbearer.Authenticator
-	SourceDiscovery              sourceprovider.Discovery
-	SourceAcquisition            sourceprovider.Acquisition
-	SourceEligibility            *sourceeligibility.Service
-	StoryGeneration              StoryGenerationService
-	StoryOrchestrationRuns       StoryOrchestrationRunReader
-	StoryOrchestrationRunHistory StoryOrchestrationRunHistoryReader
+	AdminKey                           string
+	BearerAuthenticator                *httpbearer.Authenticator
+	SourceDiscovery                    sourceprovider.Discovery
+	SourceAcquisition                  sourceprovider.Acquisition
+	SourceEligibility                  *sourceeligibility.Service
+	StoryGeneration                    StoryGenerationService
+	StoryOrchestrationRuns             StoryOrchestrationRunReader
+	StoryOrchestrationRunHistory       StoryOrchestrationRunHistoryReader
+	StoryOrchestrationEditorialReviews StoryOrchestrationEditorialReviewService
 }
