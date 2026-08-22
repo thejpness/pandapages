@@ -8,6 +8,9 @@ const timestamp = '2026-08-18T12:00:00Z'
 const sourceSHA = 'a'.repeat(64)
 const analysisSHA = 'b'.repeat(64)
 const generatedKeys = ['confident-readers', 'growing-readers', 'story-explorers', 'little-listeners']
+const reviewIDOne = '33333333-3333-4333-8333-333333333333'
+const reviewIDTwo = '44444444-4444-4444-8444-444444444444'
+const reviewIDThree = '55555555-5555-4555-8555-555555555555'
 
 async function loadAPI() {
   return (await loadTypeScript('../src/lib/api.ts', import.meta.url, (value) => value.replaceAll('import.meta.env.VITE_API_BASE', "''"))).module
@@ -89,6 +92,10 @@ function run(result = 'fail') {
   }
 }
 
+function review(id, decision, createdAt = timestamp, runId = runID) {
+  return { id, runId, decision, createdAt }
+}
+
 test('orchestration wrappers preserve endpoint identity, empty generation body, and actual artifact casing', async (t) => {
   const originalFetch = globalThis.fetch
   t.after(() => { globalThis.fetch = originalFetch })
@@ -136,4 +143,101 @@ test('orchestration response parser rejects conflicting identities and classic a
   const missingBundleEditionKeys = run()
   delete missingBundleEditionKeys.bundleAssessment.Assessment.editionKeys
   assert.throws(() => api.parseAdminStoryOrchestrationRun(missingBundleEditionKeys), /Invalid admin response/)
+})
+
+test('editorial review wrappers preserve exact run identity, decisions, and immutable history order', async (t) => {
+  const originalFetch = globalThis.fetch
+  t.after(() => { globalThis.fetch = originalFetch })
+  const requests = []
+  const items = [
+    review(reviewIDThree, 'approved', '2026-08-18T12:02:00Z'),
+    review(reviewIDTwo, 'rejected', '2026-08-18T12:01:00Z'),
+    review(reviewIDOne, 'rejected', '2026-08-18T12:00:00Z'),
+  ]
+  globalThis.fetch = async (url, init = {}) => {
+    requests.push({ url: String(url), init })
+    if (init.method === 'POST') return response(review(reviewIDThree, JSON.parse(init.body).decision, '2026-08-18T12:03:00Z'), 201)
+    return response({ items })
+  }
+  const api = await loadAPI()
+  const empty = api.parseAdminStoryOrchestrationEditorialReviewsResponse({ items: [] })
+  assert.deepEqual(empty.items, [])
+  const history = await api.adminListStoryOrchestrationEditorialReviews(runID)
+  const approved = await api.adminCreateStoryOrchestrationEditorialReview(runID, 'approved')
+  const rejected = await api.adminCreateStoryOrchestrationEditorialReview(runID, 'rejected')
+
+  assert.deepEqual(history.items.map((item) => item.decision), ['approved', 'rejected', 'rejected'])
+  assert.equal(approved.decision, 'approved')
+  assert.equal(rejected.decision, 'rejected')
+  assert.deepEqual(requests.map((request) => request.url), [
+    `/api/v1/admin/story-orchestration-runs/${runID}/editorial-reviews`,
+    `/api/v1/admin/story-orchestration-runs/${runID}/editorial-reviews`,
+    `/api/v1/admin/story-orchestration-runs/${runID}/editorial-reviews`,
+  ])
+  assert.equal(requests[0].init.method, undefined)
+  assert.equal(requests[1].init.method, 'POST')
+  assert.equal(requests[1].init.body, '{"decision":"approved"}')
+  assert.equal(requests[2].init.body, '{"decision":"rejected"}')
+  assert.equal(new Headers(requests[1].init.headers).has('X-PP-Admin-Key'), false)
+})
+
+test('editorial review history preserves RFC3339Nano ordering before applying the UUID tie-break', async () => {
+  const api = await loadAPI()
+  const newest = '2026-08-22T18:00:00.123456789Z'
+  const older = '2026-08-22T18:00:00.123456788Z'
+  const exactTie = '2026-08-22T18:00:00.123456789Z'
+
+  assert.doesNotThrow(() => api.parseAdminStoryOrchestrationEditorialReviewsResponse({
+    items: [review(reviewIDOne, 'approved', newest), review(reviewIDTwo, 'rejected', older)],
+  }))
+  assert.throws(() => api.parseAdminStoryOrchestrationEditorialReviewsResponse({
+    items: [review(reviewIDTwo, 'rejected', older), review(reviewIDOne, 'approved', newest)],
+  }), /Invalid admin response/)
+
+  assert.doesNotThrow(() => api.parseAdminStoryOrchestrationEditorialReviewsResponse({
+    items: [review(reviewIDTwo, 'approved', exactTie), review(reviewIDOne, 'rejected', exactTie)],
+  }))
+  assert.throws(() => api.parseAdminStoryOrchestrationEditorialReviewsResponse({
+    items: [review(reviewIDOne, 'approved', exactTie), review(reviewIDTwo, 'rejected', exactTie)],
+  }), /Invalid admin response/)
+
+  assert.doesNotThrow(() => api.parseAdminStoryOrchestrationEditorialReviewsResponse({
+    items: [review(reviewIDOne, 'approved', '2026-08-22T18:00:00.9Z'), review(reviewIDTwo, 'rejected', '2026-08-22T18:00:00.10Z')],
+  }))
+  assert.doesNotThrow(() => api.parseAdminStoryOrchestrationEditorialReviewsResponse({
+    items: [review(reviewIDOne, 'approved', '2026-08-22T18:00:00.000000001Z'), review(reviewIDTwo, 'rejected', '2026-08-22T18:00:00Z')],
+  }))
+  assert.doesNotThrow(() => api.parseAdminStoryOrchestrationEditorialReviewsResponse({
+    items: [review(reviewIDOne, 'approved', '2026-08-22T19:00:00.123456789+01:00'), review(reviewIDTwo, 'rejected', '2026-08-22T18:00:00.123456788Z')],
+  }))
+})
+
+test('editorial review client rejects malformed identity, decision, binding, timestamp, and ordering data', async (t) => {
+  const api = await loadAPI()
+  const valid = [review(reviewIDTwo, 'approved', '2026-08-18T12:00:00Z'), review(reviewIDOne, 'rejected', '2026-08-18T12:00:00Z')]
+  assert.deepEqual(api.parseAdminStoryOrchestrationEditorialReviewsResponse({ items: valid }).items.map((item) => item.id), [reviewIDTwo, reviewIDOne])
+  for (const malformed of [
+    { items: [review('not-a-uuid', 'approved')] },
+    { items: [review('00000000-0000-0000-0000-000000000000', 'approved')] },
+    { items: [review(reviewIDOne, 'approved', timestamp, 'not-a-uuid')] },
+    { items: [review(reviewIDOne, 'approved', timestamp, '00000000-0000-0000-0000-000000000000')] },
+    { items: [review(reviewIDOne, 'needs_review')] },
+    { items: [review(reviewIDOne, 'approved', 'not-a-timestamp')] },
+    { items: [review(reviewIDOne, 'approved'), review(reviewIDOne, 'rejected', '2026-08-18T11:00:00Z')] },
+    { items: [review(reviewIDOne, 'approved', '2026-08-18T11:00:00Z'), review(reviewIDTwo, 'rejected', '2026-08-18T12:00:00Z')] },
+    { items: [review(reviewIDOne, 'approved'), review(reviewIDTwo, 'rejected')] },
+    { items: null },
+  ]) {
+    assert.throws(() => api.parseAdminStoryOrchestrationEditorialReviewsResponse(malformed), /Invalid admin response/)
+  }
+
+  const originalFetch = globalThis.fetch
+  t.after(() => { globalThis.fetch = originalFetch })
+  globalThis.fetch = async (_url, init = {}) => {
+    if (init.method === 'POST') return response(review(reviewIDOne, 'rejected'), 201)
+    return response({ items: [review(reviewIDOne, 'approved', timestamp, sourceVersionID)] })
+  }
+  await assert.rejects(() => api.adminListStoryOrchestrationEditorialReviews(runID), /Invalid admin response/)
+  await assert.rejects(() => api.adminCreateStoryOrchestrationEditorialReview(runID, 'approved'), /Invalid admin response/)
+  await assert.rejects(() => api.adminCreateStoryOrchestrationEditorialReview(runID, 'needs_review'), /Invalid admin response/)
 })
