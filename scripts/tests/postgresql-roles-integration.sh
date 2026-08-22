@@ -164,7 +164,10 @@ verify_policy
 
 version=$(psql_as "$migration_role" --tuples-only --no-align \
   --command="SELECT version_id FROM goose_db_version WHERE is_applied ORDER BY id DESC LIMIT 1;")
-[[ "$version" == 2 ]]
+[[ "$version" == 1 ]] || {
+  printf 'expected complete baseline schema at Goose version 1, got %s\n' "$version" >&2
+  exit 1
+}
 
 role_state=$(docker exec "$postgres_container" \
   psql -X --username="$admin_user" --dbname="$database" --tuples-only --no-align \
@@ -262,6 +265,24 @@ psql_as "$migration_role" --command="
     'pass',
     '{\"analysisArtifact\":{},\"editions\":[{},{},{},{}],\"editionAssessments\":[{},{},{},{}],\"bundleAssessment\":{}}'::jsonb
   );
+  INSERT INTO story_editions (id, story_id, edition_key)
+  VALUES (
+    'a1500000-0000-4000-8000-000000000055',
+    'a1500000-0000-4000-8000-000000000051',
+    'confident-readers'
+  );
+  INSERT INTO story_versions (
+    id, story_id, edition_id, version, frontmatter, markdown, rendered_html, content_hash
+  ) VALUES (
+    'a1500000-0000-4000-8000-000000000056',
+    'a1500000-0000-4000-8000-000000000051',
+    'a1500000-0000-4000-8000-000000000055',
+    1,
+    jsonb_build_object('title', 'Runtime editorial review story', 'author', '', 'language', 'en-GB'),
+    '# Runtime editorial review story',
+    '<h1>Runtime editorial review story</h1>',
+    'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'
+  );
 " >/dev/null
 
 psql_as "$application_role" --command="
@@ -273,7 +294,24 @@ psql_as "$application_role" --command="
     'a1500000-0000-4000-8000-000000000041',
     'a1500000-0000-4000-8000-000000000001'
   );
+  INSERT INTO story_orchestration_run_draft_ingests (run_id, editorial_review_id)
+  SELECT
+    'a1500000-0000-4000-8000-000000000054',
+    id
+  FROM story_orchestration_run_editorial_reviews
+  WHERE run_id = 'a1500000-0000-4000-8000-000000000054';
+  INSERT INTO story_orchestration_run_draft_ingest_editions (
+    draft_ingest_id, edition_id, story_version_id
+  )
+  SELECT
+    ingest.id,
+    'a1500000-0000-4000-8000-000000000055',
+    'a1500000-0000-4000-8000-000000000056'
+  FROM story_orchestration_run_draft_ingests AS ingest
+  WHERE ingest.run_id = 'a1500000-0000-4000-8000-000000000054';
   SELECT count(*) FROM story_orchestration_run_editorial_reviews;
+  SELECT count(*) FROM story_orchestration_run_draft_ingests;
+  SELECT count(*) FROM story_orchestration_run_draft_ingest_editions;
 " >/dev/null
 
 # The runtime role can use the mutable quality-review row as a transaction
@@ -314,6 +352,26 @@ expect_denied \
   'application editorial review deletion' \
   "$application_role" \
   "DELETE FROM story_orchestration_run_editorial_reviews WHERE run_id='a1500000-0000-4000-8000-000000000054';"
+
+expect_denied \
+  'application draft ingest mutation' \
+  "$application_role" \
+  "UPDATE story_orchestration_run_draft_ingests SET created_at=now() WHERE run_id='a1500000-0000-4000-8000-000000000054';"
+
+expect_denied \
+  'application draft ingest deletion' \
+  "$application_role" \
+  "DELETE FROM story_orchestration_run_draft_ingests WHERE run_id='a1500000-0000-4000-8000-000000000054';"
+
+expect_denied \
+  'application draft ingest edition mutation' \
+  "$application_role" \
+  "UPDATE story_orchestration_run_draft_ingest_editions SET story_version_id='a1500000-0000-4000-8000-000000000056' WHERE edition_id='a1500000-0000-4000-8000-000000000055';"
+
+expect_denied \
+  'application draft ingest edition deletion' \
+  "$application_role" \
+  "DELETE FROM story_orchestration_run_draft_ingest_editions WHERE edition_id='a1500000-0000-4000-8000-000000000055';"
 
 expect_denied \
   'application immutable acquisition lock' \

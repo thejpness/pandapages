@@ -45,6 +45,9 @@ func TestExpectedMigrationVersionMatchesTrackedMigrations(t *testing.T) {
 			t.Fatalf("migration versions = %v; want contiguous versions beginning at 1 (first mismatch: got %d, want %d)", versions, version, want)
 		}
 	}
+	if len(versions) != 1 || versions[0] != 1 {
+		t.Fatalf("pre-production schema policy requires exactly [00001_baseline.sql]; tracked migration versions = %v", versions)
+	}
 
 	latest := int64(versions[len(versions)-1])
 	if latest != ExpectedMigrationVersion {
