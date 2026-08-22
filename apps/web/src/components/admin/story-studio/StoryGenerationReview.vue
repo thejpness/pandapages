@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRouter } from 'vue-router'
+import StoryOrchestrationEditorialReview from './StoryOrchestrationEditorialReview.vue'
 import StoryStudioDialog from './StoryStudioDialog.vue'
 import {
   adminGenerateSourceVersion,
@@ -434,6 +435,12 @@ onBeforeUnmount(() => {
           </div>
           <span :class="resultClass(selectedRun.semanticResult)">{{ resultLabel(selectedRun.semanticResult) }}</span>
         </header>
+
+        <StoryOrchestrationEditorialReview
+          :key="selectedRun.id"
+          :run-id="selectedRun.id"
+          :story-slug="props.slug"
+        />
 
         <div class="generation-tabs" role="tablist" aria-label="Generated editions">
           <button

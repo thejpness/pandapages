@@ -403,6 +403,8 @@ const libraryProgressKeys = [
 const librarySlugPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const rfc3339Pattern =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:Z|([+-])(\d{2}):(\d{2}))$/;
+const rfc3339InstantPattern =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$/;
 
 const unsafeLibraryKeys = new Set([
   "account",
@@ -505,6 +507,22 @@ function isRFC3339Timestamp(value: unknown): value is string {
   }
 
   return Number.isFinite(Date.parse(value));
+}
+
+type RFC3339Instant = Readonly<{
+  wholeSecond: number;
+  nanoseconds: number;
+}>;
+
+function parseRFC3339Instant(value: string): RFC3339Instant {
+  const match = rfc3339InstantPattern.exec(value);
+  if (!match) throw new Error("Invalid admin response");
+  const wholeSecond = Date.parse(`${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:${match[6]}${match[8]}`);
+  if (!Number.isFinite(wholeSecond)) throw new Error("Invalid admin response");
+  return {
+    wholeSecond,
+    nanoseconds: Number((match[7] ?? "").padEnd(9, "0")),
+  };
 }
 
 function invalidLibraryResponse(): never {
@@ -1157,6 +1175,16 @@ export type AdminStoryOrchestrationRunSummary = {
 export type AdminStoryOrchestrationRunsListResponse = {
   items: AdminStoryOrchestrationRunSummary[];
 };
+export type AdminStoryOrchestrationEditorialDecision = "approved" | "rejected";
+export type AdminStoryOrchestrationEditorialReview = {
+  id: string;
+  runId: string;
+  decision: AdminStoryOrchestrationEditorialDecision;
+  createdAt: string;
+};
+export type AdminStoryOrchestrationEditorialReviewsResponse = {
+  items: AdminStoryOrchestrationEditorialReview[];
+};
 export type AdminStoryOrchestrationRun = {
   id: string; sourceVersionId: string; sourceSha256: string;
   semanticResult: AdminOrchestrationSemanticResult; createdAt: string;
@@ -1377,6 +1405,16 @@ function parseAdminUUID(value: unknown): string {
     throw new Error("Invalid admin response");
   }
   return value;
+}
+
+const adminEditorialReviewZeroUUID = "00000000-0000-0000-0000-000000000000";
+
+function parseAdminEditorialReviewUUID(value: unknown): string {
+  const parsed = parseAdminUUID(value);
+  if (parsed !== parsed.toLowerCase() || parsed === adminEditorialReviewZeroUUID) {
+    throw new Error("Invalid admin response");
+  }
+  return parsed;
 }
 
 function parseAdminSourceProviderID(value: unknown): AdminSourceProviderID {
@@ -2210,6 +2248,50 @@ export function parseAdminStoryOrchestrationRunsListResponse(value: unknown): Ad
   return { items };
 }
 
+function parseAdminStoryOrchestrationEditorialDecision(value: unknown): AdminStoryOrchestrationEditorialDecision {
+  if (value !== "approved" && value !== "rejected") throw new Error("Invalid admin response");
+  return value;
+}
+
+export function parseAdminStoryOrchestrationEditorialReview(value: unknown): AdminStoryOrchestrationEditorialReview {
+  const record = adminRecord(value);
+  if (!isRFC3339Timestamp(record.createdAt)) throw new Error("Invalid admin response");
+  return {
+    id: parseAdminEditorialReviewUUID(record.id),
+    runId: parseAdminEditorialReviewUUID(record.runId),
+    decision: parseAdminStoryOrchestrationEditorialDecision(record.decision),
+    createdAt: record.createdAt,
+  };
+}
+
+export function parseAdminStoryOrchestrationEditorialReviewsResponse(
+  value: unknown,
+): AdminStoryOrchestrationEditorialReviewsResponse {
+  const record = adminRecord(value);
+  if (!Array.isArray(record.items)) throw new Error("Invalid admin response");
+  const items = record.items.map(parseAdminStoryOrchestrationEditorialReview);
+  const ids = new Set<string>();
+  let previousInstant: RFC3339Instant | null = null;
+  let previousID = "";
+  for (const item of items) {
+    const instant = parseRFC3339Instant(item.createdAt);
+    if (
+      ids.has(item.id) ||
+      (previousInstant !== null && (
+        instant.wholeSecond > previousInstant.wholeSecond ||
+        (instant.wholeSecond === previousInstant.wholeSecond && instant.nanoseconds > previousInstant.nanoseconds) ||
+        (instant.wholeSecond === previousInstant.wholeSecond && instant.nanoseconds === previousInstant.nanoseconds && item.id >= previousID)
+      ))
+    ) {
+      throw new Error("Invalid admin response");
+    }
+    ids.add(item.id);
+    previousInstant = instant;
+    previousID = item.id;
+  }
+  return { items };
+}
+
 export function parseAdminStoryOrchestrationRun(value: unknown): AdminStoryOrchestrationRun {
   const record = adminRecord(value, ["markdown"]);
   if (!isRFC3339Timestamp(record.createdAt) || !Array.isArray(record.editions) || !Array.isArray(record.editionAssessments)) {
@@ -2321,6 +2403,42 @@ export async function adminGetStoryOrchestrationRun(
     { signal },
   ));
   if (result.id !== requestedRunId) throw new Error("Invalid admin response");
+  return result;
+}
+export async function adminListStoryOrchestrationEditorialReviews(
+  runId: string,
+  limit?: number,
+  signal?: AbortSignal,
+): Promise<AdminStoryOrchestrationEditorialReviewsResponse> {
+  const requestedRunId = parseAdminEditorialReviewUUID(runId);
+  const requestedLimit = limit ?? 50;
+  if (!isPositiveSafeInteger(requestedLimit) || requestedLimit > 100) {
+    throw new Error("Invalid editorial review limit");
+  }
+  const query = limit === undefined ? "" : `?limit=${encodeURIComponent(String(requestedLimit))}`;
+  const result = parseAdminStoryOrchestrationEditorialReviewsResponse(await request<unknown>(
+    `/api/v1/admin/story-orchestration-runs/${encodeURIComponent(requestedRunId)}/editorial-reviews${query}`,
+    { signal },
+  ));
+  if (result.items.length > requestedLimit || result.items.some((item) => item.runId !== requestedRunId)) {
+    throw new Error("Invalid admin response");
+  }
+  return result;
+}
+export async function adminCreateStoryOrchestrationEditorialReview(
+  runId: string,
+  decision: AdminStoryOrchestrationEditorialDecision,
+  signal?: AbortSignal,
+): Promise<AdminStoryOrchestrationEditorialReview> {
+  const requestedRunId = parseAdminEditorialReviewUUID(runId);
+  const requestedDecision = parseAdminStoryOrchestrationEditorialDecision(decision);
+  const result = parseAdminStoryOrchestrationEditorialReview(await request<unknown>(
+    `/api/v1/admin/story-orchestration-runs/${encodeURIComponent(requestedRunId)}/editorial-reviews`,
+    { method: "POST", body: JSON.stringify({ decision: requestedDecision }), signal },
+  ));
+  if (result.runId !== requestedRunId || result.decision !== requestedDecision) {
+    throw new Error("Invalid admin response");
+  }
   return result;
 }
 export async function adminGetSourceVersion(slug: string, versionId: string, signal?: AbortSignal): Promise<AdminSourceVersion> {
