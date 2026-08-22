@@ -1185,6 +1185,21 @@ export type AdminStoryOrchestrationEditorialReview = {
 export type AdminStoryOrchestrationEditorialReviewsResponse = {
   items: AdminStoryOrchestrationEditorialReview[];
 };
+export type AdminStoryOrchestrationDraftIngestOutcome = "created" | "reused";
+export type AdminStoryOrchestrationDraftIngestEdition = {
+  editionKey: AdminGeneratedEditionKey;
+  editionId: string;
+  storyVersionId: string;
+};
+export type AdminStoryOrchestrationDraftIngest = {
+  id: string;
+  runId: string;
+  editorialReviewId: string;
+  storySlug: string;
+  createdAt: string;
+  outcome: AdminStoryOrchestrationDraftIngestOutcome;
+  editions: AdminStoryOrchestrationDraftIngestEdition[];
+};
 export type AdminStoryOrchestrationRun = {
   id: string; sourceVersionId: string; sourceSha256: string;
   semanticResult: AdminOrchestrationSemanticResult; createdAt: string;
@@ -2253,6 +2268,20 @@ function parseAdminStoryOrchestrationEditorialDecision(value: unknown): AdminSto
   return value;
 }
 
+function parseAdminStoryOrchestrationDraftIngestOutcome(value: unknown): AdminStoryOrchestrationDraftIngestOutcome {
+  if (value !== "created" && value !== "reused") throw new Error("Invalid admin response");
+  return value;
+}
+
+function parseAdminStoryOrchestrationDraftIngestEdition(value: unknown): AdminStoryOrchestrationDraftIngestEdition {
+  const record = adminRecord(value);
+  return {
+    editionKey: parseAdminGeneratedEditionKey(record.editionKey),
+    editionId: parseAdminEditorialReviewUUID(record.editionId),
+    storyVersionId: parseAdminEditorialReviewUUID(record.storyVersionId),
+  };
+}
+
 export function parseAdminStoryOrchestrationEditorialReview(value: unknown): AdminStoryOrchestrationEditorialReview {
   const record = adminRecord(value);
   if (!isRFC3339Timestamp(record.createdAt)) throw new Error("Invalid admin response");
@@ -2290,6 +2319,30 @@ export function parseAdminStoryOrchestrationEditorialReviewsResponse(
     previousID = item.id;
   }
   return { items };
+}
+
+export function parseAdminStoryOrchestrationDraftIngest(value: unknown): AdminStoryOrchestrationDraftIngest {
+  const record = adminRecord(value);
+  if (!isRFC3339Timestamp(record.createdAt) || !Array.isArray(record.editions)) {
+    throw new Error("Invalid admin response");
+  }
+  const editions = record.editions.map(parseAdminStoryOrchestrationDraftIngestEdition);
+  assertAdminGeneratedEditionKeyOrder(editions.map((edition) => edition.editionKey));
+  if (
+    new Set(editions.map((edition) => edition.editionId)).size !== editions.length ||
+    new Set(editions.map((edition) => edition.storyVersionId)).size !== editions.length
+  ) {
+    throw new Error("Invalid admin response");
+  }
+  return {
+    id: parseAdminEditorialReviewUUID(record.id),
+    runId: parseAdminEditorialReviewUUID(record.runId),
+    editorialReviewId: parseAdminEditorialReviewUUID(record.editorialReviewId),
+    storySlug: parseAdminSlug(record.storySlug),
+    createdAt: record.createdAt,
+    outcome: parseAdminStoryOrchestrationDraftIngestOutcome(record.outcome),
+    editions,
+  };
 }
 
 export function parseAdminStoryOrchestrationRun(value: unknown): AdminStoryOrchestrationRun {
@@ -2437,6 +2490,28 @@ export async function adminCreateStoryOrchestrationEditorialReview(
     { method: "POST", body: JSON.stringify({ decision: requestedDecision }), signal },
   ));
   if (result.runId !== requestedRunId || result.decision !== requestedDecision) {
+    throw new Error("Invalid admin response");
+  }
+  return result;
+}
+export async function adminCreateStoryOrchestrationDraftIngest(
+  runId: string,
+  editorialReviewId: string,
+  expectedStorySlug: string,
+  signal?: AbortSignal,
+): Promise<AdminStoryOrchestrationDraftIngest> {
+  const requestedRunId = parseAdminEditorialReviewUUID(runId);
+  const requestedEditorialReviewId = parseAdminEditorialReviewUUID(editorialReviewId);
+  const requestedStorySlug = parseAdminSlug(expectedStorySlug);
+  const result = parseAdminStoryOrchestrationDraftIngest(await request<unknown>(
+    `/api/v1/admin/story-orchestration-runs/${encodeURIComponent(requestedRunId)}/draft-ingests`,
+    { method: "POST", body: JSON.stringify({ editorialReviewId: requestedEditorialReviewId }), signal },
+  ));
+  if (
+    result.runId !== requestedRunId ||
+    result.editorialReviewId !== requestedEditorialReviewId ||
+    result.storySlug !== requestedStorySlug
+  ) {
     throw new Error("Invalid admin response");
   }
   return result;

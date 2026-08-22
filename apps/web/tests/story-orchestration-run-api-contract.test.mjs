@@ -11,6 +11,8 @@ const generatedKeys = ['confident-readers', 'growing-readers', 'story-explorers'
 const reviewIDOne = '33333333-3333-4333-8333-333333333333'
 const reviewIDTwo = '44444444-4444-4444-8444-444444444444'
 const reviewIDThree = '55555555-5555-4555-8555-555555555555'
+const ingestID = '66666666-6666-4666-8666-666666666666'
+const storySlug = 'panda-tale'
 
 async function loadAPI() {
   return (await loadTypeScript('../src/lib/api.ts', import.meta.url, (value) => value.replaceAll('import.meta.env.VITE_API_BASE', "''"))).module
@@ -94,6 +96,22 @@ function run(result = 'fail') {
 
 function review(id, decision, createdAt = timestamp, runId = runID) {
   return { id, runId, decision, createdAt }
+}
+
+function draftIngest(outcome = 'created') {
+  return {
+    id: ingestID,
+    runId: runID,
+    editorialReviewId: reviewIDOne,
+    storySlug,
+    createdAt: '2026-08-22T12:00:00.123456789Z',
+    outcome,
+    editions: generatedKeys.map((editionKey, index) => ({
+      editionKey,
+      editionId: `${index + 1}1111111-1111-4${index + 1}11-8${index + 1}11-111111111111`,
+      storyVersionId: `${index + 5}2222222-2222-4${index + 5}22-8${index + 5}22-222222222222`,
+    })),
+  }
 }
 
 test('orchestration wrappers preserve endpoint identity, empty generation body, and actual artifact casing', async (t) => {
@@ -240,4 +258,84 @@ test('editorial review client rejects malformed identity, decision, binding, tim
   await assert.rejects(() => api.adminListStoryOrchestrationEditorialReviews(runID), /Invalid admin response/)
   await assert.rejects(() => api.adminCreateStoryOrchestrationEditorialReview(runID, 'approved'), /Invalid admin response/)
   await assert.rejects(() => api.adminCreateStoryOrchestrationEditorialReview(runID, 'needs_review'), /Invalid admin response/)
+})
+
+test('draft ingest wrapper preserves exact identity, request body, canonical editions, and created/reused outcomes', async (t) => {
+  const originalFetch = globalThis.fetch
+  t.after(() => { globalThis.fetch = originalFetch })
+  const requests = []
+  let outcome = 'created'
+  globalThis.fetch = async (url, init = {}) => {
+    requests.push({ url: String(url), init })
+    return response(draftIngest(outcome), outcome === 'created' ? 201 : 200)
+  }
+  const api = await loadAPI()
+  const created = await api.adminCreateStoryOrchestrationDraftIngest(runID, reviewIDOne, storySlug)
+  outcome = 'reused'
+  const reused = await api.adminCreateStoryOrchestrationDraftIngest(runID, reviewIDOne, storySlug)
+
+  assert.equal(created.outcome, 'created')
+  assert.equal(reused.outcome, 'reused')
+  assert.deepEqual(created.editions.map((edition) => edition.editionKey), generatedKeys)
+  assert.deepEqual(requests.map((request) => request.url), [
+    `/api/v1/admin/story-orchestration-runs/${runID}/draft-ingests`,
+    `/api/v1/admin/story-orchestration-runs/${runID}/draft-ingests`,
+  ])
+  assert.equal(requests[0].init.method, 'POST')
+  assert.equal(requests[0].init.body, `{"editorialReviewId":"${reviewIDOne}"}`)
+  assert.equal(new Headers(requests[0].init.headers).has('X-PP-Admin-Key'), false)
+})
+
+test('draft ingest client fails closed on malformed response data and mismatched requested bindings', async (t) => {
+  const api = await loadAPI()
+  const clone = (value) => JSON.parse(JSON.stringify(value))
+  const valid = draftIngest()
+  assert.equal(api.parseAdminStoryOrchestrationDraftIngest(valid).id, ingestID)
+
+  const malformed = [
+    (value) => { value.id = 'not-a-uuid' },
+    (value) => { value.id = '00000000-0000-0000-0000-000000000000' },
+    (value) => { value.runId = 'not-a-uuid' },
+    (value) => { value.runId = '00000000-0000-0000-0000-000000000000' },
+    (value) => { value.editorialReviewId = 'not-a-uuid' },
+    (value) => { value.editorialReviewId = '00000000-0000-0000-0000-000000000000' },
+    (value) => { value.editions[0].editionId = 'not-a-uuid' },
+    (value) => { value.editions[0].editionId = '00000000-0000-0000-0000-000000000000' },
+    (value) => { value.editions[0].storyVersionId = 'not-a-uuid' },
+    (value) => { value.editions[0].storyVersionId = '00000000-0000-0000-0000-000000000000' },
+    (value) => { value.createdAt = 'not-a-timestamp' },
+    (value) => { value.outcome = 'published' },
+    (value) => { delete value.editions },
+    (value) => { value.editions.pop() },
+    (value) => { value.editions[0].editionKey = 'classic' },
+    (value) => { value.editions[0].editionKey = 'unexpected' },
+    (value) => { [value.editions[0], value.editions[1]] = [value.editions[1], value.editions[0]] },
+    (value) => { value.editions[1].editionKey = value.editions[0].editionKey },
+    (value) => { value.editions[1].editionId = value.editions[0].editionId },
+    (value) => { value.editions[1].storyVersionId = value.editions[0].storyVersionId },
+    (value) => { value.storySlug = 'Not a valid slug' },
+  ]
+  for (const mutate of malformed) {
+    const value = clone(valid)
+    mutate(value)
+    assert.throws(() => api.parseAdminStoryOrchestrationDraftIngest(value), /Invalid admin response/)
+  }
+
+  const originalFetch = globalThis.fetch
+  t.after(() => { globalThis.fetch = originalFetch })
+  for (const mutate of [
+    (value) => { value.runId = reviewIDTwo },
+    (value) => { value.editorialReviewId = reviewIDTwo },
+    (value) => { value.storySlug = 'another-story' },
+  ]) {
+    globalThis.fetch = async () => {
+      const value = clone(valid)
+      mutate(value)
+      return response(value, 201)
+    }
+    await assert.rejects(
+      () => api.adminCreateStoryOrchestrationDraftIngest(runID, reviewIDOne, storySlug),
+      /Invalid admin response/,
+    )
+  }
 })

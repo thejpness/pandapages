@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import StoryOrchestrationDraftIngest from './StoryOrchestrationDraftIngest.vue'
 import StoryStudioDialog from './StoryStudioDialog.vue'
 import {
   adminCreateStoryOrchestrationEditorialReview,
@@ -41,6 +42,11 @@ const currentDecision = computed<AdminStoryOrchestrationEditorialDecision | 'not
   if (!historyFresh.value) return null
   return history.value[0]?.decision ?? 'not_reviewed'
 })
+const currentApprovedReview = computed<AdminStoryOrchestrationEditorialReview | null>(() =>
+  historyFresh.value && history.value[0]?.decision === 'approved'
+    ? history.value[0]
+    : null,
+)
 const currentDecisionLabel = computed(() => {
   if (currentDecision.value === 'approved') return 'Approved'
   if (currentDecision.value === 'rejected') return 'Rejected'
@@ -174,6 +180,10 @@ function retryHistory() {
   if (!historyLoading.value && !submitting.value) void loadHistory()
 }
 
+function refreshHistoryAfterDraftIngestConflict() {
+  if (!historyLoading.value && !submitting.value) void loadHistory()
+}
+
 watch(
   () => props.runId,
   () => {
@@ -225,6 +235,14 @@ onBeforeUnmount(() => {
     <p v-if="currentDecision === 'approved'" class="editorial-review__hint">Approved is the current human decision. Reject this run to record a new decision.</p>
     <p v-else-if="currentDecision === 'rejected'" class="editorial-review__hint">Rejected is the current human decision. Approve this run to record a new decision.</p>
     <p v-else-if="currentDecision === null && !historyLoading" class="editorial-review__hint">Editorial history is unavailable, so the current human decision cannot be shown.</p>
+
+    <StoryOrchestrationDraftIngest
+      :run-id="props.runId"
+      :story-slug="props.storySlug"
+      :current-approved-review="currentApprovedReview"
+      :review-mutation-pending="submitting"
+      @refresh-editorial-history="refreshHistoryAfterDraftIngestConflict"
+    />
 
     <div class="editorial-review__actions">
       <button type="button" class="studio-button studio-button--primary" :disabled="submitting || currentDecision === 'approved'" @click="openConfirmation('approved')">Approve this run</button>
