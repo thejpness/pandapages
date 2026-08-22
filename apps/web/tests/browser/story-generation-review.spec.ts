@@ -9,10 +9,24 @@ const runB = '44444444-4444-4444-8444-444444444444'
 const timestamp = '2026-08-18T12:00:00Z'
 const sourceSHA = 'a'.repeat(64)
 const analysisSHA = 'b'.repeat(64)
+const reviewIDOne = '33333333-3333-4333-8333-333333333333'
+const reviewIDTwo = '44444444-4444-4444-8444-444444444444'
 const generatedKeys = ['confident-readers', 'growing-readers', 'story-explorers', 'little-listeners'] as const
 const storyEditionKeys = ['classic', ...generatedKeys] as const
 type EditorialDecision = 'approved' | 'rejected'
 type EditorialReview = { id: string; runId: string; decision: EditorialDecision; createdAt: string }
+type DraftIngestOutcome = 'created' | 'reused'
+type DraftIngest = {
+  id: string
+  runId: string
+  editorialReviewId: string
+  storySlug: string
+  createdAt: string
+  outcome: DraftIngestOutcome
+  editions: Array<{ editionKey: typeof generatedKeys[number]; editionId: string; storyVersionId: string }>
+}
+
+const draftIngestID = '77777777-7777-4777-8777-777777777777'
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -95,6 +109,22 @@ function editorialReview(id: string, runId: string, decision: EditorialDecision,
   return { id, runId, decision, createdAt }
 }
 
+function draftIngest(runId: string, editorialReviewId: string, outcome: DraftIngestOutcome): DraftIngest {
+  return {
+    id: draftIngestID,
+    runId,
+    editorialReviewId,
+    storySlug: 'panda-tale',
+    createdAt: '2026-08-22T12:00:00.123456789Z',
+    outcome,
+    editions: generatedKeys.map((editionKey, index) => ({
+      editionKey,
+      editionId: `${index + 1}1111111-1111-4${index + 1}11-8${index + 1}11-111111111111`,
+      storyVersionId: `${index + 5}2222222-2222-4${index + 5}22-8${index + 5}22-222222222222`,
+    })),
+  }
+}
+
 class ReviewAPI {
   requests: Array<{ method: string; path: string; body: string | null }> = []
   history = new Map<string, Array<ReturnType<typeof summary>>>()
@@ -110,6 +140,10 @@ class ReviewAPI {
   editorialPostGate: ReturnType<typeof deferred<void>> | null = null
   editorialPostFailure: { status: number; code: string } | null = null
   editorialSequence = 0
+  draftIngestGate: ReturnType<typeof deferred<void>> | null = null
+  draftIngestFailure: { status: number; code: string } | null = null
+  draftIngestTransportFailure = false
+  draftIngestOutcome: DraftIngestOutcome = 'created'
 
   async install(page: Page) {
     await page.route('**/api/v1/admin/**', (route) => this.handle(route))
@@ -202,6 +236,26 @@ class ReviewAPI {
       return this.fulfill(route, created, 201)
     }
 
+    const draft = /^\/api\/v1\/admin\/story-orchestration-runs\/([^/]+)\/draft-ingests$/.exec(path)
+    if (draft && method === 'POST') {
+      if (this.draftIngestGate) {
+        const gate = this.draftIngestGate
+        this.draftIngestGate = null
+        await gate.promise
+      }
+      if (this.draftIngestFailure) {
+        const failure = this.draftIngestFailure
+        this.draftIngestFailure = null
+        return this.fulfill(route, { error: { code: failure.code, message: 'internal message must never be displayed' } }, failure.status)
+      }
+      if (this.draftIngestTransportFailure) {
+        this.draftIngestTransportFailure = false
+        return route.abort('failed')
+      }
+      const editorialReviewId = JSON.parse(request.postData() ?? '{}').editorialReviewId as string
+      return this.fulfill(route, draftIngest(draft[1], editorialReviewId, this.draftIngestOutcome), this.draftIngestOutcome === 'created' ? 201 : 200)
+    }
+
     return this.fulfill(route, { error: { code: 'unhandled' } }, 501)
   }
 }
@@ -260,6 +314,7 @@ test('generation uses the exact source version, keeps the request in view, then 
   await expect(panel.getByText('Not reviewed')).toBeVisible()
   await expect(panel.getByRole('button', { name: 'Approve this run' })).toBeEnabled()
   await expect(panel.getByRole('button', { name: 'Reject this run' })).toBeEnabled()
+  await expect(panel.getByRole('button', { name: 'Create editable drafts' })).toBeDisabled()
   await expect(panel.getByRole('button', { name: /publish|ingest|create draft|save as story|request changes/i })).toHaveCount(0)
   expect((await new AxeBuilder({ page }).analyze()).violations.filter((violation) => violation.impact === 'serious' || violation.impact === 'critical')).toEqual([])
 })
@@ -319,6 +374,7 @@ test('editorial review preserves repeated history, confirms append-only actions,
   await expect(editorial.getByText('Rejected').first()).toBeVisible()
   await expect(editorial.getByRole('button', { name: 'Reject this run' })).toBeDisabled()
   await expect(editorial.getByRole('button', { name: 'Approve this run' })).toBeEnabled()
+  await expect(editorial.getByRole('button', { name: 'Create editable drafts' })).toBeDisabled()
   await editorial.locator('summary').click()
   const rows = editorial.locator('.editorial-review__history-list > li')
   await expect(rows).toHaveCount(3)
@@ -361,6 +417,189 @@ test('machine and human decisions remain separate, including failed machine asse
   await expect(editorial.getByText('Approved').first()).toBeVisible()
   await expect(editorial.getByRole('button', { name: 'Approve this run' })).toBeDisabled()
   await expect(editorial.getByRole('button', { name: 'Reject this run' })).toBeEnabled()
+  await expect(editorial.getByRole('button', { name: 'Create editable drafts' })).toBeEnabled()
+})
+
+test('an initial editorial-history failure leaves the current decision unavailable and cannot authorize draft ingest', async ({ page }) => {
+  const api = new ReviewAPI()
+  const selected = orchestrationRun(runA, sourceVersionA, 'pass')
+  api.runs.set(runA, selected)
+  api.history.set(sourceVersionA, [summary(selected)])
+  api.editorialHistoryFailure.set(runA, { status: 503, code: 'editorial_reviews_unavailable' })
+  await openReview(page, api)
+  await page.getByRole('button', { name: /Pass — machine assessment/ }).click()
+  const editorial = page.locator('.editorial-review')
+  const ingest = editorial.locator('.draft-ingest')
+
+  await expect(editorial.getByText('Current decision unavailable')).toBeVisible()
+  await expect(editorial.getByText('Not reviewed')).toHaveCount(0)
+  await expect(ingest.getByRole('button', { name: 'Create editable drafts' })).toBeDisabled()
+  expect(api.count('POST', `/api/v1/admin/story-orchestration-runs/${runA}/draft-ingests`)).toBe(0)
+  await expect(page.getByRole('tab', { name: 'Confident Readers' })).toBeVisible()
+  await expect(page.getByText('Generated story')).toBeVisible()
+  await expect(editorial.getByText('internal message must never be displayed')).toHaveCount(0)
+})
+
+test('a fresh current approval creates editable drafts from the exact newest event and hands off to the current editor draft', async ({ page }) => {
+  const api = new ReviewAPI()
+  const selected = orchestrationRun(runA, sourceVersionA, 'pass')
+  api.runs.set(runA, selected)
+  api.history.set(sourceVersionA, [summary(selected)])
+  api.editorialHistory.set(runA, [
+    editorialReview(reviewIDTwo, runA, 'approved', '2026-08-18T12:01:00Z'),
+    editorialReview(reviewIDOne, runA, 'approved', '2026-08-18T12:00:00Z'),
+  ])
+  await openReview(page, api)
+  await page.getByRole('button', { name: /Pass — machine assessment/ }).click()
+  const editorial = page.locator('.editorial-review')
+  const ingest = editorial.locator('.draft-ingest')
+  await expect(ingest.getByRole('button', { name: 'Create editable drafts' })).toBeEnabled()
+
+  await ingest.getByRole('button', { name: 'Create editable drafts' }).click()
+  const dialog = page.locator('.studio-dialog__content')
+  await expect(dialog.getByRole('heading', { name: 'Create editable drafts?' })).toBeVisible()
+  await expect(dialog).toContainText('editable Story Studio drafts')
+  await expect(dialog).toContainText('Classic remains unchanged')
+  await expect(dialog).toContainText('Nothing will be published or released')
+  await dialog.getByRole('button', { name: 'Cancel' }).click()
+  expect(api.count('POST', `/api/v1/admin/story-orchestration-runs/${runA}/draft-ingests`)).toBe(0)
+
+  const gate = deferred<void>()
+  api.draftIngestGate = gate
+  await ingest.getByRole('button', { name: 'Create editable drafts' }).click()
+  await dialog.getByRole('button', { name: 'Create editable drafts' }).click()
+  await expect(ingest).toHaveAttribute('aria-busy', 'true')
+  // The open modal makes its background inert, so role discovery intentionally
+  // excludes the underlying action. Query the actual background control.
+  await expect(ingest.locator('.studio-button--primary')).toBeDisabled()
+  gate.resolve()
+  await expect(ingest.getByText('Editable drafts created. Nothing was published.')).toBeVisible()
+  expect(api.requests.find((request) => request.path.endsWith('/draft-ingests'))?.body).toBe(`{"editorialReviewId":"${reviewIDTwo}"}`)
+  await ingest.getByRole('button', { name: 'Edit drafts' }).click()
+  await expect(page).toHaveURL(/\/admin\/stories\/panda-tale\/edit\?edition=confident-readers$/)
+  expect(page.url()).not.toContain('fromVersion')
+})
+
+test('a reused ingest remains available for a needs-review machine result without changing either review state', async ({ page }) => {
+  const api = new ReviewAPI()
+  const selected = orchestrationRun(runA, sourceVersionA, 'needs_review')
+  api.runs.set(runA, selected)
+  api.history.set(sourceVersionA, [summary(selected)])
+  api.editorialHistory.set(runA, [editorialReview(reviewIDOne, runA, 'approved', '2026-08-18T12:00:00Z')])
+  api.draftIngestOutcome = 'reused'
+  await openReview(page, api)
+  await page.getByRole('button', { name: /Needs review — machine assessment/ }).click()
+  const editorial = page.locator('.editorial-review')
+  const ingest = editorial.locator('.draft-ingest')
+  await expect(page.getByText('Needs review — machine assessment').last()).toBeVisible()
+  await expect(editorial.getByText('Approved').first()).toBeVisible()
+  await ingest.getByRole('button', { name: 'Create editable drafts' }).click()
+  await page.locator('.studio-dialog__content').getByRole('button', { name: 'Create editable drafts' }).click()
+  await expect(ingest.getByText('This exact ingest already exists. Open the current editable drafts.')).toBeVisible()
+  await expect(editorial.getByText('Approved').first()).toBeVisible()
+  await expect(editorial.getByRole('button', { name: 'Reject this run' })).toBeEnabled()
+})
+
+test('draft ingest conflicts refresh the current editorial decision and keep immutable run evidence visible', async ({ page }) => {
+  const api = new ReviewAPI()
+  const selected = orchestrationRun(runA, sourceVersionA, 'fail')
+  api.runs.set(runA, selected)
+  api.history.set(sourceVersionA, [summary(selected)])
+  api.editorialHistory.set(runA, [editorialReview(reviewIDOne, runA, 'approved', '2026-08-18T12:00:00Z')])
+  await openReview(page, api)
+  await page.getByRole('button', { name: /Fail — machine assessment/ }).click()
+  const editorial = page.locator('.editorial-review')
+  const ingest = editorial.locator('.draft-ingest')
+  api.editorialHistory.set(runA, [editorialReview(reviewIDTwo, runA, 'rejected', '2026-08-18T12:01:00Z')])
+  api.draftIngestFailure = { status: 409, code: 'story_orchestration_draft_ingest_conflict' }
+  await ingest.getByRole('button', { name: 'Create editable drafts' }).click()
+  await page.locator('.studio-dialog__content').getByRole('button', { name: 'Create editable drafts' }).click()
+  await expect(ingest.getByText('Editable drafts could not be created')).toBeVisible()
+  await expect(ingest.getByText(/Existing working content was not replaced/)).toBeVisible()
+  await expect(editorial.getByText('Rejected').first()).toBeVisible()
+  await expect(ingest.getByRole('button', { name: 'Create editable drafts' })).toBeDisabled()
+  expect(api.count('GET', `/api/v1/admin/story-orchestration-runs/${runA}/editorial-reviews`)).toBe(2)
+  await expect(page.getByRole('tab', { name: 'Confident Readers' })).toBeVisible()
+  await expect(page.getByText('Generated story')).toBeVisible()
+})
+
+test('a draft-ingest conflict followed by history refresh failure invalidates the prior approval without retrying', async ({ page }) => {
+  const api = new ReviewAPI()
+  const selected = orchestrationRun(runA, sourceVersionA, 'pass')
+  api.runs.set(runA, selected)
+  api.history.set(sourceVersionA, [summary(selected)])
+  api.editorialHistory.set(runA, [editorialReview(reviewIDOne, runA, 'approved', '2026-08-18T12:00:00Z')])
+  await openReview(page, api)
+  await page.getByRole('button', { name: /Pass — machine assessment/ }).click()
+  const editorial = page.locator('.editorial-review')
+  const ingest = editorial.locator('.draft-ingest')
+  api.draftIngestFailure = { status: 409, code: 'story_orchestration_draft_ingest_conflict' }
+  api.editorialHistoryFailure.set(runA, { status: 503, code: 'editorial_reviews_unavailable' })
+
+  await ingest.getByRole('button', { name: 'Create editable drafts' }).click()
+  await page.locator('.studio-dialog__content').getByRole('button', { name: 'Create editable drafts' }).click()
+
+  await expect(ingest.getByText('Editable drafts could not be created')).toBeVisible()
+  await expect(ingest.getByText(/Existing working content was not replaced/)).toBeVisible()
+  await expect(editorial.getByText('Current decision unavailable')).toBeVisible()
+  await expect(editorial.getByText('Approved').first()).toHaveCount(0)
+  await expect(ingest.getByRole('button', { name: 'Create editable drafts' })).toBeDisabled()
+  await expect(ingest.getByText('Editable drafts created. Nothing was published.')).toHaveCount(0)
+  await expect(ingest.getByRole('button', { name: 'Edit drafts' })).toHaveCount(0)
+  await expect(ingest.getByText('internal message must never be displayed')).toHaveCount(0)
+  expect(api.count('POST', `/api/v1/admin/story-orchestration-runs/${runA}/draft-ingests`)).toBe(1)
+  expect(api.count('GET', `/api/v1/admin/story-orchestration-runs/${runA}/editorial-reviews`)).toBe(2)
+  await expect.poll(() => api.count('POST', `/api/v1/admin/story-orchestration-runs/${runA}/draft-ingests`)).toBe(1)
+  await expect(page.getByRole('tab', { name: 'Confident Readers' })).toBeVisible()
+  await expect(page.getByText('Generated story')).toBeVisible()
+})
+
+test('an unconfirmed draft-ingest transport failure keeps the outcome ambiguous without exposing edit actions', async ({ page }) => {
+  const api = new ReviewAPI()
+  const selected = orchestrationRun(runA, sourceVersionA, 'pass')
+  api.runs.set(runA, selected)
+  api.history.set(sourceVersionA, [summary(selected)])
+  api.editorialHistory.set(runA, [editorialReview(reviewIDOne, runA, 'approved', '2026-08-18T12:00:00Z')])
+  api.draftIngestTransportFailure = true
+  await openReview(page, api)
+  await page.getByRole('button', { name: /Pass — machine assessment/ }).click()
+  const editorial = page.locator('.editorial-review')
+  const ingest = editorial.locator('.draft-ingest')
+
+  await ingest.getByRole('button', { name: 'Create editable drafts' }).click()
+  await page.locator('.studio-dialog__content').getByRole('button', { name: 'Create editable drafts' }).click()
+
+  await expect(ingest.getByText('Draft result could not be confirmed')).toBeVisible()
+  await expect(ingest.getByText(/Refresh the editorial decision before retrying.*retrying is safe/)).toBeVisible()
+  await expect(ingest.getByText('Editable drafts created. Nothing was published.')).toHaveCount(0)
+  await expect(ingest.getByText(/nothing was created/i)).toHaveCount(0)
+  await expect(ingest.getByRole('button', { name: 'Edit drafts' })).toHaveCount(0)
+  await expect(ingest.getByText(/failed to fetch|ERR_FAILED/i)).toHaveCount(0)
+  await expect(editorial.getByText('Approved').first()).toBeVisible()
+  expect(api.count('POST', `/api/v1/admin/story-orchestration-runs/${runA}/draft-ingests`)).toBe(1)
+  await expect.poll(() => api.count('POST', `/api/v1/admin/story-orchestration-runs/${runA}/draft-ingests`)).toBe(1)
+})
+
+test('a draft-ingest completion from an unmounted run cannot affect the newly selected run', async ({ page }) => {
+  const api = new ReviewAPI()
+  const first = orchestrationRun(runA, sourceVersionA, 'pass')
+  const second = orchestrationRun(runB, sourceVersionA, 'needs_review')
+  api.runs.set(runA, first)
+  api.runs.set(runB, second)
+  api.history.set(sourceVersionA, [summary(first), summary(second)])
+  api.editorialHistory.set(runA, [editorialReview(reviewIDOne, runA, 'approved', '2026-08-18T12:00:00Z')])
+  api.editorialHistory.set(runB, [editorialReview(reviewIDTwo, runB, 'rejected', '2026-08-18T12:01:00Z')])
+  await openReview(page, api)
+  await page.getByRole('button', { name: /Pass — machine assessment/ }).click()
+  const gate = deferred<void>()
+  api.draftIngestGate = gate
+  await page.locator('.draft-ingest').getByRole('button', { name: 'Create editable drafts' }).click()
+  await page.locator('.studio-dialog__content').getByRole('button', { name: 'Create editable drafts' }).click()
+  await page.locator('.generation-history-list__item').filter({ hasText: 'Needs review' }).evaluate((button: HTMLButtonElement) => button.click())
+  await expect(page.getByText('Needs review — machine assessment').last()).toBeVisible()
+  gate.resolve()
+  await expect(page.locator('.editorial-review').getByText('Rejected').first()).toBeVisible()
+  await expect(page.locator('.draft-ingest').getByText('Editable drafts created. Nothing was published.')).toHaveCount(0)
 })
 
 test('recorded decision with refresh failure preserves the prior history without claiming a new current decision', async ({ page }) => {
