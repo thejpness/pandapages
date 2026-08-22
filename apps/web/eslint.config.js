@@ -70,11 +70,14 @@ export default withVueTs(
       'src/components/reader/ReaderScrollView.vue',
       'src/components/reader/ReaderPagedView.vue',
       'src/components/admin/story-studio/StoryPreviewPane.vue',
+      'src/components/admin/story-studio/StoryGenerationReview.vue',
     ],
     rules: {
       // Story HTML is an opaque server-produced API contract. Goldmark omits raw
       // Markdown HTML, the Go allowlist sanitises rendered output, and stored
-      // versions are revalidated before Reader or preview delivery.
+      // versions are revalidated before Reader or preview delivery. Generated
+      // Markdown additionally passes a raw-HTML-disabled parser, DOMPurify,
+      // and parseSafeRenderedStoryHTML before this sole review sink.
       'vue/no-v-html': 'off',
     },
   },

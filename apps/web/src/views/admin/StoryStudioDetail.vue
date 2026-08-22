@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import StoryCanonicalSourcePanel from '@/components/admin/story-studio/StoryCanonicalSourcePanel.vue'
 import StoryEditionWorkspace from '@/components/admin/story-studio/StoryEditionWorkspace.vue'
+import StoryGenerationReview from '@/components/admin/story-studio/StoryGenerationReview.vue'
 import StoryReleasePanel from '@/components/admin/story-studio/StoryReleasePanel.vue'
 import StoryStatusBadge from '@/components/admin/story-studio/StoryStatusBadge.vue'
 import StoryStudioState from '@/components/admin/story-studio/StoryStudioState.vue'
@@ -240,6 +241,8 @@ onBeforeUnmount(() => {
         </section>
         <StoryCanonicalSourcePanel :source="story.source" @edit="editSource" />
       </div>
+
+      <StoryGenerationReview :slug="story.slug" :source="story.source" />
 
       <StoryReleasePanel
         :story="story"

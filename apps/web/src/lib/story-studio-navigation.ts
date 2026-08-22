@@ -11,10 +11,18 @@ import type {
   AdminVersionHealth,
   AdminVersionSummary,
   JsonObject,
+  AdminGeneratedEditionKey,
 } from './api'
 
 export const storyEditionOrder: readonly AdminStoryEditionKey[] = [
   'classic',
+  'confident-readers',
+  'growing-readers',
+  'story-explorers',
+  'little-listeners',
+]
+
+export const generatedEditionOrder: readonly AdminGeneratedEditionKey[] = [
   'confident-readers',
   'growing-readers',
   'story-explorers',
@@ -55,6 +63,7 @@ export function parseStoryEditionKey(value: unknown): AdminStoryEditionKey | nul
     : null
 }
 export function storyEditionLabel(key: AdminStoryEditionKey): string { return editionLabels[key] }
+export function generatedEditionLabel(key: AdminGeneratedEditionKey): string { return editionLabels[key] }
 export function storyEditionDescription(key: AdminStoryEditionKey): string { return editionDescriptions[key] }
 export function editionStatusLabel(status: AdminEditionStatus): string { return editionStatusLabels[status] }
 export function sourceStatusLabel(status: AdminSourceStatus): string { return sourceStatusLabels[status] }
@@ -238,4 +247,33 @@ export function projectStoryStudioError(error: unknown): StoryStudioError {
     message: 'The connection or server may be temporarily unavailable. Try again.',
     retryable: true,
   }
+}
+
+export type StoryGenerationSurface = 'generation' | 'history' | 'detail'
+export type StoryGenerationError = {
+  kind: 'session' | 'forbidden' | 'not-found' | 'validation' | 'busy' | 'timeout' | 'unavailable' | 'retry'
+  title: string
+  message: string
+  retryable: boolean
+}
+
+export function projectStoryGenerationError(
+  error: unknown,
+  surface: StoryGenerationSurface,
+): StoryGenerationError {
+  const status = apiErrorStatus(error)
+  if (status === 401) return { kind: 'session', title: 'Session ended', message: 'Sign in to Panda Pages to continue in Story Studio.', retryable: false }
+  if (status === 403) return { kind: 'forbidden', title: 'Story Studio is unavailable', message: 'Administrator access is not available for this request.', retryable: false }
+  if (status === 400) return surface === 'generation'
+    ? { kind: 'validation', title: 'Source revision could not be used', message: 'The selected source revision could not be accepted for generation. Review its source details and try again if it changes.', retryable: false }
+    : { kind: 'validation', title: 'Generation data is unavailable', message: 'The selected generation request could not be opened safely.', retryable: false }
+  if (status === 404) return surface === 'history'
+    ? { kind: 'not-found', title: 'Source revision unavailable', message: 'This source revision is no longer available. Choose another revision or return to the story.', retryable: false }
+    : { kind: 'not-found', title: 'Generation unavailable', message: 'This generation run is no longer available. Refresh recent generations and choose another run.', retryable: false }
+  if (surface === 'generation' && status === 429) return { kind: 'busy', title: 'Generation service is busy', message: 'Try generating again later.', retryable: true }
+  if (surface === 'generation' && status === 502) return { kind: 'unavailable', title: 'Generation response could not be used', message: 'The generation provider returned an unusable response. You can try again later.', retryable: true }
+  if (surface === 'generation' && status === 503) return { kind: 'unavailable', title: 'Generation service is unavailable', message: 'Try generating again later.', retryable: true }
+  if (surface === 'generation' && status === 504) return { kind: 'timeout', title: 'Generation request timed out', message: 'Refresh recent generations before retrying: the server may have completed a run near the timeout boundary.', retryable: true }
+  if (status === 503) return { kind: 'unavailable', title: surface === 'history' ? 'Recent generations are unavailable' : 'Generation detail is unavailable', message: 'The service is temporarily unavailable. Try again.', retryable: true }
+  return { kind: 'retry', title: surface === 'generation' ? 'Generation could not be completed' : surface === 'history' ? 'Recent generations could not be loaded' : 'Generation detail could not be loaded', message: 'The connection or server may be temporarily unavailable. Try again.', retryable: true }
 }
