@@ -116,7 +116,11 @@ query() {
       --set=ON_ERROR_STOP=1 --tuples-only --no-align --command="$1"
 }
 
-[[ $(query "SELECT version_id FROM goose_db_version WHERE is_applied ORDER BY id DESC LIMIT 1;") == 2 ]]
+schema_version=$(query "SELECT version_id FROM goose_db_version WHERE is_applied ORDER BY id DESC LIMIT 1;")
+[[ "$schema_version" == 1 ]] || {
+  printf 'expected complete baseline schema at Goose version 1, got %s\n' "$schema_version" >&2
+  exit 1
+}
 [[ $(query "SELECT count(*) FROM accounts;") == 0 ]]
 [[ $(query "SELECT count(*) FROM profiles;") == 0 ]]
 

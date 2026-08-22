@@ -106,17 +106,42 @@ func (s *Store) GetCompletedStoryOrchestrationRun(runID string) (storyorchestrat
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	persisted, err := getCompletedStoryOrchestrationRunTx(ctx, tx, runID, false)
+	if err != nil {
+		return storyorchestration.PersistedRun{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return storyorchestration.PersistedRun{}, err
+	}
+	return persisted, nil
+}
+
+// getCompletedStoryOrchestrationRunTx reconstructs the exact persisted run
+// against its authoritative source inside a caller-owned transaction. Ingest
+// uses lockRun to serialize its current-approval check with review inserts;
+// read-only PR104 and PR109 paths retain their existing non-locking behavior.
+func getCompletedStoryOrchestrationRunTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	runID string,
+	lockRun bool,
+) (storyorchestration.PersistedRun, error) {
+	lockClause := ""
+	if lockRun {
+		lockClause = " FOR UPDATE"
+	}
+
 	var (
 		persisted      storyorchestration.PersistedRun
 		sourceSHA256   string
 		semanticResult string
 		artifactsJSON  []byte
 	)
-	err = tx.QueryRowContext(ctx, `
+	err := tx.QueryRowContext(ctx, `
 		SELECT id, source_version_id, source_sha256, semantic_result, artifacts, created_at
 		FROM story_orchestration_runs
 		WHERE id = $1
-	`, runID).Scan(
+	`+lockClause, runID).Scan(
 		&persisted.ID,
 		&persisted.SourceVersionID,
 		&sourceSHA256,
@@ -148,9 +173,6 @@ func (s *Store) GetCompletedStoryOrchestrationRun(runID string) (storyorchestrat
 	}
 	persisted.Result = result
 	persisted.CreatedAt = persisted.CreatedAt.UTC()
-	if err := tx.Commit(); err != nil {
-		return storyorchestration.PersistedRun{}, err
-	}
 	return persisted, nil
 }
 

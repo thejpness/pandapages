@@ -772,6 +772,86 @@ CREATE TABLE story_orchestration_runs (
 CREATE INDEX story_orchestration_runs_source_created_idx
   ON story_orchestration_runs(source_version_id, created_at DESC, id DESC);
 
+-- Human editorial decisions are immutable audit events against one exact
+-- completed orchestration run. They intentionally do not alter the retained
+-- orchestration evidence or current story/publication state.
+CREATE TABLE story_orchestration_run_editorial_reviews (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  run_id uuid NOT NULL,
+  decision text NOT NULL,
+  reviewer_principal_id uuid NOT NULL,
+  reviewer_account_id uuid NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+
+  CONSTRAINT story_orchestration_run_editorial_reviews_run_fkey
+    FOREIGN KEY (run_id) REFERENCES story_orchestration_runs(id)
+    ON UPDATE NO ACTION ON DELETE RESTRICT,
+
+  CONSTRAINT story_orchestration_run_editorial_reviews_reviewer_membership_fkey
+    FOREIGN KEY (reviewer_principal_id, reviewer_account_id)
+    REFERENCES account_memberships(principal_id, account_id)
+    ON UPDATE NO ACTION ON DELETE RESTRICT,
+
+  CONSTRAINT story_orchestration_run_editorial_reviews_decision_check
+    CHECK (decision IN ('approved', 'rejected')),
+
+  CONSTRAINT story_orchestration_run_editorial_reviews_id_run_key
+    UNIQUE (id, run_id)
+);
+
+CREATE INDEX story_orchestration_run_editorial_reviews_run_created_idx
+  ON story_orchestration_run_editorial_reviews(run_id, created_at DESC, id DESC);
+
+-- Immutable provenance for deterministic copies from an exact currently
+-- approved orchestration run into the existing editable Story Studio drafts.
+CREATE TABLE story_orchestration_run_draft_ingests (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  run_id uuid NOT NULL,
+  editorial_review_id uuid NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+
+  CONSTRAINT story_orchestration_run_draft_ingests_run_fkey
+    FOREIGN KEY (run_id) REFERENCES story_orchestration_runs(id)
+    ON UPDATE NO ACTION ON DELETE RESTRICT,
+
+  CONSTRAINT story_orchestration_run_draft_ingests_review_run_fkey
+    FOREIGN KEY (editorial_review_id, run_id)
+    REFERENCES story_orchestration_run_editorial_reviews(id, run_id)
+    ON UPDATE NO ACTION ON DELETE RESTRICT,
+
+  CONSTRAINT story_orchestration_run_draft_ingests_editorial_review_key
+    UNIQUE (editorial_review_id)
+);
+
+-- Each ingest retains the exact initial mutable version created for each
+-- generated edition. Later editorial edits create new story versions and do
+-- not mutate this provenance mapping.
+CREATE TABLE story_orchestration_run_draft_ingest_editions (
+  draft_ingest_id uuid NOT NULL,
+  edition_id uuid NOT NULL,
+  story_version_id uuid NOT NULL,
+
+  CONSTRAINT story_orchestration_run_draft_ingest_editions_pkey
+    PRIMARY KEY (draft_ingest_id, edition_id),
+
+  CONSTRAINT story_orchestration_run_draft_ingest_editions_ingest_fkey
+    FOREIGN KEY (draft_ingest_id)
+    REFERENCES story_orchestration_run_draft_ingests(id)
+    ON UPDATE NO ACTION ON DELETE RESTRICT,
+
+  CONSTRAINT story_orchestration_run_draft_ingest_editions_edition_fkey
+    FOREIGN KEY (edition_id) REFERENCES story_editions(id)
+    ON UPDATE NO ACTION ON DELETE RESTRICT,
+
+  CONSTRAINT story_orchestration_run_draft_ingest_editions_version_edition_fkey
+    FOREIGN KEY (story_version_id, edition_id)
+    REFERENCES story_versions(id, edition_id)
+    ON UPDATE NO ACTION ON DELETE RESTRICT,
+
+  CONSTRAINT story_orchestration_run_draft_ingest_editions_story_version_key
+    UNIQUE (story_version_id)
+);
+
 -- Immutable release manifests. current_release_id is the modern authority.
 CREATE TABLE story_releases (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -852,6 +932,9 @@ ALTER TABLE story_sources
 
 DROP TABLE story_release_editions;
 DROP TABLE story_releases;
+DROP TABLE story_orchestration_run_draft_ingest_editions;
+DROP TABLE story_orchestration_run_draft_ingests;
+DROP TABLE story_orchestration_run_editorial_reviews;
 DROP TABLE story_orchestration_runs;
 DROP TABLE story_source_versions;
 DROP TABLE story_sources;

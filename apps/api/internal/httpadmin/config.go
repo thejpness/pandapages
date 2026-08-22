@@ -16,4 +16,5 @@ type Config struct {
 	StoryOrchestrationRuns             StoryOrchestrationRunReader
 	StoryOrchestrationRunHistory       StoryOrchestrationRunHistoryReader
 	StoryOrchestrationEditorialReviews StoryOrchestrationEditorialReviewService
+	StoryOrchestrationDraftIngests     StoryOrchestrationDraftIngestService
 }

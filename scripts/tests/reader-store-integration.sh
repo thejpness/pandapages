@@ -107,17 +107,28 @@ docker run --rm \
   --mount "type=bind,src=$repo_root/apps/api/migrations,dst=/migrations,readonly" \
   "$migration_image" up >/dev/null
 
+migration_files=("$repo_root"/apps/api/migrations/[0-9]*_*.sql)
+[[ ${#migration_files[@]} == 1 && ${migration_files[0]##*/} == 00001_baseline.sql ]] || {
+  printf 'expected exactly one complete baseline migration, found: %s\n' "${migration_files[*]##*/}" >&2
+  exit 1
+}
+
 query() {
   docker exec "$postgres_container" \
     psql -X --username="$database_user" --dbname="$database_name" \
       --set=ON_ERROR_STOP=1 --tuples-only --no-align --command="$1"
 }
 
-[[ $(query "SELECT version_id FROM goose_db_version WHERE is_applied ORDER BY id DESC LIMIT 1;") == 2 ]]
+schema_version=$(query "SELECT version_id FROM goose_db_version WHERE is_applied ORDER BY id DESC LIMIT 1;")
+[[ "$schema_version" == 1 ]] || {
+  printf 'expected complete baseline schema at Goose version 1, got %s\n' "$schema_version" >&2
+  exit 1
+}
 [[ $(query "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='story_segments' AND column_name='locator';") == 0 ]]
 [[ $(query "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='story_segments' AND column_name IN ('segment_kind','heading_level','content_key','content_occurrence','chapter_key','chapter_occurrence');") == 6 ]]
 [[ $(query "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='story_releases' AND column_name='migration_backfill';") == 0 ]]
-[[ $(query "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('story_editions','story_releases','story_release_editions','story_sources','story_source_versions','story_orchestration_runs','story_orchestration_run_editorial_reviews','source_acquisitions','source_acquisition_eligibility_assessments','source_acquisition_quality_reviews','reader_story_edition_overrides','reading_progress');") == 12 ]]
+[[ $(query "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('story_editions','story_releases','story_release_editions','story_sources','story_source_versions','story_orchestration_runs','story_orchestration_run_editorial_reviews','story_orchestration_run_draft_ingests','story_orchestration_run_draft_ingest_editions','source_acquisitions','source_acquisition_eligibility_assessments','source_acquisition_quality_reviews','reader_story_edition_overrides','reading_progress');") == 14 ]]
+[[ $(query "SELECT count(*) FROM pg_constraint WHERE conname IN ('story_orchestration_run_editorial_reviews_id_run_key','story_orchestration_run_draft_ingests_review_run_fkey','story_orchestration_run_draft_ingests_editorial_review_key','story_orchestration_run_draft_ingest_editions_ingest_fkey','story_orchestration_run_draft_ingest_editions_version_edition_fkey');") == 5 ]]
 [[ $(query "SELECT count(*) FROM source_acquisitions;") == 0 ]]
 [[ $(query "SELECT count(*) FROM source_acquisition_eligibility_assessments;") == 0 ]]
 [[ $(query "SELECT count(*) FROM source_acquisition_quality_reviews;") == 0 ]]
@@ -132,7 +143,7 @@ database_url="postgres://$database_user:$database_password@127.0.0.1:$published_
   PP_READER_STORE_TEST_DISPOSABLE=1 \
     PP_READER_STORE_TEST_DATABASE_URL="$database_url" \
     go test ./internal/db \
-      -run '^(TestReaderStoreIntegration|TestAdminEditionBundleIntegration|TestAdminReleaseIntegration|TestAdminSourceAcquisitionIntegration|TestAdminSourceAcquisitionPromotionIntegration|TestAdminSourceAcquisitionPromotionAndQualityReviewSerializeIntegration|TestGenerationSourceVersionIntegration|TestReaderEditionOverrideIntegration|TestReaderResolutionIntegration|TestReaderLibraryIntegration|TestStoryOrchestrationRunsIntegration|TestStoryOrchestrationRunHistoryIntegration|TestStoryOrchestrationEditorialReviewsIntegration)$' \
+      -run '^(TestReaderStoreIntegration|TestAdminEditionBundleIntegration|TestAdminReleaseIntegration|TestAdminSourceAcquisitionIntegration|TestAdminSourceAcquisitionPromotionIntegration|TestAdminSourceAcquisitionPromotionAndQualityReviewSerializeIntegration|TestGenerationSourceVersionIntegration|TestReaderEditionOverrideIntegration|TestReaderResolutionIntegration|TestReaderLibraryIntegration|TestStoryOrchestrationRunsIntegration|TestStoryOrchestrationRunHistoryIntegration|TestStoryOrchestrationEditorialReviewsIntegration|TestStoryOrchestrationRunDraftIngestsIntegration)$' \
       -count=1
 )
 

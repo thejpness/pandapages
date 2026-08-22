@@ -98,6 +98,7 @@ func New(cfg Config, store Store) http.Handler {
 	mux.HandleFunc("GET /api/v1/admin/source-versions/{sourceVersionID}/orchestration-runs", withAdmin(storyOrchestrationRunHistoryHandler(cfg.StoryOrchestrationRunHistory)))
 	mux.HandleFunc("GET /api/v1/admin/story-orchestration-runs/{runID}/editorial-reviews", withAdmin(storyOrchestrationEditorialReviewsHandler(cfg.StoryOrchestrationEditorialReviews)))
 	mux.HandleFunc("POST /api/v1/admin/story-orchestration-runs/{runID}/editorial-reviews", withAdmin(storyOrchestrationEditorialReviewsHandler(cfg.StoryOrchestrationEditorialReviews)))
+	mux.HandleFunc("POST /api/v1/admin/story-orchestration-runs/{runID}/draft-ingests", withAdmin(storyOrchestrationDraftIngestHandler(cfg.StoryOrchestrationDraftIngests)))
 
 	// POST /api/v1/admin/preview
 	mux.HandleFunc("POST /api/v1/admin/preview", withAdmin(func(w http.ResponseWriter, r *http.Request) {

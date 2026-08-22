@@ -258,6 +258,7 @@ func run() error {
 		StoryOrchestrationRuns:             store,
 		StoryOrchestrationRunHistory:       store,
 		StoryOrchestrationEditorialReviews: editorialReviews,
+		StoryOrchestrationDraftIngests:     store,
 	}, store)
 
 	server := newServer(newRootHandler(public, identity, admin))
