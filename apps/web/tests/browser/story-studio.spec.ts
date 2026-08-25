@@ -174,7 +174,7 @@ function sourceAcquisitionSummary(overrides: Record<string, unknown> = {}) {
 }
 
 function sourceEvidenceReference(fact: string) {
-  return [{ source: 'Catalogue record', fact }]
+  return [{ source: 'Catalogue record', fact, locator: `Catalogue record: ${fact}` }]
 }
 
 function sourceEligibility(overrides: Record<string, unknown> = {}) {
@@ -923,6 +923,8 @@ test('global source review validates factual evidence, saves eligible work, and 
   await expect(page.getByRole('heading', { name: "Alice's Adventures in Wonderland" })).toHaveCount(1)
   await expect(page.getByRole('searchbox', { name: 'Search Project Gutenberg' })).toHaveCount(0)
   await expect(page.getByText('Eligible under Panda Pages V3')).toBeVisible()
+  await expect(page.getByText('Catalogue record: ordinary literary work')).toHaveCount(1)
+  await expect(page.getByText('Story Studio could not complete that source review action. Try again.')).toHaveCount(0)
   const facts = page.locator('.source-eligibility-summary__facts')
   await expect(facts.getByText('1898', { exact: true })).toBeVisible()
   await expect(facts.getByText('1865', { exact: true })).toBeVisible()

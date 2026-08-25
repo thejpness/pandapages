@@ -1338,21 +1338,81 @@ const forbiddenAdminKeys = new Set([
   "sessionid",
   "storyid",
 ]);
+const adminCopyrightEvidenceReferenceKeys = new Set([
+  "source",
+  "fact",
+  "locator",
+  "identifier",
+  "digest",
+]);
+const adminEligibilityEvidenceReferenceLists = new Set([
+  "workcategoryreferences",
+  "authorshipreferences",
+  "authorreferences",
+  "firstpublicationreferences",
+]);
+const adminEligibilityFactEvidence = new Set([
+  "translation",
+  "additionaltextualcontribution",
+  "unpublishedatend1988",
+]);
 
 function compactAdminKey(key: string): string {
   return key.replaceAll(/[_-]/g, "").toLocaleLowerCase("en-GB");
+}
+
+function hasClosedAdminCopyrightEvidenceReferenceShape(
+  value: unknown,
+): value is Record<string, unknown> {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value);
+  return (
+    keys.includes("source") &&
+    keys.includes("fact") &&
+    keys.every((key) => adminCopyrightEvidenceReferenceKeys.has(key))
+  );
+}
+
+function isAdminEligibilityEvidenceReferenceLocator(
+  record: Record<string, unknown>,
+  key: string,
+  path: readonly string[],
+): boolean {
+  if (
+    key !== "locator" ||
+    !hasClosedAdminCopyrightEvidenceReferenceShape(record)
+  ) {
+    return false;
+  }
+
+  const parent = compactAdminKey(path[path.length - 1] ?? "");
+  const grandparent = compactAdminKey(path[path.length - 2] ?? "");
+  if (
+    grandparent === "effectiveukevidence" &&
+    adminEligibilityEvidenceReferenceLists.has(parent)
+  ) {
+    return true;
+  }
+
+  const greatGrandparent = compactAdminKey(path[path.length - 3] ?? "");
+  return (
+    parent === "references" &&
+    greatGrandparent === "effectiveukevidence" &&
+    adminEligibilityFactEvidence.has(grandparent)
+  );
 }
 
 function hasForbiddenAdminFields(
   value: unknown,
   allowedContent: ReadonlySet<string>,
   seen: WeakSet<object> = new WeakSet(),
+  path: readonly string[] = [],
 ): boolean {
   if (Array.isArray(value)) {
     if (seen.has(value)) return false;
     seen.add(value);
     return value.some((item) =>
-      hasForbiddenAdminFields(item, allowedContent, seen),
+      hasForbiddenAdminFields(item, allowedContent, seen, path),
     );
   }
   if (!isRecord(value)) return false;
@@ -1360,29 +1420,38 @@ function hasForbiddenAdminFields(
   seen.add(value);
   return Object.entries(value).some(([key, child]) => {
     const compact = compactAdminKey(key);
-    if (forbiddenAdminKeys.has(compact)) return true;
+    if (
+      forbiddenAdminKeys.has(compact) &&
+      !isAdminEligibilityEvidenceReferenceLocator(value, key, path)
+    ) {
+      return true;
+    }
     if (
       (compact === "markdown" || compact === "renderedhtml" || compact === "sourcetext") &&
       !allowedContent.has(compact)
     ) {
       return true;
     }
-    return hasForbiddenAdminFields(child, allowedContent, seen);
+    return hasForbiddenAdminFields(child, allowedContent, seen, [...path, key]);
   });
+}
+
+function adminJsonRecord(value: unknown): Record<string, unknown> {
+  if (!isRecord(value) || !isJsonObject(value)) {
+    throw new Error("Invalid admin response");
+  }
+  return value;
 }
 
 function adminRecord(
   value: unknown,
   allowedContent: readonly string[] = [],
 ): Record<string, unknown> {
-  if (
-    !isRecord(value) ||
-    !isJsonObject(value) ||
-    hasForbiddenAdminFields(value, new Set(allowedContent))
-  ) {
+  const record = adminJsonRecord(value);
+  if (hasForbiddenAdminFields(record, new Set(allowedContent))) {
     throw new Error("Invalid admin response");
   }
-  return value;
+  return record;
 }
 
 function requiredAdminString(
@@ -1534,7 +1603,7 @@ function parseAdminEvidenceReferences(value: unknown): AdminCopyrightEvidenceRef
     // A citation locator is display-only evidence metadata. It is deliberately
     // parsed as a small closed object rather than becoming a Reader locator or
     // a URL the browser/application will fetch.
-    if (!isRecord(item) || !isJsonObject(item) || Object.keys(item).some((key) => !["source", "fact", "locator", "identifier", "digest"].includes(key))) throw new Error("Invalid admin response");
+    if (!hasClosedAdminCopyrightEvidenceReferenceShape(item)) throw new Error("Invalid admin response");
     const record = item;
     const locator = optionalAdminString(record, "locator");
     const identifier = optionalAdminString(record, "identifier");
@@ -1545,7 +1614,7 @@ function parseAdminEvidenceReferences(value: unknown): AdminCopyrightEvidenceRef
 }
 
 function parseAdminFactEvidence(value: unknown): AdminCopyrightFactEvidence {
-  const record = adminRecord(value);
+  const record = adminJsonRecord(value);
   if (typeof record.state !== "string" || !adminCopyrightFactStates.has(record.state as AdminCopyrightFactState)) throw new Error("Invalid admin response");
   return { state: record.state as AdminCopyrightFactState, references: parseAdminEvidenceReferences(record.references) };
 }
@@ -1554,7 +1623,7 @@ export function parseAdminEligibility(value: unknown): AdminSourceEligibility {
   const record = adminRecord(value);
   const reason = (item: unknown): AdminCopyrightReason => { if (typeof item !== "string" || !adminCopyrightReasons.has(item as AdminCopyrightReason)) throw new Error("Invalid admin response"); return item as AdminCopyrightReason; };
   const jurisdiction = (item: unknown): AdminCopyrightJurisdiction => { const itemRecord = adminRecord(item); if (typeof itemRecord.status !== "string" || !adminCopyrightJurisdictionStatuses.has(itemRecord.status as AdminCopyrightJurisdiction["status"])) throw new Error("Invalid admin response"); return { status: itemRecord.status as AdminCopyrightJurisdiction["status"], reason: reason(itemRecord.reason) }; };
-  const evidenceRecord = adminRecord(record.effectiveUkEvidence);
+  const evidenceRecord = adminJsonRecord(record.effectiveUkEvidence);
   const workCategory = evidenceRecord.workCategory; const authorship = evidenceRecord.authorship; const authorName = evidenceRecord.authorName;
   if ((workCategory !== "ordinary_literary" && workCategory !== "unknown") || typeof authorship !== "string" || !["single_known", "joint", "anonymous", "pseudonymous", "unknown"].includes(authorship) || typeof authorName !== "string") throw new Error("Invalid admin response");
   const effectiveUkEvidence: AdminSourceEligibilityEffectiveUK = { workTitle: requiredAdminString(evidenceRecord, "workTitle"), workCategory, workCategoryReferences: parseAdminEvidenceReferences(evidenceRecord.workCategoryReferences), authorship, authorshipReferences: parseAdminEvidenceReferences(evidenceRecord.authorshipReferences), authorName, authorDeathYear: parseAdminInteger(evidenceRecord.authorDeathYear), authorReferences: parseAdminEvidenceReferences(evidenceRecord.authorReferences), firstPublicationYear: parseAdminInteger(evidenceRecord.firstPublicationYear), firstPublicationReferences: parseAdminEvidenceReferences(evidenceRecord.firstPublicationReferences), translation: parseAdminFactEvidence(evidenceRecord.translation), additionalTextualContribution: parseAdminFactEvidence(evidenceRecord.additionalTextualContribution), unpublishedAtEnd1988: parseAdminFactEvidence(evidenceRecord.unpublishedAtEnd1988) };
