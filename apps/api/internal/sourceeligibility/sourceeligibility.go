@@ -316,6 +316,9 @@ func hasTextualContributor(values []copyrighteligibility.ContributorEvidence) bo
 
 func canonicalProviderEvidence(value copyrighteligibility.ProviderEvidence) copyrighteligibility.ProviderEvidence {
 	value.Contributors = append([]copyrighteligibility.ContributorEvidence(nil), value.Contributors...)
+	for i := range value.Contributors {
+		value.Contributors[i].NameVariants = append([]string(nil), value.Contributors[i].NameVariants...)
+	}
 	sort.Slice(value.Contributors, func(i, j int) bool {
 		left, right := value.Contributors[i], value.Contributors[j]
 		if left.Role != right.Role {

@@ -99,10 +99,15 @@ type USProviderEvidence struct {
 // ContributorEvidence is extracted provider metadata. Unknown roles and dates are
 // represented explicitly rather than being rewritten as authorship facts.
 type ContributorEvidence struct {
-	Name      string
-	Role      string
-	BirthYear *int
-	DeathYear *int
+	Name string
+	// NameVariants are bounded, provider-authenticated forms of Name. They are
+	// only populated when a provider's own metadata permits a deterministic
+	// derivation; they do not establish identity without the resolver's other
+	// corroborating evidence.
+	NameVariants []string
+	Role         string
+	BirthYear    *int
+	DeathYear    *int
 }
 
 // ProviderEvidence is a provider-neutral, bounded extraction result. The

@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"pandapages/api/internal/copyrighteligibility"
@@ -211,6 +212,9 @@ func rdfContributor(decoder *xml.Decoder, relation xml.StartElement, role string
 			if contributor.Name == "" {
 				return copyrighteligibility.ContributorEvidence{}, false, nil
 			}
+			if role == "author" {
+				contributor.NameVariants = authorNameVariants(contributor.Name)
+			}
 			return contributor, true, nil
 		case xml.EndElement:
 			if token.Name == relation.Name {
@@ -218,6 +222,108 @@ func rdfContributor(decoder *xml.Decoder, relation xml.StartElement, role string
 			}
 		}
 	}
+}
+
+// authorNameVariants derives only the explicit Gutenberg form
+// "Last, First (Expanded First)". The parenthetical component is accepted
+// only where it is a compatible expansion of the displayed given name; it is
+// not treated as a free-form alias. The raw provider name remains the
+// contributor name for provenance.
+func authorNameVariants(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if strings.Count(raw, ",") != 1 {
+		return nil
+	}
+	parts := strings.SplitN(raw, ",", 2)
+	family := strings.TrimSpace(parts[0])
+	givenAndExpanded := strings.TrimSpace(parts[1])
+	open := strings.Index(givenAndExpanded, "(")
+	if open <= 0 || !strings.HasSuffix(givenAndExpanded, ")") || strings.Count(givenAndExpanded, "(") != 1 || strings.Count(givenAndExpanded, ")") != 1 {
+		return nil
+	}
+	given := strings.TrimSpace(givenAndExpanded[:open])
+	expanded := strings.TrimSpace(givenAndExpanded[open+1 : len(givenAndExpanded)-1])
+	if !validNamePart(family) || !validNamePart(given) || !validNamePart(expanded) || !compatibleGivenNames(given, expanded) {
+		return nil
+	}
+	return distinctNameVariants(
+		given+" "+family,
+		expanded+" "+family,
+		family+", "+given,
+	)
+}
+
+func validNamePart(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || !utf8.ValidString(value) || len([]rune(value)) > 200 {
+		return false
+	}
+	hasLetter := false
+	for _, r := range value {
+		switch {
+		case unicode.IsLetter(r):
+			hasLetter = true
+		case unicode.IsMark(r), unicode.IsSpace(r), r == '.', r == '-', r == '\'', r == '’':
+		default:
+			return false
+		}
+	}
+	return hasLetter
+}
+
+func compatibleGivenNames(abbreviated, expanded string) bool {
+	abbreviatedTokens := nameTokens(abbreviated)
+	expandedTokens := nameTokens(expanded)
+	if len(abbreviatedTokens) == 0 || len(expandedTokens) == 0 || !sameInitial(abbreviatedTokens[0], expandedTokens[0]) {
+		return false
+	}
+	next := 0
+	for _, token := range abbreviatedTokens {
+		if len([]rune(token)) == 1 {
+			continue
+		}
+		for next < len(expandedTokens) && !strings.EqualFold(token, expandedTokens[next]) {
+			next++
+		}
+		if next == len(expandedTokens) {
+			return false
+		}
+		next++
+	}
+	return true
+}
+
+func nameTokens(value string) []string {
+	return strings.FieldsFunc(value, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsMark(r)
+	})
+}
+
+func sameInitial(left, right string) bool {
+	leftRunes := []rune(strings.ToLower(left))
+	rightRunes := []rune(strings.ToLower(right))
+	return len(leftRunes) > 0 && len(rightRunes) > 0 && leftRunes[0] == rightRunes[0]
+}
+
+func distinctNameVariants(values ...string) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		duplicate := false
+		for _, existing := range result {
+			if strings.EqualFold(existing, value) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func rdfAgent(decoder *xml.Decoder, start xml.StartElement) (copyrighteligibility.ContributorEvidence, error) {

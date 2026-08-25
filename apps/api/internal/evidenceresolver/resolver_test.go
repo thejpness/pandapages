@@ -14,10 +14,14 @@ type sourceStub struct {
 	class   SourceClass
 	records []BibliographicRecord
 	err     error
+	queries *[]Query
 }
 
 func (s sourceStub) SourceClass() SourceClass { return s.class }
-func (s sourceStub) Lookup(context.Context, Query) ([]BibliographicRecord, error) {
+func (s sourceStub) Lookup(_ context.Context, query Query) ([]BibliographicRecord, error) {
+	if s.queries != nil {
+		*s.queries = append(*s.queries, query)
+	}
 	return s.records, s.err
 }
 
@@ -471,6 +475,66 @@ func TestResolveDoesNotBindAuthorOnNameAlone(t *testing.T) {
 	resolution, err := resolver.Resolve(context.Background(), aliceContext())
 	if err != nil || resolution.Authorship.Status != ResolutionInsufficient || resolution.Author.Status != ResolutionInsufficient {
 		t.Fatalf("resolution=%#v err=%v", resolution, err)
+	}
+}
+
+func TestResolveWizardOfOzProviderVariantsEstablishEligibleUKEvidence(t *testing.T) {
+	death, publication := 1919, 1900
+	title := "The Wonderful Wizard of Oz"
+	exact := exactContext("55", title, []copyrighteligibility.ContributorEvidence{{
+		Name:         "Baum, L. Frank (Lyman Frank)",
+		NameVariants: []string{"L. Frank Baum", "Lyman Frank Baum", "Baum, L. Frank"},
+		Role:         "author",
+		DeathYear:    &death,
+	}})
+	bnfRecord := record(SourceBibliothequeNationaleDeFrance, "ark:/12148/cb119312746", "Lyman Frank Baum", &death, &publication)
+	bnfRecord.Title = title
+	bnfRecord.Subjects = []string{"Littératures"}
+	bnfRecord.OriginalLanguages = []string{"eng"}
+	openLibraryRecord := record(SourceOpenLibrary, "/works/OL12345W", "L. Frank Baum", &death, &publication)
+	openLibraryRecord.Title = title
+	openLibraryRecord.Subjects = []string{"Fiction"}
+	openLibraryRecord.OriginalLanguages = []string{"eng"}
+	var queries []Query
+	resolver, err := New(Config{Sources: []BibliographicSource{
+		sourceStub{class: SourceBibliothequeNationaleDeFrance, records: []BibliographicRecord{bnfRecord}, queries: &queries},
+		sourceStub{class: SourceOpenLibrary, records: []BibliographicRecord{openLibraryRecord}, queries: &queries},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolution, err := resolver.Resolve(context.Background(), exact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(queries) != 2 || len(queries[0].Authors) != 1 || len(queries[0].Authors[0].NameVariants) != 3 {
+		t.Fatalf("provider variants did not reach both source adapters: %#v", queries)
+	}
+	if resolution.WorkCategory.Status != ResolutionEstablished || resolution.WorkCategory.Value != copyrighteligibility.WorkCategoryOrdinaryLiterary || len(resolution.WorkCategory.Evidence) != 2 || resolution.Authorship.Status != ResolutionEstablished || resolution.Authorship.Value != copyrighteligibility.AuthorshipSingleKnown || resolution.Author.Status != ResolutionEstablished || resolution.Author.DeathYear != death || resolution.FirstPublication.Status != ResolutionEstablished || resolution.FirstPublication.Year != publication || resolution.UnpublishedAtEnd1988.State != copyrighteligibility.FactNoneConfirmed {
+		t.Fatalf("resolution=%#v", resolution)
+	}
+	assessment := copyrighteligibility.Evaluate(copyrighteligibility.Input{EvaluationDate: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), UK: ToUKEvidence(resolution)})
+	if assessment.UK.Status != copyrighteligibility.JurisdictionEligible || assessment.UK.Reason != copyrighteligibility.ReasonUKOrdinaryLiteraryTermExpired {
+		t.Fatalf("assessment=%#v", assessment)
+	}
+}
+
+func TestMatchingExternalAuthorsRejectsVariantWithConflictingDeathYear(t *testing.T) {
+	providerDeath, externalDeath := 1919, 1920
+	provider := Person{Name: "Baum, L. Frank (Lyman Frank)", NameVariants: []string{"L. Frank Baum", "Lyman Frank Baum"}, DeathYear: &providerDeath}
+	record := record(SourceOpenLibrary, "/works/OL12345W", "Lyman Frank Baum", &externalDeath, nil)
+	if matches, conflicts := matchingExternalAuthors(provider, []BibliographicRecord{record}); !conflicts || len(matches) != 0 {
+		t.Fatalf("matches=%#v conflicts=%v", matches, conflicts)
+	}
+}
+
+func TestMatchingExternalAuthorsRejectsMultipleExternalAuthorsAfterVariantMatch(t *testing.T) {
+	death := 1919
+	provider := Person{Name: "Baum, L. Frank (Lyman Frank)", NameVariants: []string{"L. Frank Baum", "Lyman Frank Baum"}, DeathYear: &death}
+	record := record(SourceOpenLibrary, "/works/OL12345W", "Lyman Frank Baum", &death, nil)
+	record.Authors = append(record.Authors, Person{Name: "Other Author", Identifiers: []Identifier{{Source: SourceOpenLibrary, Value: "OL999999A"}}, DeathYear: &death})
+	if matches, conflicts := matchingExternalAuthors(provider, []BibliographicRecord{record}); !conflicts || len(matches) != 0 {
+		t.Fatalf("matches=%#v conflicts=%v", matches, conflicts)
 	}
 }
 

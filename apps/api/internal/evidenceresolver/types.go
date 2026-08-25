@@ -67,9 +67,12 @@ type Identifier struct {
 }
 
 type Person struct {
-	Name        string
-	Identifiers []Identifier
-	DeathYear   *int
+	Name string
+	// NameVariants are explicit provider-authenticated name forms carried only
+	// on the exact provider query. External records do not populate them.
+	NameVariants []string
+	Identifiers  []Identifier
+	DeathYear    *int
 }
 
 // Contributor is a bibliographic observation about a person and their role in

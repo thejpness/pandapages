@@ -261,6 +261,36 @@ func TestExactRecordAcceptsCanonicalEquivalentAuthorName(t *testing.T) {
 	}
 }
 
+func TestExactRecordAcceptsExplicitGutenbergAuthorVariant(t *testing.T) {
+	death := 1919
+	query := evidenceresolver.Query{
+		Title: "The Wonderful Wizard of Oz",
+		Authors: []evidenceresolver.Person{{
+			Name:         "Baum, L. Frank (Lyman Frank)",
+			NameVariants: []string{"L. Frank Baum", "Lyman Frank Baum", "Baum, L. Frank"},
+			DeathYear:    &death,
+		}},
+	}
+	bindings := []binding{{
+		Work:      term{Type: "uri", Value: "https://data.bnf.fr/ark:/12148/cb119312746#about"},
+		Title:     term{Type: "literal", Value: query.Title},
+		FirstYear: term{Type: "literal", Value: "1900"},
+		Creator:   term{Type: "uri", Value: "https://data.bnf.fr/ark:/12148/cb11890567s#about"},
+		Name:      term{Type: "literal", Value: "Lyman Frank Baum"},
+		Death:     term{Type: "literal", Value: "1919-05-06"},
+		Subject:   term{Type: "literal", Value: "Littératures"},
+	}}
+	record, ok := exactRecord(bindings, query, []byte("fixture"))
+	if !ok || len(record.Authors) != 1 || record.Authors[0].Name != "Lyman Frank Baum" || record.Authors[0].DeathYear == nil || *record.Authors[0].DeathYear != death {
+		t.Fatalf("record=%#v ok=%v", record, ok)
+	}
+
+	bindings[0].Name.Value = "L. Frederick Baum"
+	if _, ok := exactRecord(bindings, query, []byte("fixture")); ok {
+		t.Fatal("surname and initial fragment was accepted as a provider identity variant")
+	}
+}
+
 func TestLookupRejectsTwoAuthorQueryBeforeNetwork(t *testing.T) {
 	calls := 0
 	adapter := New(Config{HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
