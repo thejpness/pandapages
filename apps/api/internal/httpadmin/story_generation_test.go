@@ -150,7 +150,7 @@ func TestAdminStoryGenerationRouteRejectsInvalidRequestsAndMissingConfiguration(
 
 	response := httptest.NewRecorder()
 	storyGenerationAdminHandler(t, store, nil).ServeHTTP(response, storyGenerationAdminRequest(context.Background(), generationSourceVersionID, ""))
-	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), `"code":"generation_unavailable"`) {
+	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), `"code":"generation_unavailable"`) || !strings.Contains(response.Body.String(), `"message":"story generation is unavailable"`) {
 		t.Fatalf("unavailable response = %d/%s", response.Code, response.Body.String())
 	}
 }

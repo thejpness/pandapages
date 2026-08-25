@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"pandapages/api/internal/httpadmin"
 	"pandapages/api/internal/storygeneration"
 	"pandapages/api/internal/storyorchestration"
 )
@@ -37,9 +38,13 @@ func TestProductionStoryGenerationPolicyV1(t *testing.T) {
 func TestNewStoryGenerationServiceIsOptionalAndOffline(t *testing.T) {
 	loader := generationSourceLoaderStub{}
 	runStore := completedRunStoreStub{}
-	service, err := newStoryGenerationService(" ", loader, runStore)
+	service, err := newStoryGenerationService("", loader, runStore)
 	if err != nil || service != nil {
 		t.Fatalf("missing key service/error = %#v / %v", service, err)
+	}
+	adminConfig := httpadmin.Config{StoryGeneration: service}
+	if adminConfig.StoryGeneration != nil {
+		t.Fatalf("missing key admin story generation = %#v, want nil", adminConfig.StoryGeneration)
 	}
 	service, err = newStoryGenerationService("test-openai-key", loader, runStore)
 	if err != nil || service == nil {
