@@ -44,6 +44,16 @@ const rdfRestrictedFixture = `<?xml version="1.0"?>
   </pgterms:ebook>
 </rdf:RDF>`
 
+const rdfWizardOfOzFixture = `<?xml version="1.0"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:pgterms="http://www.gutenberg.org/2009/pgterms/" xmlns:dcterms="http://purl.org/dc/terms/">
+  <pgterms:ebook rdf:about="ebooks/55">
+    <dcterms:title>The Wonderful Wizard of Oz</dcterms:title>
+    <dcterms:rights>Public domain in the USA.</dcterms:rights>
+    <dcterms:creator><pgterms:agent><pgterms:name>Baum, L. Frank (Lyman Frank)</pgterms:name><pgterms:deathdate>1919</pgterms:deathdate></pgterms:agent></dcterms:creator>
+    <dcterms:language><rdf:Description><rdf:value>en</rdf:value></rdf:Description></dcterms:language>
+  </pgterms:ebook>
+</rdf:RDF>`
+
 func TestParseRDFEvidenceExtractsOnlyNeededProviderFacts(t *testing.T) {
 	evidence, err := parseRDFEvidence([]byte(rdfAliceFixture), "11")
 	if err != nil {
@@ -76,6 +86,52 @@ func TestParseRDFEvidencePreservesTranslatorRoleAndMissingOptionalDates(t *testi
 	if restricted.Rights != copyrighteligibility.ProviderRightsRestricted || restricted.Contributors[0].DeathYear != nil {
 		t.Fatalf("restricted=%+v", restricted)
 	}
+}
+
+func TestParseRDFEvidenceDerivesBoundedAuthorVariantsForWizardOfOz(t *testing.T) {
+	evidence, err := parseRDFEvidence([]byte(rdfWizardOfOzFixture), "55")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evidence.Contributors) != 1 {
+		t.Fatalf("contributors=%+v", evidence.Contributors)
+	}
+	contributor := evidence.Contributors[0]
+	want := []string{"L. Frank Baum", "Lyman Frank Baum", "Baum, L. Frank"}
+	if contributor.Name != "Baum, L. Frank (Lyman Frank)" || contributor.Role != "author" || dereference(contributor.DeathYear) != 1919 || !sameStrings(contributor.NameVariants, want) {
+		t.Fatalf("contributor=%+v want variants=%q", contributor, want)
+	}
+}
+
+func TestAuthorNameVariantsAcceptOnlyCompatibleExpandedGivenNames(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		raw  string
+		want []string
+	}{
+		{"compatible expansion", "Last, F. Middle (First Middle)", []string{"F. Middle Last", "First Middle Last", "Last, F. Middle"}},
+		{"ordinary last first remains exact metadata", "Carroll, Lewis", nil},
+		{"unrelated parenthetical text", "Baum, L. Frank (Paul Other)", nil},
+		{"malformed parenthetical text", "Baum, L. Frank (Lyman Frank) extra", nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := authorNameVariants(test.raw); !sameStrings(got, test.want) {
+				t.Fatalf("authorNameVariants(%q)=%q want=%q", test.raw, got, test.want)
+			}
+		})
+	}
+}
+
+func sameStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestParseRDFEvidenceFailsClosedForMalformedOrMismatchedIdentity(t *testing.T) {

@@ -153,7 +153,7 @@ func providerAuthors(values []copyrighteligibility.ContributorEvidence) []Person
 	result := make([]Person, 0, len(values))
 	for _, value := range values {
 		if value.Role == "author" && strings.TrimSpace(value.Name) != "" {
-			result = append(result, Person{Name: strings.TrimSpace(value.Name), DeathYear: value.DeathYear})
+			result = append(result, Person{Name: strings.TrimSpace(value.Name), NameVariants: append([]string(nil), value.NameVariants...), DeathYear: value.DeathYear})
 		}
 	}
 	return result
@@ -243,7 +243,7 @@ func matchingExternalAuthors(provider Person, records []BibliographicRecord) ([]
 			continue
 		}
 		author := record.Authors[0]
-		if NormalisedPersonName(author.Name) != NormalisedPersonName(provider.Name) {
+		if !MatchesPersonName(provider, author.Name) {
 			return nil, true
 		}
 		if len(author.Identifiers) == 0 || author.DeathYear == nil {
@@ -556,6 +556,7 @@ func personReferences(records []BibliographicRecord, fact string) []EvidenceItem
 func canonicalRecord(record BibliographicRecord) BibliographicRecord {
 	record.Authors = append([]Person(nil), record.Authors...)
 	for i := range record.Authors {
+		record.Authors[i].NameVariants = append([]string(nil), record.Authors[i].NameVariants...)
 		record.Authors[i].Identifiers = append([]Identifier(nil), record.Authors[i].Identifiers...)
 		sort.Slice(record.Authors[i].Identifiers, func(a, b int) bool {
 			if record.Authors[i].Identifiers[a].Source != record.Authors[i].Identifiers[b].Source {

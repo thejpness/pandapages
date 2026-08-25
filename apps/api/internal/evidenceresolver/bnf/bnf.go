@@ -174,7 +174,7 @@ func exactRecord(bindings []binding, query evidenceresolver.Query, body []byte) 
 
 	matching := make([]*workCandidate, 0, 1)
 	for _, candidate := range candidates {
-		if candidate.invalid || evidenceresolver.NormalisedTitle(candidate.title) != evidenceresolver.NormalisedTitle(query.Title) || evidenceresolver.NormalisedPersonName(candidate.creator) != evidenceresolver.NormalisedPersonName(query.Authors[0].Name) {
+		if candidate.invalid || evidenceresolver.NormalisedTitle(candidate.title) != evidenceresolver.NormalisedTitle(query.Title) || !evidenceresolver.MatchesPersonName(query.Authors[0], candidate.creator) {
 			continue
 		}
 		if _, _, ok := authorityIdentifier(candidate.workURI); !ok {

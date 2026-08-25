@@ -44,6 +44,7 @@ var (
 const (
 	searchSourceName = "Open Library search"
 	fullSourceName   = "Open Library"
+	maxAuthorQueries = 3
 )
 
 type Config struct {
@@ -72,27 +73,34 @@ func New(cfg Config) *Adapter {
 func (*Adapter) SourceClass() evidenceresolver.SourceClass { return evidenceresolver.SourceOpenLibrary }
 
 // Lookup uses the bounded official search and author APIs. It makes at most
-// two requests: one search and one exact author record for the selected,
-// exact-title candidate.
+// four requests: up to three explicit provider-authenticated author-name
+// searches and one exact author record for the selected exact-title candidate.
 func (a *Adapter) Lookup(ctx context.Context, query evidenceresolver.Query) ([]evidenceresolver.BibliographicRecord, error) {
 	if !validQuery(query) {
 		return nil, errors.Join(ErrInvalid, evidenceresolver.ErrUnsupportedQuery)
 	}
-	searchURL := searchURL(query)
-	body, err := a.fetch(ctx, searchURL)
-	if err != nil {
-		return nil, err
+	var baseline evidenceresolver.BibliographicRecord
+	var searchBody []byte
+	for _, authorName := range evidenceresolver.QueryPersonNames(query.Authors[0], maxAuthorQueries) {
+		body, err := a.fetch(ctx, searchURL(query, authorName))
+		if err != nil {
+			return nil, err
+		}
+		var response searchResponse
+		if err := json.Unmarshal(body, &response); err != nil {
+			return nil, ErrInvalid
+		}
+		document, ok := exactDocument(response.Docs, query)
+		if !ok {
+			continue
+		}
+		baseline, ok = searchRecord(document, body)
+		if ok {
+			searchBody = body
+			break
+		}
 	}
-	var response searchResponse
-	if err := json.Unmarshal(body, &response); err != nil {
-		return nil, ErrInvalid
-	}
-	document, ok := exactDocument(response.Docs, query)
-	if !ok {
-		return nil, nil
-	}
-	baseline, ok := searchRecord(document, body)
-	if !ok {
+	if baseline.Identifier == "" {
 		return nil, nil
 	}
 	authorKey := baseline.Authors[0].Identifiers[0].Value
@@ -108,11 +116,11 @@ func (a *Adapter) Lookup(ctx context.Context, query evidenceresolver.Query) ([]e
 		return nil, ErrInvalid
 	}
 	deathYear, _ := parseYear(author.DeathDate)
-	if evidenceresolver.NormalisedPersonName(author.Name) != evidenceresolver.NormalisedPersonName(baseline.Authors[0].Name) {
+	if !evidenceresolver.MatchesPersonName(query.Authors[0], author.Name) {
 		return nil, ErrInvalid
 	}
 	baseline.SourceName = fullSourceName
-	baseline.Digest = digest(append(body, authorBody...))
+	baseline.Digest = digest(append(searchBody, authorBody...))
 	baseline.Authors[0].Name = author.Name
 	baseline.Authors[0].DeathYear = deathYear
 	baseline.Contributors[0].Name = author.Name
@@ -139,12 +147,19 @@ type authorResponse struct {
 }
 
 func exactDocument(documents []searchDocument, query evidenceresolver.Query) (searchDocument, bool) {
+	var match searchDocument
+	found := false
 	for _, document := range documents {
-		if workKeyPattern.MatchString(document.Key) && evidenceresolver.NormalisedTitle(document.Title) == evidenceresolver.NormalisedTitle(query.Title) && len(document.AuthorNames) == 1 && evidenceresolver.NormalisedPersonName(document.AuthorNames[0]) == evidenceresolver.NormalisedPersonName(query.Authors[0].Name) {
-			return document, true
+		if !workKeyPattern.MatchString(document.Key) || evidenceresolver.NormalisedTitle(document.Title) != evidenceresolver.NormalisedTitle(query.Title) || len(document.AuthorNames) != 1 || len(document.AuthorKeys) != 1 || !authorKeyPattern.MatchString(document.AuthorKeys[0]) || !evidenceresolver.MatchesPersonName(query.Authors[0], document.AuthorNames[0]) {
+			continue
 		}
+		if found {
+			return searchDocument{}, false
+		}
+		match = document
+		found = true
 	}
-	return searchDocument{}, false
+	return match, found
 }
 
 func searchRecord(document searchDocument, body []byte) (evidenceresolver.BibliographicRecord, bool) {
@@ -174,11 +189,11 @@ func validQuery(query evidenceresolver.Query) bool {
 	return strings.TrimSpace(query.Title) != "" && len(query.Authors) == 1 && strings.TrimSpace(query.Authors[0].Name) != ""
 }
 
-func searchURL(query evidenceresolver.Query) string {
+func searchURL(query evidenceresolver.Query, authorName string) string {
 	endpoint := url.URL{Scheme: "https", Host: host, Path: "/search.json"}
 	values := endpoint.Query()
 	values.Set("title", query.Title)
-	values.Set("author", query.Authors[0].Name)
+	values.Set("author", authorName)
 	values.Set("fields", "key,title,author_name,author_key,first_publish_year,language,subject")
 	values.Set("limit", "5")
 	endpoint.RawQuery = values.Encode()

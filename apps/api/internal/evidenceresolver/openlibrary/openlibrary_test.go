@@ -19,6 +19,8 @@ import (
 const searchFixture = `{"docs":[{"key":"/works/OL138052W","title":"Alice's Adventures in Wonderland","author_name":["Lewis Carroll"],"author_key":["OL22098A"],"first_publish_year":1865,"language":["eng"],"subject":["Fiction","Children's literature"]}]}`
 const authorFixture = `{"name":"Lewis Carroll","death_date":"1898"}`
 const wutheringSearchFixture = `{"docs":[{"key":"/works/OL21177W","title":"Wuthering Heights","author_name":["Emily Brontë"],"author_key":["OL24529A"],"first_publish_year":1846,"language":["eng"],"subject":["Fiction","Gothic fiction"]}]}`
+const wizardSearchFixture = `{"docs":[{"key":"/works/OL1849133W","title":"The Wonderful Wizard of Oz","author_name":["L. Frank Baum"],"author_key":["OL111486A"],"first_publish_year":1900,"language":["eng"],"subject":["Fiction","Children's literature"]}]}`
+const wizardAuthorFixture = `{"name":"Lyman Frank Baum","death_date":"1919-05-06"}`
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
@@ -65,6 +67,18 @@ func wutheringQuery() evidenceresolver.Query {
 	return evidenceresolver.Query{Provider: "project-gutenberg", ExternalID: "768", Title: "Wuthering Heights", Authors: []evidenceresolver.Person{{Name: "Brontë, Emily"}}}
 }
 
+func wizardQuery() evidenceresolver.Query {
+	return evidenceresolver.Query{
+		Provider:   "project-gutenberg",
+		ExternalID: "55",
+		Title:      "The Wonderful Wizard of Oz",
+		Authors: []evidenceresolver.Person{{
+			Name:         "Baum, L. Frank (Lyman Frank)",
+			NameVariants: []string{"L. Frank Baum", "Lyman Frank Baum", "Baum, L. Frank"},
+		}},
+	}
+}
+
 func TestLookupUsesOnlyFixedStructuredOpenLibraryEndpoints(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("User-Agent") != productUserAgent {
@@ -92,6 +106,58 @@ func TestLookupUsesOnlyFixedStructuredOpenLibraryEndpoints(t *testing.T) {
 	requests := transport.requests()
 	if len(requests) != 2 || requests[0].Scheme != "https" || requests[0].Host != host || requests[0].Path != "/search.json" || requests[1].String() != "https://openlibrary.org/authors/OL22098A.json" {
 		t.Fatalf("requests=%+v", requests)
+	}
+}
+
+func TestLookupUsesProviderDerivedVariantForWizardOfOz(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/search.json":
+			if author := r.URL.Query().Get("author"); author != "L. Frank Baum" {
+				t.Fatalf("author query=%q", author)
+			}
+			_, _ = io.WriteString(w, wizardSearchFixture)
+		case "/authors/OL111486A.json":
+			_, _ = io.WriteString(w, wizardAuthorFixture)
+		default:
+			t.Fatalf("path=%q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	adapter, transport := adapterForServer(server)
+	records, err := adapter.Lookup(context.Background(), wizardQuery())
+	if err != nil || len(records) != 1 || records[0].Authors[0].Name != "Lyman Frank Baum" || records[0].Authors[0].DeathYear == nil || *records[0].Authors[0].DeathYear != 1919 {
+		t.Fatalf("records=%#v err=%v", records, err)
+	}
+	if requests := transport.requests(); len(requests) != 2 || requests[0].Path != "/search.json" || requests[1].Path != "/authors/OL111486A.json" {
+		t.Fatalf("requests=%+v", requests)
+	}
+}
+
+func TestLookupBoundsAndOrdersProviderVariantSearches(t *testing.T) {
+	var authors []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/search.json" {
+			t.Fatalf("unexpected path=%q", r.URL.Path)
+		}
+		authors = append(authors, r.URL.Query().Get("author"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"docs":[]}`)
+	}))
+	defer server.Close()
+	adapter, _ := adapterForServer(server)
+	if records, err := adapter.Lookup(context.Background(), wizardQuery()); err != nil || len(records) != 0 {
+		t.Fatalf("records=%#v err=%v", records, err)
+	}
+	want := []string{"L. Frank Baum", "Lyman Frank Baum"}
+	if len(authors) != len(want) {
+		t.Fatalf("author queries=%q want=%q", authors, want)
+	}
+	for i := range authors {
+		if authors[i] != want[i] {
+			t.Fatalf("author queries=%q want=%q", authors, want)
+		}
 	}
 }
 
@@ -172,6 +238,13 @@ func TestLookupRejectsInvalidSearchCandidatesBeforeAuthorEnrichment(t *testing.T
 		{
 			name:    "invalid author key",
 			fixture: strings.Replace(searchFixture, "OL22098A", "not-an-open-library-author", 1),
+		},
+		{
+			name: "ambiguous exact records",
+			fixture: `{"docs":[
+				{"key":"/works/OL138052W","title":"Alice's Adventures in Wonderland","author_name":["Lewis Carroll"],"author_key":["OL22098A"]},
+				{"key":"/works/OL999999W","title":"Alice's Adventures in Wonderland","author_name":["Lewis Carroll"],"author_key":["OL22098A"]}
+			]}`,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
