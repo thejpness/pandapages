@@ -1,6 +1,6 @@
 module pandapages/api
 
-go 1.26.5
+go 1.26.6
 
 require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
@@ -8,7 +8,7 @@ require (
 	github.com/microcosm-cc/bluemonday v1.0.27
 	github.com/yuin/goldmark v1.8.4
 	go.yaml.in/yaml/v3 v3.0.4
-	golang.org/x/crypto v0.48.0
+	golang.org/x/crypto v0.52.0
 	golang.org/x/text v0.40.0
 )
 
@@ -20,6 +20,6 @@ require (
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
-	golang.org/x/net v0.49.0 // indirect
+	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 )
