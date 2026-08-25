@@ -147,7 +147,7 @@ func newStoryGenerationService(
 	apiKey string,
 	sourceLoader storygenerationservice.SourceVersionLoader,
 	runStore storygenerationservice.CompletedRunStore,
-) (*storygenerationservice.Service, error) {
+) (httpadmin.StoryGenerationService, error) {
 	apiKey = strings.TrimSpace(apiKey)
 	if apiKey == "" {
 		return nil, nil
