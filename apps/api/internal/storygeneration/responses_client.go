@@ -69,6 +69,7 @@ type StructuredOutput struct {
 }
 
 type ResponsesCall struct {
+	Operation        ResponsesOperation
 	Model            string
 	ReasoningEffort  ReasoningEffort
 	MaxOutputTokens  int
@@ -206,7 +207,7 @@ func (client *ResponsesClient) Create(ctx context.Context, call ResponsesCall) (
 		return ResponsesResult{}, fmt.Errorf("%w: response exceeds %d bytes", ErrOpenAIResponseInvalid, maxResponsesBodyBytes)
 	}
 
-	return decodeResponsesResult(responseBody)
+	return decodeResponsesResult(ctx, call, responseBody)
 }
 
 type openAIErrorEnvelope struct {
@@ -401,6 +402,9 @@ func parseOpenAIRetryAfter(raw string, now time.Time) (time.Duration, bool) {
 }
 
 func validateResponsesCall(call ResponsesCall) error {
+	if !ValidResponsesOperation(call.Operation) {
+		return fmt.Errorf("OpenAI Responses operation is invalid")
+	}
 	if strings.TrimSpace(call.Model) == "" {
 		return fmt.Errorf("OpenAI model is required")
 	}
@@ -592,7 +596,7 @@ type responsesOutputTokenDetails struct {
 	ReasoningTokens int `json:"reasoning_tokens"`
 }
 
-func decodeResponsesResult(data []byte) (ResponsesResult, error) {
+func decodeResponsesResult(ctx context.Context, call ResponsesCall, data []byte) (ResponsesResult, error) {
 	if !utf8.Valid(data) {
 		return ResponsesResult{}, fmt.Errorf("%w: response is not valid UTF-8", ErrOpenAIResponseInvalid)
 	}
@@ -604,6 +608,11 @@ func decodeResponsesResult(data []byte) (ResponsesResult, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	if err := decoder.Decode(&response); err != nil {
 		return ResponsesResult{}, fmt.Errorf("%w: decode JSON", ErrOpenAIResponseInvalid)
+	}
+	if observation, ok := response.usageObservation(call); ok {
+		if err := recordResponsesUsage(ctx, observation); err != nil {
+			return ResponsesResult{}, fmt.Errorf("%w: record observed usage", ErrOpenAIUnavailable)
+		}
 	}
 
 	if response.Status != "completed" {
@@ -664,4 +673,27 @@ func decodeResponsesResult(data []byte) (ResponsesResult, error) {
 			TotalTokens:     response.Usage.TotalTokens,
 		},
 	}, nil
+}
+
+func (response responsesAPIResponse) usageObservation(call ResponsesCall) (ResponsesUsageObservation, bool) {
+	if response.Usage == nil {
+		return ResponsesUsageObservation{}, false
+	}
+	observation := ResponsesUsageObservation{
+		Operation:          call.Operation,
+		ProviderResponseID: response.ID,
+		RequestedModel:     call.Model,
+		ReturnedModel:      response.Model,
+		Usage: ResponsesUsage{
+			InputTokens:     response.Usage.InputTokens,
+			CachedTokens:    response.Usage.InputTokenDetails.CachedTokens,
+			OutputTokens:    response.Usage.OutputTokens,
+			ReasoningTokens: response.Usage.OutputTokenDetails.ReasoningTokens,
+			TotalTokens:     response.Usage.TotalTokens,
+		},
+	}
+	if err := observation.Validate(); err != nil {
+		return ResponsesUsageObservation{}, false
+	}
+	return observation, true
 }

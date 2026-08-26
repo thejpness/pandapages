@@ -323,6 +323,18 @@ psql_as "$application_role" --command="
   UPDATE story_generation_jobs
   SET status='queued', stage='queued', started_at=NULL
   WHERE id='a1500000-0000-4000-8000-000000000057';
+  INSERT INTO story_generation_usage_events (
+    generation_job_id, operation, provider_response_id, requested_model,
+    returned_model, input_tokens, cached_input_tokens, output_tokens,
+    reasoning_tokens, total_tokens
+  ) VALUES (
+    'a1500000-0000-4000-8000-000000000057',
+    'analyse_source',
+    'resp-runtime-usage',
+    'requested-model',
+    'returned-model',
+    1, 0, 1, 0, 2
+  );
   SELECT count(*) FROM story_orchestration_run_editorial_reviews;
   SELECT count(*) FROM story_orchestration_run_draft_ingests;
   SELECT count(*) FROM story_orchestration_run_draft_ingest_editions;
@@ -371,6 +383,16 @@ expect_denied \
   'application generation job deletion' \
   "$application_role" \
   "DELETE FROM story_generation_jobs WHERE id='a1500000-0000-4000-8000-000000000057';"
+
+expect_denied \
+  'application generation usage mutation' \
+  "$application_role" \
+  "UPDATE story_generation_usage_events SET total_tokens=3 WHERE provider_response_id='resp-runtime-usage';"
+
+expect_denied \
+  'application generation usage deletion' \
+  "$application_role" \
+  "DELETE FROM story_generation_usage_events WHERE provider_response_id='resp-runtime-usage';"
 
 expect_denied \
   'application draft ingest mutation' \

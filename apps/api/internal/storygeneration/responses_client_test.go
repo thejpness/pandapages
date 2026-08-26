@@ -33,6 +33,7 @@ func newTestResponsesClient(t *testing.T, handler http.Handler) (*ResponsesClien
 
 func validResponsesCall() ResponsesCall {
 	return ResponsesCall{
+		Operation:       ResponsesOperationAnalyseSource,
 		Model:           GenerationModelV2,
 		ReasoningEffort: ReasoningEffortMedium,
 		MaxOutputTokens: 4096,
@@ -42,6 +43,16 @@ func validResponsesCall() ResponsesCall {
 			UserInputJSON:         `{"canonicalSource":"# Story"}`,
 		},
 	}
+}
+
+type recordingResponsesUsageRecorder struct {
+	events []ResponsesUsageObservation
+	err    error
+}
+
+func (recorder *recordingResponsesUsageRecorder) RecordResponsesUsage(_ context.Context, observation ResponsesUsageObservation) error {
+	recorder.events = append(recorder.events, observation)
+	return recorder.err
 }
 
 func completedResponseJSON(output string) string {
@@ -62,6 +73,22 @@ func completedResponseJSON(output string) string {
 			"total_tokens":200
 		}
 	}`, encoded)
+}
+
+func responseJSONWithUsage(status, output string) string {
+	return fmt.Sprintf(`{
+		"id":"resp_observed",
+		"status":%q,
+		"model":"gpt-5.6-terra",
+		"output":%s,
+		"usage":{
+			"input_tokens":120,
+			"output_tokens":40,
+			"total_tokens":160,
+			"input_tokens_details":{"cached_tokens":20},
+			"output_tokens_details":{"reasoning_tokens":10}
+		}
+	}`, status, output)
 }
 
 func TestNewResponsesClientRequiresAPIKey(t *testing.T) {
@@ -179,6 +206,94 @@ func TestResponsesClientCreateOmitsTextFormatForMarkdownOutput(t *testing.T) {
 	}
 }
 
+func TestResponsesClientRecordsTrustedUsageBeforeStrictResponseValidation(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want error
+	}{
+		{
+			name: "incomplete response",
+			body: responseJSONWithUsage("incomplete", `[]`),
+			want: ErrOpenAIResponseIncomplete,
+		},
+		{
+			name: "refusal",
+			body: responseJSONWithUsage("completed", `[{"type":"message","content":[{"type":"refusal","refusal":"no"}]}]`),
+			want: ErrOpenAIResponseRefused,
+		},
+		{
+			name: "missing output text",
+			body: responseJSONWithUsage("completed", `[]`),
+			want: ErrOpenAIResponseInvalid,
+		},
+		{
+			name: "multiple output text values",
+			body: responseJSONWithUsage("completed", `[{"type":"message","content":[{"type":"output_text","text":"first"},{"type":"output_text","text":"second"}]}]`),
+			want: ErrOpenAIResponseInvalid,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client, _ := newTestResponsesClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, test.body)
+			}))
+			recorder := &recordingResponsesUsageRecorder{}
+			_, err := client.Create(WithResponsesUsageRecorder(context.Background(), recorder), validResponsesCall())
+			if !errors.Is(err, test.want) {
+				t.Fatalf("Create() error = %v, want errors.Is(..., %v)", err, test.want)
+			}
+			if len(recorder.events) != 1 {
+				t.Fatalf("usage events = %#v, want exactly one", recorder.events)
+			}
+			event := recorder.events[0]
+			if event.Operation != ResponsesOperationAnalyseSource || event.ProviderResponseID != "resp_observed" ||
+				event.RequestedModel != GenerationModelV2 || event.ReturnedModel != "gpt-5.6-terra" ||
+				event.Usage != (ResponsesUsage{InputTokens: 120, CachedTokens: 20, OutputTokens: 40, ReasoningTokens: 10, TotalTokens: 160}) {
+				t.Fatalf("usage event = %#v", event)
+			}
+		})
+	}
+}
+
+func TestResponsesClientDoesNotRecordUntrustedUsage(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "missing usage", body: `{"id":"resp_missing_usage","status":"completed","model":"gpt-5.6-terra","output":[]}`},
+		{name: "missing provider response ID", body: `{"status":"completed","model":"gpt-5.6-terra","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}`},
+		{name: "negative usage", body: `{"id":"resp_negative","status":"completed","model":"gpt-5.6-terra","output":[],"usage":{"input_tokens":-1,"output_tokens":1,"total_tokens":0,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client, _ := newTestResponsesClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, test.body)
+			}))
+			recorder := &recordingResponsesUsageRecorder{}
+			_, _ = client.Create(WithResponsesUsageRecorder(context.Background(), recorder), validResponsesCall())
+			if len(recorder.events) != 0 {
+				t.Fatalf("usage events = %#v, want none", recorder.events)
+			}
+		})
+	}
+}
+
+func TestResponsesClientUsageRecorderFailureStopsResponseProcessing(t *testing.T) {
+	client, _ := newTestResponsesClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, completedResponseJSON("# Story\n\nGenerated."))
+	}))
+	recorder := &recordingResponsesUsageRecorder{err: errors.New("usage storage unavailable")}
+	_, err := client.Create(WithResponsesUsageRecorder(context.Background(), recorder), validResponsesCall())
+	if !errors.Is(err, ErrOpenAIUnavailable) || len(recorder.events) != 1 {
+		t.Fatalf("error/events = %v/%#v", err, recorder.events)
+	}
+}
+
 func TestResponsesClientCreateRejectsInvalidCallBeforeNetwork(t *testing.T) {
 	var hits atomic.Int32
 	client, _ := newTestResponsesClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -191,6 +306,7 @@ func TestResponsesClientCreateRejectsInvalidCallBeforeNetwork(t *testing.T) {
 		mutate func(*ResponsesCall)
 		want   string
 	}{
+		{"missing operation", func(c *ResponsesCall) { c.Operation = "" }, "operation is invalid"},
 		{"missing model", func(c *ResponsesCall) { c.Model = "" }, "model is required"},
 		{"bad reasoning", func(c *ResponsesCall) { c.ReasoningEffort = "extreme" }, "unsupported reasoning effort"},
 		{"zero output", func(c *ResponsesCall) { c.MaxOutputTokens = 0 }, "max output tokens"},

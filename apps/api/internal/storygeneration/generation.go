@@ -63,6 +63,7 @@ func (runner *V2Runner) GenerateEdition(ctx context.Context, input GenerateEditi
 	}
 
 	result, err := runner.gateway.Create(ctx, ResponsesCall{
+		Operation:        generationResponsesOperation(input.EditionKey),
 		Model:            GenerationModelV2,
 		ReasoningEffort:  runner.editionReasoningEffort,
 		MaxOutputTokens:  runner.editionMaxOutputTokens,
@@ -108,6 +109,21 @@ func (runner *V2Runner) GenerateEdition(ctx context.Context, input GenerateEditi
 	}
 
 	return artifact, nil
+}
+
+func generationResponsesOperation(key model.AdminStoryEditionKey) ResponsesOperation {
+	switch key {
+	case model.AdminStoryEditionConfidentReaders:
+		return ResponsesOperationGenerateConfidentReaders
+	case model.AdminStoryEditionGrowingReaders:
+		return ResponsesOperationGenerateGrowingReaders
+	case model.AdminStoryEditionStoryExplorers:
+		return ResponsesOperationGenerateStoryExplorers
+	case model.AdminStoryEditionLittleListeners:
+		return ResponsesOperationGenerateLittleListeners
+	default:
+		return ""
+	}
 }
 
 func (artifact GeneratedEditionArtifact) Validate() error {

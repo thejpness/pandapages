@@ -76,6 +76,7 @@ func (runner *V2Runner) AnalyseSource(ctx context.Context, input SourceAnalysisP
 	}
 
 	result, err := runner.gateway.Create(ctx, ResponsesCall{
+		Operation:       ResponsesOperationAnalyseSource,
 		Model:           GenerationModelV2,
 		ReasoningEffort: runner.analysisReasoningEffort,
 		MaxOutputTokens: runner.analysisMaxOutputTokens,

@@ -28,17 +28,21 @@ func (lock *fakeLock) Release() {
 }
 
 type fakeStore struct {
-	mu             sync.Mutex
-	jobs           []model.AdminStoryGenerationJob
-	stages         []model.AdminStoryGenerationJobStage
-	completed      []storyorchestration.Result
-	failures       []string
-	requeued       []string
-	recovered      int64
-	lock           *fakeLock
-	claimCalls     int
-	recoveryCalls  int
-	enqueueCounter int
+	mu               sync.Mutex
+	jobs             []model.AdminStoryGenerationJob
+	stages           []model.AdminStoryGenerationJobStage
+	completed        []storyorchestration.Result
+	usageEvents      []storygeneration.ResponsesUsageObservation
+	usageContextErrs []error
+	usageDeadlines   []time.Time
+	usageError       error
+	failures         []string
+	requeued         []string
+	recovered        int64
+	lock             *fakeLock
+	claimCalls       int
+	recoveryCalls    int
+	enqueueCounter   int
 }
 
 func (store *fakeStore) CreateOrReuseStoryGenerationJob(_ context.Context, input model.AdminStoryGenerationJobCreateInput) (model.AdminStoryGenerationJob, error) {
@@ -135,6 +139,24 @@ func (store *fakeStore) FailStoryGenerationJob(_ context.Context, jobID, failure
 		}
 	}
 	return errors.New("job not running")
+}
+
+func (store *fakeStore) RecordStoryGenerationUsage(ctx context.Context, jobID string, observation storygeneration.ResponsesUsageObservation) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.usageContextErrs = append(store.usageContextErrs, ctx.Err())
+	deadline, _ := ctx.Deadline()
+	store.usageDeadlines = append(store.usageDeadlines, deadline)
+	if store.usageError != nil {
+		return store.usageError
+	}
+	for _, job := range store.jobs {
+		if job.ID == jobID {
+			store.usageEvents = append(store.usageEvents, observation)
+			return nil
+		}
+	}
+	return errors.New("job not found")
 }
 
 func (store *fakeStore) RequeueRunningStoryGenerationJobs(_ context.Context) (int64, error) {
@@ -403,5 +425,28 @@ func TestWorkerQuotaExhaustionCreatesNoCompletedRun(t *testing.T) {
 			store.failures,
 			store.jobs[0],
 		)
+	}
+}
+
+func TestGenerationUsageRecorderUsesBoundedIndependentPersistenceContext(t *testing.T) {
+	store := &fakeStore{jobs: []model.AdminStoryGenerationJob{queuedJob(testSourceVersionID)}}
+	recorder := generationUsageRecorder{store: store, jobID: store.jobs[0].ID}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	observation := storygeneration.ResponsesUsageObservation{
+		Operation:          storygeneration.ResponsesOperationAnalyseSource,
+		ProviderResponseID: "resp-observed-before-cancellation",
+		RequestedModel:     "requested-model",
+		ReturnedModel:      "returned-model",
+		Usage:              storygeneration.ResponsesUsage{InputTokens: 1, TotalTokens: 1},
+	}
+	if err := recorder.RecordResponsesUsage(canceled, observation); err != nil {
+		t.Fatalf("RecordResponsesUsage() error = %v", err)
+	}
+	if len(store.usageEvents) != 1 || len(store.usageContextErrs) != 1 || store.usageContextErrs[0] != nil {
+		t.Fatalf("usage events/context errors = %#v/%#v", store.usageEvents, store.usageContextErrs)
+	}
+	if len(store.usageDeadlines) != 1 || time.Until(store.usageDeadlines[0]) <= 0 || time.Until(store.usageDeadlines[0]) > 5*time.Second {
+		t.Fatalf("usage persistence deadline = %v", store.usageDeadlines)
 	}
 }

@@ -841,6 +841,67 @@ CREATE UNIQUE INDEX story_generation_jobs_one_active_source_idx
 CREATE INDEX story_generation_jobs_source_created_idx
   ON story_generation_jobs(source_version_id, created_at DESC, id DESC);
 
+-- Append-only observed provider token usage for durable generation jobs. It is
+-- operational accounting evidence, separate from the immutable completed-run
+-- artifacts that retain the generated content and semantic evidence.
+CREATE TABLE story_generation_usage_events (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  generation_job_id uuid NOT NULL,
+  operation text NOT NULL,
+  provider_response_id text NOT NULL,
+  requested_model text NOT NULL,
+  returned_model text NOT NULL,
+  input_tokens bigint NOT NULL,
+  cached_input_tokens bigint NOT NULL,
+  output_tokens bigint NOT NULL,
+  reasoning_tokens bigint NOT NULL,
+  total_tokens bigint NOT NULL,
+  observed_at timestamptz NOT NULL DEFAULT now(),
+
+  CONSTRAINT story_generation_usage_events_job_fkey
+    FOREIGN KEY (generation_job_id) REFERENCES story_generation_jobs(id)
+    ON UPDATE NO ACTION ON DELETE RESTRICT,
+
+  CONSTRAINT story_generation_usage_events_provider_response_key
+    UNIQUE (provider_response_id),
+
+  CONSTRAINT story_generation_usage_events_operation_check
+    CHECK (operation IN (
+      'analyse_source',
+      'generate_confident_readers',
+      'generate_growing_readers',
+      'generate_story_explorers',
+      'generate_little_listeners',
+      'validate_confident_readers',
+      'validate_growing_readers',
+      'validate_story_explorers',
+      'validate_little_listeners',
+      'validate_bundle'
+    )),
+
+  CONSTRAINT story_generation_usage_events_identifier_check
+    CHECK (
+      provider_response_id = btrim(provider_response_id)
+      AND length(provider_response_id) BETWEEN 1 AND 256
+      AND requested_model = btrim(requested_model)
+      AND length(requested_model) BETWEEN 1 AND 256
+      AND returned_model = btrim(returned_model)
+      AND length(returned_model) BETWEEN 1 AND 256
+    ),
+
+  CONSTRAINT story_generation_usage_events_tokens_check
+    CHECK (
+      input_tokens >= 0
+      AND cached_input_tokens >= 0
+      AND output_tokens >= 0
+      AND reasoning_tokens >= 0
+      AND total_tokens >= 0
+    )
+);
+
+CREATE INDEX story_generation_usage_events_job_observed_idx
+  ON story_generation_usage_events(generation_job_id, observed_at ASC, id ASC);
+
 -- Human editorial decisions are immutable audit events against one exact
 -- completed orchestration run. They intentionally do not alter the retained
 -- orchestration evidence or current story/publication state.
@@ -1004,6 +1065,7 @@ DROP TABLE story_releases;
 DROP TABLE story_orchestration_run_draft_ingest_editions;
 DROP TABLE story_orchestration_run_draft_ingests;
 DROP TABLE story_orchestration_run_editorial_reviews;
+DROP TABLE story_generation_usage_events;
 DROP TABLE story_generation_jobs;
 DROP TABLE story_orchestration_runs;
 DROP TABLE story_source_versions;
