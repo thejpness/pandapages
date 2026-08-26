@@ -1,6 +1,12 @@
 # Test fixture lifecycle
 
-Panda Pages now has one clean greenfield migration, `00001_baseline.sql`. It creates the current schema only; normal migrations create no account, reader profile, membership, story, release, source, or progress fixture.
+Panda Pages has a clean greenfield migration baseline: `00001_baseline.sql`.
+Normal migrations create no account, reader profile, membership, story, release,
+source, progress, or fixture data.
+
+`00001_baseline.sql` is the frozen launch bootstrap. Once a migration is
+accepted, do not edit, renumber, or replace it: every later schema change must
+be a new ordered forward migration (`00003_...`, `00004_...`, and so on).
 
 ## Archived migration-history rationale
 
@@ -121,7 +127,7 @@ The seed command accepts no database URL or password. It:
 - targets either the single running development PostgreSQL container labelled
   `com.pandapages.test-seed-target=local-development`, or an explicitly named
   disposable integration container with the dedicated test label;
-- requires the target to be running with baseline migration `00001` applied;
+- requires the target to be running with the complete current migration chain applied;
 - uses container-local `psql`, prints no database credential, performs no
   network request, and creates no temporary credential file.
 

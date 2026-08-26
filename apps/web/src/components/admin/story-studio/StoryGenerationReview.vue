@@ -1,16 +1,19 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { onBeforeRouteLeave, useRouter } from 'vue-router'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import StoryOrchestrationEditorialReview from './StoryOrchestrationEditorialReview.vue'
-import StoryStudioDialog from './StoryStudioDialog.vue'
 import {
-  adminGenerateSourceVersion,
+  adminCreateStoryGenerationJob,
+  adminGetActiveStoryGenerationJob,
   adminGetSource,
+  adminGetStoryGenerationJob,
   adminGetStoryOrchestrationRun,
   adminListStoryOrchestrationRuns,
   type AdminGeneratedEditionArtifact,
   type AdminGeneratedEditionKey,
   type AdminSemanticAssessmentArtifact,
+  type AdminStoryGenerationJob,
+  type AdminStoryGenerationJobStage,
   type AdminStoryOrchestrationRun,
   type AdminStoryOrchestrationRunSummary,
   type AdminStorySourceSummary,
@@ -43,19 +46,20 @@ const selectedRun = ref<AdminStoryOrchestrationRun | null>(null)
 const runLoading = ref(false)
 const runError = ref<StoryGenerationError | null>(null)
 const activeEditionKey = ref<AdminGeneratedEditionKey>('confident-readers')
-const generating = ref(false)
+const generationJob = ref<AdminStoryGenerationJob | null>(null)
+const generationSubmitting = ref(false)
 const generationError = ref<StoryGenerationError | null>(null)
-const leaveDialogOpen = ref(false)
 
 let sourceGeneration = 0
 let historyGeneration = 0
 let runGeneration = 0
+let generationJobGeneration = 0
 let sourceController: AbortController | null = null
 let historyController: AbortController | null = null
 let runController: AbortController | null = null
-let generationController: AbortController | null = null
-let pendingRoute: string | null = null
-let allowRouteLeave = false
+let generationSubmissionController: AbortController | null = null
+let generationJobController: AbortController | null = null
+let generationPollTimer: ReturnType<typeof setTimeout> | null = null
 
 const selectedSourceVersion = computed<AdminSourceVersionSummary | null>(() =>
   sourceDetail.value?.versions.find((version) => version.versionId === selectedSourceVersionID.value) ?? null,
@@ -84,6 +88,17 @@ const generationHint = computed(() => {
   }
   return 'Eligibility is verified when generation starts. The server remains authoritative.'
 })
+const generationActive = computed(() =>
+  generationJob.value?.status === 'queued' || generationJob.value?.status === 'running',
+)
+const generationProgress = computed(() => {
+  const job = generationJob.value
+  if (!job) return ''
+  if (job.status === 'queued') return 'Generation is queued. You can safely leave this page; Panda Pages will continue in the background.'
+  if (job.status === 'completed') return 'Generation completed. The finished orchestration run appears in recent generations below.'
+  if (job.status === 'failed') return 'Generation did not complete. No incomplete orchestration run was saved.'
+  return `Generation is ${generationStageLabel(job.stage)}. You can safely leave this page and return later.`
+})
 
 function formatDate(value: string): string {
   return new Intl.DateTimeFormat('en-GB', {
@@ -100,6 +115,25 @@ function resultLabel(result: 'pass' | 'needs_review' | 'fail'): string {
 
 function resultClass(result: 'pass' | 'needs_review' | 'fail'): string {
   return `generation-result generation-result--${result.replace('_', '-')}`
+}
+
+function generationStageLabel(stage: AdminStoryGenerationJobStage): string {
+  const labels: Record<AdminStoryGenerationJobStage, string> = {
+    queued: 'queued',
+    analysing_source: 'analysing the canonical source',
+    generating_confident_readers: 'generating Confident Readers',
+    generating_growing_readers: 'generating Growing Readers',
+    generating_story_explorers: 'generating Story Explorers',
+    generating_little_listeners: 'generating Little Listeners',
+    validating_confident_readers: 'validating Confident Readers',
+    validating_growing_readers: 'validating Growing Readers',
+    validating_story_explorers: 'validating Story Explorers',
+    validating_little_listeners: 'validating Little Listeners',
+    validating_bundle: 'validating the four-edition bundle',
+    completed: 'completed',
+    failed: 'failed',
+  }
+  return labels[stage]
 }
 
 function abortSourceRequest() {
@@ -120,6 +154,14 @@ function abortRunRequest() {
   runController = null
 }
 
+function stopGenerationJobObservation() {
+  generationJobGeneration += 1
+  generationJobController?.abort()
+  generationJobController = null
+  if (generationPollTimer !== null) clearTimeout(generationPollTimer)
+  generationPollTimer = null
+}
+
 function clearSelectedRun() {
   abortRunRequest()
   selectedRunID.value = null
@@ -138,6 +180,7 @@ async function moveToSignIn() {
 
 async function loadSourceVersions() {
   abortSourceRequest()
+  stopGenerationJobObservation()
   clearSelectedRun()
   abortHistoryRequest()
   history.value = []
@@ -146,6 +189,8 @@ async function loadSourceVersions() {
   sourceDetail.value = null
   selectedSourceVersionID.value = null
   sourceError.value = ''
+  generationJob.value = null
+  generationError.value = null
 
   if (!sourceReadyForSelection.value) return
   sourceLoading.value = true
@@ -233,36 +278,105 @@ async function selectRun(summary: AdminStoryOrchestrationRunSummary) {
   }
 }
 
+function scheduleGenerationJobPoll(job: AdminStoryGenerationJob, sourceVersionID: string) {
+  if (job.status !== 'queued' && job.status !== 'running') return
+  if (generationPollTimer !== null) clearTimeout(generationPollTimer)
+  generationPollTimer = setTimeout(() => {
+    generationPollTimer = null
+    void observeGenerationJob(job.id, sourceVersionID)
+  }, 2_000)
+}
+
+async function loadActiveGenerationJob(sourceVersionID = selectedSourceVersionID.value) {
+  stopGenerationJobObservation()
+  generationJob.value = null
+  generationError.value = null
+  if (!sourceVersionID) return
+  const controller = new AbortController()
+  generationJobController = controller
+  const requestGeneration = ++generationJobGeneration
+  try {
+    const job = await adminGetActiveStoryGenerationJob(sourceVersionID, controller.signal)
+    if (
+      requestGeneration !== generationJobGeneration ||
+      controller.signal.aborted ||
+      selectedSourceVersionID.value !== sourceVersionID
+    ) return
+    generationJob.value = job
+    if (job) scheduleGenerationJobPoll(job, sourceVersionID)
+  } catch (caught) {
+    if (requestGeneration !== generationJobGeneration || controller.signal.aborted) return
+    const projected = projectStoryGenerationError(caught, 'generation')
+    generationError.value = projected
+    if (projected.kind === 'session') await moveToSignIn()
+  } finally {
+    if (requestGeneration === generationJobGeneration) generationJobController = null
+  }
+}
+
+async function observeGenerationJob(jobID: string, sourceVersionID: string) {
+  if (selectedSourceVersionID.value !== sourceVersionID) return
+  generationJobController?.abort()
+  const controller = new AbortController()
+  generationJobController = controller
+  const requestGeneration = ++generationJobGeneration
+  try {
+    const job = await adminGetStoryGenerationJob(jobID, controller.signal)
+    if (
+      requestGeneration !== generationJobGeneration ||
+      controller.signal.aborted ||
+      selectedSourceVersionID.value !== sourceVersionID ||
+      job.sourceVersionId !== sourceVersionID
+    ) return
+    generationJob.value = job
+    if (job.status === 'completed') {
+      await loadHistory(sourceVersionID)
+      if (selectedSourceVersionID.value !== sourceVersionID || !job.completedRunId) return
+      const summary = history.value.find((candidate) => candidate.id === job.completedRunId)
+      if (summary) await selectRun(summary)
+      return
+    }
+    if (job.status === 'failed') {
+      generationError.value = {
+        kind: 'retry',
+        title: 'Generation did not complete',
+        message: 'The background generation job failed before a complete orchestration run could be saved. You can try again.',
+        retryable: true,
+      }
+      return
+    }
+    scheduleGenerationJobPoll(job, sourceVersionID)
+  } catch (caught) {
+    if (requestGeneration !== generationJobGeneration || controller.signal.aborted) return
+    const projected = projectStoryGenerationError(caught, 'generation')
+    generationError.value = projected
+    if (projected.kind === 'session') await moveToSignIn()
+  } finally {
+    if (requestGeneration === generationJobGeneration) generationJobController = null
+  }
+}
+
 async function generate() {
   const sourceVersionID = selectedSourceVersionID.value
-  if (!sourceVersionID || generating.value) return
+  if (!sourceVersionID || generationSubmitting.value || generationActive.value) return
   generationError.value = null
-  generating.value = true
+  generationSubmitting.value = true
   const controller = new AbortController()
-  generationController = controller
+  generationSubmissionController = controller
   try {
-    const response = await adminGenerateSourceVersion(sourceVersionID, controller.signal)
+    const job = await adminCreateStoryGenerationJob(sourceVersionID, controller.signal)
     if (controller.signal.aborted || selectedSourceVersionID.value !== sourceVersionID) return
-    await loadHistory(sourceVersionID)
-    if (controller.signal.aborted || selectedSourceVersionID.value !== sourceVersionID) return
-    const summary = history.value.find((candidate) => candidate.id === response.id)
-    if (summary) await selectRun(summary)
-    else await selectRun({
-      id: response.id,
-      sourceVersionId: response.sourceVersionId,
-      sourceSha256: selectedRun.value?.sourceSha256 ?? '',
-      semanticResult: response.semanticResult,
-      createdAt: response.createdAt,
-    })
+    generationJob.value = job
+    scheduleGenerationJobPoll(job, sourceVersionID)
   } catch (caught) {
     if (controller.signal.aborted) return
     const projected = projectStoryGenerationError(caught, 'generation')
     generationError.value = projected
     if (projected.kind === 'session') await moveToSignIn()
   } finally {
-    if (generationController === controller) {
-      generating.value = false
-      generationController = null
+    if (generationSubmissionController === controller) {
+      generationSubmitting.value = false
+      generationSubmissionController = null
     }
   }
 }
@@ -294,31 +408,6 @@ function retryRun() {
   if (summary) void selectRun(summary)
 }
 
-function beforeUnload(event: BeforeUnloadEvent) {
-  if (!generating.value) return
-  event.preventDefault()
-  event.returnValue = ''
-}
-
-function cancelLeave() {
-  leaveDialogOpen.value = false
-  pendingRoute = null
-}
-
-async function confirmLeave() {
-  const destination = pendingRoute
-  leaveDialogOpen.value = false
-  pendingRoute = null
-  generationController?.abort()
-  if (!destination) return
-  allowRouteLeave = true
-  try {
-    await router.push(destination)
-  } finally {
-    allowRouteLeave = false
-  }
-}
-
 watch(
   () => [props.slug, props.source.status, props.source.currentVersion?.versionId] as const,
   () => { void loadSourceVersions() },
@@ -328,27 +417,20 @@ watch(
 watch(selectedSourceVersionID, (sourceVersionID, previous) => {
   if (sourceVersionID === previous) return
   void loadHistory(sourceVersionID)
+  void loadActiveGenerationJob(sourceVersionID)
 })
 
-onBeforeRouteLeave((to, from) => {
-  if (!generating.value || allowRouteLeave || to.fullPath === from.fullPath) return true
-  pendingRoute = to.fullPath
-  leaveDialogOpen.value = true
-  return false
-})
-
-onMounted(() => window.addEventListener('beforeunload', beforeUnload))
 onBeforeUnmount(() => {
-  window.removeEventListener('beforeunload', beforeUnload)
   abortSourceRequest()
   abortHistoryRequest()
   abortRunRequest()
-  generationController?.abort()
+  generationSubmissionController?.abort()
+  stopGenerationJobObservation()
 })
 </script>
 
 <template>
-  <section class="studio-panel generation-review" aria-labelledby="generation-review-title" :aria-busy="generating">
+  <section class="studio-panel generation-review" aria-labelledby="generation-review-title" :aria-busy="generationSubmitting || generationActive">
     <div class="generation-review__heading">
       <div>
         <p class="studio-page-heading__eyebrow">Adaptation generation</p>
@@ -358,10 +440,10 @@ onBeforeUnmount(() => {
       <button
         type="button"
         class="studio-button studio-button--primary"
-        :disabled="!selectedSourceVersionID || sourceLoading || generating"
+        :disabled="!selectedSourceVersionID || sourceLoading || generationSubmitting || generationActive"
         @click="generate"
       >
-        {{ generating ? 'Generating adaptations…' : history.length ? 'Generate again' : 'Generate adaptations' }}
+        {{ generationSubmitting ? 'Starting generation…' : generationActive ? 'Generation in progress' : history.length ? 'Generate again' : 'Generate adaptations' }}
       </button>
     </div>
 
@@ -370,7 +452,7 @@ onBeforeUnmount(() => {
       <select
         id="generation-source-version"
         v-model="selectedSourceVersionID"
-        :disabled="sourceLoading || generating || !sourceDetail"
+        :disabled="sourceLoading || generationSubmitting || !sourceDetail"
       >
         <option v-if="!selectedSourceVersionID" :value="null" disabled>Select a source revision</option>
         <option v-for="version in sourceDetail?.versions ?? []" :key="version.versionId" :value="version.versionId">
@@ -385,8 +467,8 @@ onBeforeUnmount(() => {
     <p v-else-if="props.source.status === 'missing'" class="generation-review__hint">Add a canonical source before generating adaptations.</p>
     <p v-else-if="props.source.status === 'repair_required'" class="generation-review__hint">Canonical source provenance needs attention before generation can start.</p>
 
-    <p v-if="generating" class="generation-review__progress" role="status" aria-live="polite">
-      Generating four adaptations. This can take several minutes.
+    <p v-if="generationJob" class="generation-review__progress" role="status" aria-live="polite">
+      {{ generationProgress }}
     </p>
     <div v-if="generationError" class="generation-review__error" role="alert">
       <div><strong>{{ generationError.title }}</strong><p>{{ generationError.message }}</p></div>
@@ -535,17 +617,6 @@ onBeforeUnmount(() => {
     </section>
   </section>
 
-  <StoryStudioDialog
-    :open="leaveDialogOpen"
-    title="Leave while generation is running?"
-    description="Leaving this Story Studio page stops the browser request and may cancel generation."
-    confirm-label="Leave and stop generation"
-    danger
-    @confirm="confirmLeave"
-    @cancel="cancelLeave"
-  >
-    <p>Choose Cancel to remain here while Panda Pages generates the four adaptations.</p>
-  </StoryStudioDialog>
 </template>
 
 <style scoped>

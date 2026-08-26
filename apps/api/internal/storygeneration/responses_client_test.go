@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func newTestResponsesClient(t *testing.T, handler http.Handler) (*ResponsesClient, *httptest.Server) {
@@ -270,7 +271,7 @@ func TestResponsesClientCreateFailsClosedOnProviderOutcomes(t *testing.T) {
 			name:        "rate limited",
 			status:      http.StatusTooManyRequests,
 			contentType: "application/json",
-			body:        `{}`,
+			body:        `{"error":{"type":"rate_limit_exceeded","code":"rate_limit_exceeded"}}`,
 			want:        ErrOpenAIRateLimited,
 		},
 		{
@@ -375,6 +376,23 @@ func TestResponsesClientCreateFailsClosedOnProviderOutcomes(t *testing.T) {
 	}
 }
 
+func TestResponsesClientCreateRetainsOnlyBoundedRetryAfterForRateLimitRetry(t *testing.T) {
+	client, _ := newTestResponsesClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "7")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		fmt.Fprint(w, `{"error":{"message":"provider detail must not be retained","type":"rate_limit_exceeded","code":"rate_limit_exceeded"}}`)
+	}))
+
+	_, err := client.Create(context.Background(), validResponsesCall())
+	if !errors.Is(err, ErrOpenAIRateLimited) {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if delay, ok := openAIRetryAfter(err); !ok || delay != 7*time.Second {
+		t.Fatalf("retry-after = %v / %v, want 7s / true", delay, ok)
+	}
+}
+
 func TestResponsesClientCreateDoesNotRetryOrFollowRedirects(t *testing.T) {
 	t.Run("no retry", func(t *testing.T) {
 		var hits atomic.Int32
@@ -437,5 +455,40 @@ func TestResponsesClientCreatePreservesContextCancellation(t *testing.T) {
 	_, err := client.Create(ctx, validResponsesCall())
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Create() error = %v, want context.Canceled", err)
+	}
+}
+
+func TestResponsesClientCreateClassifiesQuotaExhaustionAsNonRetryable(t *testing.T) {
+	client, _ := newTestResponsesClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		fmt.Fprint(w, `{"error":{"message":"provider billing detail must not escape","type":"insufficient_quota","code":"insufficient_quota"}}`)
+	}))
+
+	_, err := client.Create(context.Background(), validResponsesCall())
+	if !errors.Is(err, ErrOpenAIQuotaExceeded) {
+		t.Fatalf("Create() error = %v, want errors.Is(..., ErrOpenAIQuotaExceeded)", err)
+	}
+	if errors.Is(err, ErrOpenAIRateLimited) {
+		t.Fatalf("quota exhaustion unexpectedly classified as rate limited: %v", err)
+	}
+	if got, want := err.Error(), ErrOpenAIQuotaExceeded.Error()+": HTTP 429"; got != want {
+		t.Fatalf("Create() error = %q, want %q", got, want)
+	}
+}
+
+func TestResponsesClientCreateUnknown429FailsClosed(t *testing.T) {
+	client, _ := newTestResponsesClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		fmt.Fprint(w, `{"error":{"type":"unknown_provider_limit","code":"unknown_provider_limit"}}`)
+	}))
+
+	_, err := client.Create(context.Background(), validResponsesCall())
+	if !errors.Is(err, ErrOpenAIUnavailable) {
+		t.Fatalf("Create() error = %v, want errors.Is(..., ErrOpenAIUnavailable)", err)
+	}
+	if errors.Is(err, ErrOpenAIRateLimited) || errors.Is(err, ErrOpenAIQuotaExceeded) {
+		t.Fatalf("unknown 429 unexpectedly classified as retryable/quota: %v", err)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -20,11 +21,14 @@ const (
 	responsesRequestTimeout = 5 * time.Minute
 	maxResponsesBodyBytes   = 4 << 20
 	maxOutputTokensV2       = 128000
+	maxOpenAIRetryAfter     = time.Minute
+	maxOpenAIErrorBodyBytes = 64 << 10
 )
 
 var (
 	ErrOpenAIUnauthorized       = errors.New("OpenAI authentication failed")
 	ErrOpenAIRateLimited        = errors.New("OpenAI rate limit exceeded")
+	ErrOpenAIQuotaExceeded      = errors.New("OpenAI API quota unavailable")
 	ErrOpenAIUnavailable        = errors.New("OpenAI Responses API unavailable")
 	ErrOpenAIResponseInvalid    = errors.New("OpenAI response invalid")
 	ErrOpenAIResponseIncomplete = errors.New("OpenAI response incomplete")
@@ -79,6 +83,21 @@ type ResponsesResult struct {
 	Model      string
 	OutputText string
 	Usage      ResponsesUsage
+}
+
+// openAIRateLimitedError retains only a bounded Retry-After duration. It
+// deliberately does not retain the provider response body or headers.
+type openAIRateLimitedError struct {
+	retryAfter    time.Duration
+	hasRetryAfter bool
+}
+
+func (err *openAIRateLimitedError) Error() string {
+	return ErrOpenAIRateLimited.Error()
+}
+
+func (err *openAIRateLimitedError) Unwrap() error {
+	return ErrOpenAIRateLimited
 }
 
 func NewResponsesClient(cfg ResponsesClientConfig) (*ResponsesClient, error) {
@@ -142,6 +161,9 @@ func (client *ResponsesClient) Create(ctx context.Context, call ResponsesCall) (
 	}
 	defer response.Body.Close()
 
+	if response.StatusCode == http.StatusTooManyRequests {
+		return ResponsesResult{}, classifyOpenAITooManyRequests(response, time.Now())
+	}
 	if err := classifyOpenAIHTTPStatus(response.StatusCode); err != nil {
 		return ResponsesResult{}, err
 	}
@@ -158,6 +180,118 @@ func (client *ResponsesClient) Create(ctx context.Context, call ResponsesCall) (
 	}
 
 	return decodeResponsesResult(responseBody)
+}
+
+type openAIErrorEnvelope struct {
+	Error struct {
+		Type string  `json:"type"`
+		Code *string `json:"code"`
+	} `json:"error"`
+}
+
+func classifyOpenAITooManyRequests(response *http.Response, now time.Time) error {
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxOpenAIErrorBodyBytes+1))
+	if err != nil {
+		return fmt.Errorf("%w: read HTTP 429 response", ErrOpenAIUnavailable)
+	}
+	if len(body) > maxOpenAIErrorBodyBytes {
+		return fmt.Errorf("%w: HTTP 429 response exceeds limit", ErrOpenAIUnavailable)
+	}
+
+	providerType, providerCode, ok := parseOpenAIErrorClassification(body)
+	if !ok {
+		return fmt.Errorf("%w: unclassified HTTP 429", ErrOpenAIUnavailable)
+	}
+
+	quotaExceeded := providerType == "insufficient_quota" || providerCode == "insufficient_quota"
+	rateLimited := providerType == "rate_limit_exceeded" || providerCode == "rate_limit_exceeded"
+
+	switch {
+	case quotaExceeded && rateLimited:
+		// Conflicting provider metadata must not be guessed at or retried.
+		return fmt.Errorf("%w: conflicting HTTP 429 classification", ErrOpenAIUnavailable)
+	case quotaExceeded:
+		return fmt.Errorf("%w: HTTP 429", ErrOpenAIQuotaExceeded)
+	case rateLimited:
+		return newOpenAIRateLimitedError(response.Header.Get("Retry-After"), now)
+	default:
+		// HTTP 429 by itself is not sufficient evidence that retrying is safe.
+		return fmt.Errorf("%w: unclassified HTTP 429", ErrOpenAIUnavailable)
+	}
+}
+
+func parseOpenAIErrorClassification(body []byte) (string, string, bool) {
+	if len(body) == 0 || len(body) > maxOpenAIErrorBodyBytes || !utf8.Valid(body) || !json.Valid(body) {
+		return "", "", false
+	}
+	if err := validateSingleJSONValueWithoutDuplicateKeys(body); err != nil {
+		return "", "", false
+	}
+
+	var envelope openAIErrorEnvelope
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return "", "", false
+	}
+
+	providerType := boundedOpenAIErrorMetadata(envelope.Error.Type)
+	providerCode := ""
+	if envelope.Error.Code != nil {
+		providerCode = boundedOpenAIErrorMetadata(*envelope.Error.Code)
+	}
+
+	if providerType == "" && providerCode == "" {
+		return "", "", false
+	}
+	return providerType, providerCode, true
+}
+
+func boundedOpenAIErrorMetadata(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 64 || !utf8.ValidString(value) {
+		return ""
+	}
+	return value
+}
+
+func newOpenAIRateLimitedError(rawRetryAfter string, now time.Time) error {
+	delay, ok := parseOpenAIRetryAfter(rawRetryAfter, now)
+	return &openAIRateLimitedError{retryAfter: delay, hasRetryAfter: ok}
+}
+
+func openAIRetryAfter(err error) (time.Duration, bool) {
+	var rateLimitErr *openAIRateLimitedError
+	if !errors.As(err, &rateLimitErr) || !rateLimitErr.hasRetryAfter {
+		return 0, false
+	}
+	return rateLimitErr.retryAfter, true
+}
+
+func parseOpenAIRetryAfter(raw string, now time.Time) (time.Duration, bool) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return 0, false
+	}
+	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil {
+		if seconds <= 0 {
+			return 0, false
+		}
+		if seconds > int64(maxOpenAIRetryAfter/time.Second) {
+			return maxOpenAIRetryAfter, true
+		}
+		return time.Duration(seconds) * time.Second, true
+	}
+	retryAt, err := http.ParseTime(value)
+	if err != nil {
+		return 0, false
+	}
+	delay := retryAt.Sub(now)
+	if delay <= 0 {
+		return 0, false
+	}
+	if delay > maxOpenAIRetryAfter {
+		return maxOpenAIRetryAfter, true
+	}
+	return delay, true
 }
 
 func validateResponsesCall(call ResponsesCall) error {
@@ -299,7 +433,7 @@ func classifyOpenAIHTTPStatus(status int) error {
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
 		return fmt.Errorf("%w: HTTP %d", ErrOpenAIUnauthorized, status)
 	case status == http.StatusTooManyRequests:
-		return fmt.Errorf("%w: HTTP %d", ErrOpenAIRateLimited, status)
+		return fmt.Errorf("%w: unclassified HTTP %d", ErrOpenAIUnavailable, status)
 	case status >= http.StatusInternalServerError:
 		return fmt.Errorf("%w: HTTP %d", ErrOpenAIUnavailable, status)
 	default:

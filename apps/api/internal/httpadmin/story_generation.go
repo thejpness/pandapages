@@ -3,36 +3,27 @@ package httpadmin
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
-	"time"
 
 	"pandapages/api/internal/httpbearer"
-	"pandapages/api/internal/storygeneration"
-	"pandapages/api/internal/storyorchestration"
+	"pandapages/api/internal/model"
 )
 
-const (
-	adminStoryGenerationTimeout = 5 * time.Minute
-	maxGenerationRequestBytes   = 1024
-)
+const maxGenerationRequestBytes = 1024
 
-// StoryGenerationService is the application boundary for one trusted source
-// version generation run. HTTP does not know about model or transport details.
-type StoryGenerationService interface {
-	Run(context.Context, string) (storyorchestration.PersistedRun, error)
+// StoryGenerationJobService is the durable lifecycle boundary. It intentionally
+// never exposes partial model output as completed orchestration evidence.
+type StoryGenerationJobService interface {
+	Enqueue(context.Context, model.AdminStoryGenerationJobCreateInput) (model.AdminStoryGenerationJob, error)
+	Get(context.Context, string) (model.AdminStoryGenerationJob, error)
+	GetActiveForSourceVersion(context.Context, string) (model.AdminStoryGenerationJob, error)
 }
 
-type storyGenerationResponse struct {
-	ID              string `json:"id"`
-	SourceVersionID string `json:"sourceVersionId"`
-	SemanticResult  string `json:"semanticResult"`
-	CreatedAt       string `json:"createdAt"`
-}
-
-func storyGenerationHandler(service StoryGenerationService) http.HandlerFunc {
+func storyGenerationJobCreateHandler(service StoryGenerationJobService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sourceVersionID, ok := httpbearer.CanonicalUUID(r.PathValue("sourceVersionID"))
 		if !ok {
@@ -46,31 +37,65 @@ func storyGenerationHandler(service StoryGenerationService) http.HandlerFunc {
 			writeErr(w, http.StatusServiceUnavailable, "generation_unavailable", "story generation is unavailable")
 			return
 		}
-
-		ctx, cancel := context.WithTimeout(r.Context(), adminStoryGenerationTimeout)
-		defer cancel()
-		persisted, err := service.Run(ctx, sourceVersionID)
-		if err != nil {
-			writeStoryGenerationError(w, r, ctx, sourceVersionID, err)
-			return
-		}
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			writeStoryGenerationError(w, r, ctx, sourceVersionID, ctx.Err())
+		account, ok := adminAccountFromRequest(r)
+		if !ok {
+			writeErr(w, http.StatusForbidden, "forbidden", "admin authorization required")
 			return
 		}
 
-		slog.InfoContext(r.Context(), "admin story generation completed",
-			"source_version_id", sourceVersionID,
-			"story_orchestration_run_id", persisted.ID,
-			"semantic_result", persisted.Result.SemanticResult,
-		)
-		noStore(w)
-		writeJSON(w, http.StatusCreated, storyGenerationResponse{
-			ID:              persisted.ID,
-			SourceVersionID: persisted.SourceVersionID,
-			SemanticResult:  string(persisted.Result.SemanticResult),
-			CreatedAt:       persisted.CreatedAt.UTC().Format(time.RFC3339Nano),
+		job, err := service.Enqueue(r.Context(), model.AdminStoryGenerationJobCreateInput{
+			SourceVersionID:      sourceVersionID,
+			RequesterPrincipalID: account.PrincipalID,
+			RequesterAccountID:   account.AccountID,
 		})
+		if err != nil {
+			writeStoryGenerationJobError(w, r, sourceVersionID, err)
+			return
+		}
+		noStore(w)
+		writeJSON(w, http.StatusAccepted, job)
+	}
+}
+
+func storyGenerationJobHandler(service StoryGenerationJobService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		jobID, ok := httpbearer.CanonicalUUID(r.PathValue("jobID"))
+		if !ok {
+			writeErr(w, http.StatusBadRequest, "generation_job_invalid", "generation job ID is invalid")
+			return
+		}
+		if service == nil {
+			writeErr(w, http.StatusServiceUnavailable, "generation_unavailable", "story generation is unavailable")
+			return
+		}
+		job, err := service.Get(r.Context(), jobID)
+		if err != nil {
+			writeStoryGenerationJobError(w, r, "", err)
+			return
+		}
+		noStore(w)
+		writeJSON(w, http.StatusOK, job)
+	}
+}
+
+func storyGenerationActiveJobHandler(service StoryGenerationJobService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		sourceVersionID, ok := httpbearer.CanonicalUUID(r.PathValue("sourceVersionID"))
+		if !ok {
+			writeErr(w, http.StatusBadRequest, "generation_source_version_invalid", "source version ID is invalid")
+			return
+		}
+		if service == nil {
+			writeErr(w, http.StatusServiceUnavailable, "generation_unavailable", "story generation is unavailable")
+			return
+		}
+		job, err := service.GetActiveForSourceVersion(r.Context(), sourceVersionID)
+		if err != nil {
+			writeStoryGenerationJobError(w, r, sourceVersionID, err)
+			return
+		}
+		noStore(w)
+		writeJSON(w, http.StatusOK, job)
 	}
 }
 
@@ -88,42 +113,15 @@ func emptyGenerationRequest(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-func writeStoryGenerationError(
-	w http.ResponseWriter,
-	r *http.Request,
-	ctx context.Context,
-	sourceVersionID string,
-	err error,
-) {
-	category := "internal"
-	status := http.StatusInternalServerError
-	code := "generation_failed"
-	message := "story generation failed"
-	switch {
-	case errors.Is(err, context.DeadlineExceeded), errors.Is(ctx.Err(), context.DeadlineExceeded):
-		category = "deadline"
-		status = http.StatusGatewayTimeout
-		code = "generation_timeout"
-		message = "story generation timed out"
-	case errors.Is(err, storygeneration.ErrOpenAIRateLimited):
-		category = "rate_limited"
-		status = http.StatusTooManyRequests
-		code = "generation_rate_limited"
-		message = "story generation is temporarily rate limited"
-	case errors.Is(err, storygeneration.ErrOpenAIUnavailable), errors.Is(err, storygeneration.ErrOpenAIUnauthorized):
-		category = "upstream_unavailable"
-		status = http.StatusServiceUnavailable
-		code = "generation_unavailable"
-		message = "story generation is unavailable"
-	case errors.Is(err, storygeneration.ErrOpenAIResponseInvalid), errors.Is(err, storygeneration.ErrOpenAIResponseIncomplete), errors.Is(err, storygeneration.ErrOpenAIResponseRefused):
-		category = "upstream_invalid"
-		status = http.StatusBadGateway
-		code = "generation_upstream_invalid"
-		message = "story generation provider returned an invalid response"
+func writeStoryGenerationJobError(w http.ResponseWriter, r *http.Request, sourceVersionID string, err error) {
+	if errors.Is(err, sql.ErrNoRows) {
+		if sourceVersionID != "" {
+			writeErr(w, http.StatusNotFound, "generation_source_version_not_found", "source version was not found")
+		} else {
+			writeErr(w, http.StatusNotFound, "generation_job_not_found", "generation job was not found")
+		}
+		return
 	}
-	slog.ErrorContext(r.Context(), "admin story generation failed",
-		"source_version_id", sourceVersionID,
-		"category", category,
-	)
-	writeErr(w, status, code, message)
+	slog.ErrorContext(r.Context(), "admin story generation job request failed", "source_version_id", sourceVersionID, "category", "job_store")
+	writeErr(w, http.StatusInternalServerError, "generation_job_failed", "story generation job is unavailable")
 }

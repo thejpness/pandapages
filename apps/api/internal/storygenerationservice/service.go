@@ -21,6 +21,16 @@ type OrchestrationRunner interface {
 	Run(context.Context, storyorchestration.Input) (storyorchestration.Result, error)
 }
 
+type stageReportingOrchestrationRunner interface {
+	RunWithStageReporter(context.Context, storyorchestration.Input, storyorchestration.StageReporter) (storyorchestration.Result, error)
+}
+
+// Runner is the complete application boundary used by HTTP and durable jobs.
+type Runner interface {
+	Run(context.Context, string) (storyorchestration.PersistedRun, error)
+	Generate(context.Context, string, storyorchestration.StageReporter) (storyorchestration.Result, error)
+}
+
 // CompletedRunStore retains a fully completed, validated orchestration result.
 type CompletedRunStore interface {
 	PersistCompletedStoryOrchestrationRunContext(context.Context, string, storyorchestration.Result) (storyorchestration.PersistedRun, error)
@@ -63,22 +73,10 @@ func New(cfg Config) (*Service, error) {
 // database transaction, and persists the completed result. Semantic pass,
 // needs_review, and fail are all valid completed states and are persisted.
 func (service *Service) Run(ctx context.Context, sourceVersionID string) (storyorchestration.PersistedRun, error) {
-	input, err := service.sourceLoader.LoadGenerationSourceVersionContext(ctx, sourceVersionID)
+	result, err := service.Generate(ctx, sourceVersionID, nil)
 	if err != nil {
-		return storyorchestration.PersistedRun{}, fmt.Errorf("load generation source version: %w", err)
+		return storyorchestration.PersistedRun{}, err
 	}
-	if input.SourceIdentity != sourceVersionID {
-		return storyorchestration.PersistedRun{}, fmt.Errorf("loaded generation source identity does not match requested source version")
-	}
-
-	result, err := service.orchestrator.Run(ctx, input)
-	if err != nil {
-		return storyorchestration.PersistedRun{}, fmt.Errorf("run story orchestration: %w", err)
-	}
-	if result.SourceIdentity != sourceVersionID {
-		return storyorchestration.PersistedRun{}, fmt.Errorf("orchestration result source identity does not match requested source version")
-	}
-
 	persisted, err := service.runStore.PersistCompletedStoryOrchestrationRunContext(ctx, sourceVersionID, result)
 	if err != nil {
 		return storyorchestration.PersistedRun{}, fmt.Errorf("persist completed story orchestration run: %w", err)
@@ -87,4 +85,35 @@ func (service *Service) Run(ctx context.Context, sourceVersionID string) (storyo
 		return storyorchestration.PersistedRun{}, fmt.Errorf("persisted story orchestration run does not match requested source version")
 	}
 	return persisted, nil
+}
+
+// Generate performs source loading and in-memory orchestration but intentionally
+// does not persist a completed run. Durable job workers use it so their final
+// job transition and immutable-run persistence can commit atomically.
+func (service *Service) Generate(
+	ctx context.Context,
+	sourceVersionID string,
+	report storyorchestration.StageReporter,
+) (storyorchestration.Result, error) {
+	input, err := service.sourceLoader.LoadGenerationSourceVersionContext(ctx, sourceVersionID)
+	if err != nil {
+		return storyorchestration.Result{}, fmt.Errorf("load generation source version: %w", err)
+	}
+	if input.SourceIdentity != sourceVersionID {
+		return storyorchestration.Result{}, fmt.Errorf("loaded generation source identity does not match requested source version")
+	}
+
+	var result storyorchestration.Result
+	if stageRunner, ok := service.orchestrator.(stageReportingOrchestrationRunner); ok {
+		result, err = stageRunner.RunWithStageReporter(ctx, input, report)
+	} else {
+		result, err = service.orchestrator.Run(ctx, input)
+	}
+	if err != nil {
+		return storyorchestration.Result{}, fmt.Errorf("run story orchestration: %w", err)
+	}
+	if result.SourceIdentity != sourceVersionID {
+		return storyorchestration.Result{}, fmt.Errorf("orchestration result source identity does not match requested source version")
+	}
+	return result, nil
 }
