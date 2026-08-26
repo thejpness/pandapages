@@ -38,6 +38,7 @@ type Store interface {
 	UpdateStoryGenerationJobStage(context.Context, string, model.AdminStoryGenerationJobStage) error
 	CompleteStoryGenerationJob(context.Context, string, storyorchestration.Result) (storyorchestration.PersistedRun, error)
 	FailStoryGenerationJob(context.Context, string, string) error
+	RecordStoryGenerationUsage(context.Context, string, storygeneration.ResponsesUsageObservation) error
 	RequeueRunningStoryGenerationJobs(context.Context) (int64, error)
 	RequeueStoryGenerationJob(context.Context, string) error
 	AcquireStoryGenerationWorkerLock(context.Context) (db.StoryGenerationWorkerLock, bool, error)
@@ -211,6 +212,10 @@ func (service *Service) execute(workerContext context.Context, job model.AdminSt
 	started := time.Now()
 	jobContext, cancel := context.WithTimeout(workerContext, service.jobTimeout)
 	defer cancel()
+	usageContext := storygeneration.WithResponsesUsageRecorder(jobContext, generationUsageRecorder{
+		store: service.store,
+		jobID: job.ID,
+	})
 	lastStage := time.Now()
 	currentStage := job.Stage
 	report := func(stage storyorchestration.Stage) error {
@@ -232,7 +237,7 @@ func (service *Service) execute(workerContext context.Context, job model.AdminSt
 		return nil
 	}
 
-	result, err := service.runner.Generate(jobContext, job.SourceVersionID, report)
+	result, err := service.runner.Generate(usageContext, job.SourceVersionID, report)
 	if err == nil {
 		persisted, completeErr := service.store.CompleteStoryGenerationJob(jobContext, job.ID, result)
 		if completeErr == nil {
@@ -269,6 +274,24 @@ func (service *Service) execute(workerContext context.Context, job model.AdminSt
 		"category", failureCode,
 		"duration", time.Since(started),
 	)
+}
+
+// generationUsageRecorder makes one short, bounded persistence attempt after
+// the provider response has been safely observed. It deliberately does not
+// inherit the remaining model/job deadline: a response received at that
+// boundary must not be discarded solely because the model context expired.
+type generationUsageRecorder struct {
+	store Store
+	jobID string
+}
+
+func (recorder generationUsageRecorder) RecordResponsesUsage(
+	_ context.Context,
+	observation storygeneration.ResponsesUsageObservation,
+) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return recorder.store.RecordStoryGenerationUsage(ctx, recorder.jobID, observation)
 }
 
 func generationFailureCode(err error, ctx context.Context) string {

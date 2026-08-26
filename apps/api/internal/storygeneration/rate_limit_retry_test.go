@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -326,6 +327,73 @@ func TestRateLimitRetryGatewayAddsOnlyPositiveProviderJitter(t *testing.T) {
 		if got != test.want || got < 20*time.Minute || source != "retry_after" {
 			t.Fatalf("delay/source = %v/%q, want at least 20m and %v/retry_after", got, source, test.want)
 		}
+	}
+}
+
+func TestRateLimitRetryGatewayRecordsOnlyTrustedSuccessfulResponses(t *testing.T) {
+	for _, retryableFailures := range []int{1, 2} {
+		t.Run(fmt.Sprintf("%d rate limits then success", retryableFailures), func(t *testing.T) {
+			attempts := 0
+			client, _ := newTestResponsesClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				attempts++
+				w.Header().Set("Content-Type", "application/json")
+				if attempts <= retryableFailures {
+					w.WriteHeader(http.StatusTooManyRequests)
+					fmt.Fprint(w, `{"error":{"type":"rate_limit_exceeded","code":"rate_limit_exceeded"}}`)
+					return
+				}
+				fmt.Fprint(w, completedResponseJSON("# Story\n\nGenerated."))
+			}))
+			gateway, err := NewRateLimitRetryGateway(RateLimitRetryConfig{
+				Gateway: client,
+				Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+				Wait:    func(context.Context, time.Duration) error { return nil },
+				Jitter:  func() float64 { return 0.5 },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			recorder := &recordingResponsesUsageRecorder{}
+			if _, err := gateway.Create(WithResponsesUsageRecorder(context.Background(), recorder), validResponsesCall()); err != nil {
+				t.Fatalf("Create() error = %v", err)
+			}
+			if attempts != retryableFailures+1 || len(recorder.events) != 1 {
+				t.Fatalf("attempts/events = %d/%#v", attempts, recorder.events)
+			}
+		})
+	}
+}
+
+func TestRateLimitRetryGatewayDoesNotRecordNonSuccessfulProviderErrors(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		body string
+		want error
+	}{
+		{name: "exhausted rate limits", body: `{"error":{"type":"rate_limit_exceeded","code":"rate_limit_exceeded"}}`, want: ErrOpenAIRateLimited},
+		{name: "quota exhaustion", body: `{"error":{"type":"insufficient_quota","code":"insufficient_quota"}}`, want: ErrOpenAIQuotaExceeded},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client, _ := newTestResponsesClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusTooManyRequests)
+				fmt.Fprint(w, test.body)
+			}))
+			gateway, err := NewRateLimitRetryGateway(RateLimitRetryConfig{
+				Gateway: client,
+				Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+				Wait:    func(context.Context, time.Duration) error { return nil },
+				Jitter:  func() float64 { return 0.5 },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			recorder := &recordingResponsesUsageRecorder{}
+			_, err = gateway.Create(WithResponsesUsageRecorder(context.Background(), recorder), validResponsesCall())
+			if !errors.Is(err, test.want) || len(recorder.events) != 0 {
+				t.Fatalf("error/events = %v/%#v", err, recorder.events)
+			}
+		})
 	}
 }
 

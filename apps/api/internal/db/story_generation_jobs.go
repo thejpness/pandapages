@@ -193,6 +193,9 @@ func (s *Store) CompleteStoryGenerationJob(
 	if err != nil {
 		return storyorchestration.PersistedRun{}, err
 	}
+	if err := reconcileCompletedStoryGenerationUsageTx(ctx, tx, jobID, result); err != nil {
+		return storyorchestration.PersistedRun{}, err
+	}
 	update, err := tx.ExecContext(ctx, `
 		UPDATE story_generation_jobs
 		SET

@@ -4,9 +4,11 @@ Panda Pages has a clean greenfield migration baseline: `00001_baseline.sql`.
 Normal migrations create no account, reader profile, membership, story, release,
 source, progress, or fixture data.
 
-`00001_baseline.sql` is the frozen launch bootstrap. Once a migration is
-accepted, do not edit, renumber, or replace it: every later schema change must
-be a new ordered forward migration (`00003_...`, `00004_...`, and so on).
+`00001_baseline.sql` is the consolidated pre-production launch baseline. It may
+change while development and staging data remain disposable. After the first
+persistent production deployment it becomes permanently frozen; every later
+production schema change must then use a new ordered forward migration
+(`00002_...`, `00003_...`, and so on).
 
 ## Archived migration-history rationale
 

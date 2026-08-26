@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
-	"strings"
 	"time"
 )
 
@@ -272,8 +271,8 @@ func waitForRateLimitRetry(ctx context.Context, delay time.Duration) error {
 }
 
 func responsesOperationName(call ResponsesCall) string {
-	if version := strings.TrimSpace(string(call.Prompt.Version)); version != "" {
-		return version
+	if ValidResponsesOperation(call.Operation) {
+		return string(call.Operation)
 	}
 	return "responses.create"
 }

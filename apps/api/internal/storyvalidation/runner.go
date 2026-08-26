@@ -110,6 +110,7 @@ func (runner *Runner) ValidateEdition(ctx context.Context, input EditionValidati
 	}
 
 	result, err := runner.gateway.Create(ctx, storygeneration.ResponsesCall{
+		Operation:       validationResponsesOperation(input.GeneratedEdition.EditionKey),
 		Model:           runner.model,
 		ReasoningEffort: runner.reasoningEffort,
 		MaxOutputTokens: runner.maxOutputTokens,
@@ -192,6 +193,7 @@ func (runner *Runner) ValidateBundle(ctx context.Context, input BundleValidation
 	}
 
 	result, err := runner.gateway.Create(ctx, storygeneration.ResponsesCall{
+		Operation:       storygeneration.ResponsesOperationValidateBundle,
 		Model:           runner.model,
 		ReasoningEffort: runner.reasoningEffort,
 		MaxOutputTokens: runner.maxOutputTokens,
@@ -247,6 +249,21 @@ func (runner *Runner) ValidateBundle(ctx context.Context, input BundleValidation
 		return AssessmentArtifact{}, err
 	}
 	return artifact, nil
+}
+
+func validationResponsesOperation(key model.AdminStoryEditionKey) storygeneration.ResponsesOperation {
+	switch key {
+	case model.AdminStoryEditionConfidentReaders:
+		return storygeneration.ResponsesOperationValidateConfidentReaders
+	case model.AdminStoryEditionGrowingReaders:
+		return storygeneration.ResponsesOperationValidateGrowingReaders
+	case model.AdminStoryEditionStoryExplorers:
+		return storygeneration.ResponsesOperationValidateStoryExplorers
+	case model.AdminStoryEditionLittleListeners:
+		return storygeneration.ResponsesOperationValidateLittleListeners
+	default:
+		return ""
+	}
 }
 
 func buildAssessmentArtifact(
