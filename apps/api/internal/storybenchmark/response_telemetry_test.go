@@ -48,6 +48,7 @@ func TestRecordingResponsesGatewayRetainsUsageWhenDownstreamCouldRejectResponse(
 	}
 
 	_, err = recorder.Create(context.Background(), storygeneration.ResponsesCall{
+		Operation:        storygeneration.ResponsesOperationValidateBundle,
 		Model:            "gpt-5.6-luna",
 		ReasoningEffort:  storygeneration.ReasoningEffortMedium,
 		MaxOutputTokens:  8192,
@@ -57,6 +58,7 @@ func TestRecordingResponsesGatewayRetainsUsageWhenDownstreamCouldRejectResponse(
 		t.Fatalf("first Create() error = %v", err)
 	}
 	_, err = recorder.Create(context.Background(), storygeneration.ResponsesCall{
+		Operation:       storygeneration.ResponsesOperationAnalyseSource,
 		Model:           "gpt-5.6-terra",
 		ReasoningEffort: storygeneration.ReasoningEffortHigh,
 		MaxOutputTokens: 4096,

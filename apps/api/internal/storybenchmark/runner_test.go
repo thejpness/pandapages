@@ -443,7 +443,8 @@ func (gateway *passValidationGateway) Create(
 func TestPassValidationGatewayBuildsV3JudgementWithPermittedReference(t *testing.T) {
 	gateway := &passValidationGateway{includeFinding: true}
 	result, err := gateway.Create(context.Background(), storygeneration.ResponsesCall{
-		Model: "validator-model",
+		Operation: storygeneration.ResponsesOperationValidateGrowingReaders,
+		Model:     "validator-model",
 		Prompt: storygeneration.Prompt{
 			Version:       storyvalidation.EditionJudgementPromptVersionV3,
 			UserInputJSON: `{"editionKey":"growing-readers","evidenceCatalogue":[{"segmentId":"src:p0007"}]}`,

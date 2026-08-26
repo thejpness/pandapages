@@ -320,6 +320,7 @@ WITH runtime_table(name) AS (
     ('story_source_versions'),
     ('story_orchestration_runs'),
     ('story_generation_jobs'),
+    ('story_generation_usage_events'),
     ('story_orchestration_run_editorial_reviews'),
     ('story_orchestration_run_draft_ingests'),
     ('story_orchestration_run_draft_ingest_editions'),
@@ -340,10 +341,10 @@ WHERE namespace.nspname = 'public'
   AND class.relkind IN ('r', 'p')
 \gexec
 
--- Release history, acquisition evidence, and editorial review events are
--- immutable at the runtime privilege boundary.
+-- Release history, acquisition evidence, editorial review events, and
+-- generation usage events are immutable at the runtime privilege boundary.
 WITH immutable_runtime_table(name) AS (
-  VALUES ('story_releases'), ('story_release_editions'), ('story_source_versions'), ('story_orchestration_runs'), ('story_orchestration_run_editorial_reviews'), ('story_orchestration_run_draft_ingests'), ('story_orchestration_run_draft_ingest_editions'), ('source_acquisitions'), ('source_acquisition_eligibility_assessments')
+  VALUES ('story_releases'), ('story_release_editions'), ('story_source_versions'), ('story_orchestration_runs'), ('story_generation_usage_events'), ('story_orchestration_run_editorial_reviews'), ('story_orchestration_run_draft_ingests'), ('story_orchestration_run_draft_ingest_editions'), ('source_acquisitions'), ('source_acquisition_eligibility_assessments')
 )
 SELECT format(
   'REVOKE UPDATE, DELETE ON TABLE public.%I FROM %I',

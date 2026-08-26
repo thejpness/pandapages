@@ -722,6 +722,7 @@ type retryingSemanticValidator struct {
 
 func (validator *retryingSemanticValidator) ValidateEdition(ctx context.Context, input storyvalidation.EditionValidationPromptInput) (storyvalidation.AssessmentArtifact, error) {
 	_, err := validator.gateway.Create(ctx, storygeneration.ResponsesCall{
+		Operation:       storygeneration.ResponsesOperationValidateConfidentReaders,
 		Model:           "validator-test",
 		ReasoningEffort: storygeneration.ReasoningEffortMedium,
 		MaxOutputTokens: 1,
