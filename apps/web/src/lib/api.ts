@@ -1208,9 +1208,31 @@ export type AdminStoryOrchestrationRun = {
   editionAssessments: AdminSemanticAssessmentArtifact[];
   bundleAssessment: AdminSemanticAssessmentArtifact;
 };
-export type AdminSourceGenerationResponse = {
-  id: string; sourceVersionId: string;
-  semanticResult: AdminOrchestrationSemanticResult; createdAt: string;
+export type AdminStoryGenerationJobStatus = "queued" | "running" | "completed" | "failed";
+export type AdminStoryGenerationJobStage =
+  | "queued"
+  | "analysing_source"
+  | "generating_confident_readers"
+  | "generating_growing_readers"
+  | "generating_story_explorers"
+  | "generating_little_listeners"
+  | "validating_confident_readers"
+  | "validating_growing_readers"
+  | "validating_story_explorers"
+  | "validating_little_listeners"
+  | "validating_bundle"
+  | "completed"
+  | "failed";
+export type AdminStoryGenerationJob = {
+  id: string;
+  sourceVersionId: string;
+  status: AdminStoryGenerationJobStatus;
+  stage: AdminStoryGenerationJobStage;
+  failureCode: string | null;
+  completedRunId: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
 };
 
 export type AdminSourceProviderID = "project-gutenberg";
@@ -2295,15 +2317,71 @@ function parseAdminSemanticAssessmentArtifact(value: unknown): AdminSemanticAsse
   };
 }
 
-export function parseAdminSourceGenerationResponse(value: unknown): AdminSourceGenerationResponse {
+const adminStoryGenerationJobStatuses = new Set<AdminStoryGenerationJobStatus>([
+  "queued", "running", "completed", "failed",
+]);
+const adminStoryGenerationJobStages = new Set<AdminStoryGenerationJobStage>([
+  "queued",
+  "analysing_source",
+  "generating_confident_readers",
+  "generating_growing_readers",
+  "generating_story_explorers",
+  "generating_little_listeners",
+  "validating_confident_readers",
+  "validating_growing_readers",
+  "validating_story_explorers",
+  "validating_little_listeners",
+  "validating_bundle",
+  "completed",
+  "failed",
+]);
+const adminStoryGenerationJobKeys = new Set([
+  "id", "sourceVersionId", "status", "stage", "failureCode", "completedRunId",
+  "createdAt", "startedAt", "completedAt",
+]);
+
+function parseAdminStoryGenerationJobOptionalTimestamp(
+  record: Record<string, unknown>,
+  key: string,
+): string | null {
+  if (!(key in record) || record[key] === null) return null;
+  return parseAdminNullableTimestamp(record[key]);
+}
+
+function parseAdminStoryGenerationJobOptionalUUID(
+  record: Record<string, unknown>,
+  key: string,
+): string | null {
+  if (!(key in record) || record[key] === null) return null;
+  return parseAdminUUID(record[key]);
+}
+
+export function parseAdminStoryGenerationJob(value: unknown): AdminStoryGenerationJob {
   const record = adminRecord(value);
+  if (Object.keys(record).some((key) => !adminStoryGenerationJobKeys.has(key))) {
+    throw new Error("Invalid admin response");
+  }
   if (!isRFC3339Timestamp(record.createdAt)) throw new Error("Invalid admin response");
-  return {
-    id: parseAdminUUID(record.id),
-    sourceVersionId: parseAdminUUID(record.sourceVersionId),
-    semanticResult: parseAdminOrchestrationResult(record.semanticResult),
-    createdAt: record.createdAt,
-  };
+  if (typeof record.status !== "string" || !adminStoryGenerationJobStatuses.has(record.status as AdminStoryGenerationJobStatus)) {
+    throw new Error("Invalid admin response");
+  }
+  if (typeof record.stage !== "string" || !adminStoryGenerationJobStages.has(record.stage as AdminStoryGenerationJobStage)) {
+    throw new Error("Invalid admin response");
+  }
+  const status = record.status as AdminStoryGenerationJobStatus;
+  const stage = record.stage as AdminStoryGenerationJobStage;
+  const failureCode = optionalAdminString(record, "failureCode");
+  const completedRunId = parseAdminStoryGenerationJobOptionalUUID(record, "completedRunId");
+  const startedAt = parseAdminStoryGenerationJobOptionalTimestamp(record, "startedAt");
+  const completedAt = parseAdminStoryGenerationJobOptionalTimestamp(record, "completedAt");
+  const runningStage = stage !== "queued" && stage !== "completed" && stage !== "failed";
+  if (
+    (status === "queued" && (stage !== "queued" || startedAt !== null || completedAt !== null || failureCode !== null || completedRunId !== null)) ||
+    (status === "running" && (!runningStage || startedAt === null || completedAt !== null || failureCode !== null || completedRunId !== null)) ||
+    (status === "completed" && (stage !== "completed" || startedAt === null || completedAt === null || failureCode !== null || completedRunId === null)) ||
+    (status === "failed" && (stage !== "failed" || startedAt === null || completedAt === null || failureCode === null || completedRunId !== null))
+  ) throw new Error("Invalid admin response");
+  return { id: parseAdminUUID(record.id), sourceVersionId: parseAdminUUID(record.sourceVersionId), status, stage, failureCode, completedRunId, createdAt: record.createdAt, startedAt, completedAt };
 }
 
 function parseAdminStoryOrchestrationRunSummary(value: unknown): AdminStoryOrchestrationRunSummary {
@@ -2484,17 +2562,46 @@ export async function adminGetVersionSource(slug: string, versionId: string, sig
 export async function adminGetSource(slug: string, signal?: AbortSignal): Promise<AdminSourceDetail> {
   return parseAdminSourceDetail(await request<unknown>(`/api/v1/admin/stories/${encodeURIComponent(slug)}/source`, { signal }));
 }
-export async function adminGenerateSourceVersion(
+export async function adminCreateStoryGenerationJob(
   sourceVersionId: string,
   signal?: AbortSignal,
-): Promise<AdminSourceGenerationResponse> {
+): Promise<AdminStoryGenerationJob> {
   const requestedSourceVersionId = parseAdminUUID(sourceVersionId);
-  const result = parseAdminSourceGenerationResponse(await request<unknown>(
-    `/api/v1/admin/source-versions/${encodeURIComponent(requestedSourceVersionId)}/generate`,
+  const result = parseAdminStoryGenerationJob(await request<unknown>(
+    `/api/v1/admin/source-versions/${encodeURIComponent(requestedSourceVersionId)}/generation-jobs`,
     { method: "POST", signal },
   ));
   if (result.sourceVersionId !== requestedSourceVersionId) throw new Error("Invalid admin response");
   return result;
+}
+export async function adminGetStoryGenerationJob(
+  jobId: string,
+  signal?: AbortSignal,
+): Promise<AdminStoryGenerationJob> {
+  const requestedJobId = parseAdminUUID(jobId);
+  const result = parseAdminStoryGenerationJob(await request<unknown>(
+    `/api/v1/admin/generation-jobs/${encodeURIComponent(requestedJobId)}`,
+    { signal },
+  ));
+  if (result.id !== requestedJobId) throw new Error("Invalid admin response");
+  return result;
+}
+export async function adminGetActiveStoryGenerationJob(
+  sourceVersionId: string,
+  signal?: AbortSignal,
+): Promise<AdminStoryGenerationJob | null> {
+  const requestedSourceVersionId = parseAdminUUID(sourceVersionId);
+  try {
+    const result = parseAdminStoryGenerationJob(await request<unknown>(
+      `/api/v1/admin/source-versions/${encodeURIComponent(requestedSourceVersionId)}/generation-jobs/active`,
+      { signal },
+    ));
+    if (result.sourceVersionId !== requestedSourceVersionId) throw new Error("Invalid admin response");
+    return result;
+  } catch (error) {
+    if (getAPIErrorStatus(error) === 404) return null;
+    throw error;
+  }
 }
 export async function adminListStoryOrchestrationRuns(
   sourceVersionId: string,

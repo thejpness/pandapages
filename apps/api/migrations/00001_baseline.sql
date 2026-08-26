@@ -772,6 +772,75 @@ CREATE TABLE story_orchestration_runs (
 CREATE INDEX story_orchestration_runs_source_created_idx
   ON story_orchestration_runs(source_version_id, created_at DESC, id DESC);
 
+-- A generation job is durable operational state. It is intentionally separate
+-- from story_orchestration_runs, which retains only complete immutable evidence.
+CREATE TABLE story_generation_jobs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  source_version_id uuid NOT NULL,
+  requester_principal_id uuid NOT NULL,
+  requester_account_id uuid NOT NULL,
+  status text NOT NULL DEFAULT 'queued',
+  stage text NOT NULL DEFAULT 'queued',
+  failure_code text,
+  completed_run_id uuid,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  started_at timestamptz,
+  completed_at timestamptz,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+
+  CONSTRAINT story_generation_jobs_source_version_fkey
+    FOREIGN KEY (source_version_id) REFERENCES story_source_versions(id)
+    ON UPDATE NO ACTION ON DELETE RESTRICT,
+
+  CONSTRAINT story_generation_jobs_requester_membership_fkey
+    FOREIGN KEY (requester_principal_id, requester_account_id)
+    REFERENCES account_memberships(principal_id, account_id)
+    ON UPDATE NO ACTION ON DELETE RESTRICT,
+
+  CONSTRAINT story_generation_jobs_completed_run_fkey
+    FOREIGN KEY (completed_run_id) REFERENCES story_orchestration_runs(id)
+    ON UPDATE NO ACTION ON DELETE RESTRICT,
+
+  CONSTRAINT story_generation_jobs_status_check
+    CHECK (status IN ('queued', 'running', 'completed', 'failed')),
+
+  CONSTRAINT story_generation_jobs_stage_check
+    CHECK (stage IN (
+      'queued',
+      'analysing_source',
+      'generating_confident_readers',
+      'generating_growing_readers',
+      'generating_story_explorers',
+      'generating_little_listeners',
+      'validating_confident_readers',
+      'validating_growing_readers',
+      'validating_story_explorers',
+      'validating_little_listeners',
+      'validating_bundle',
+      'completed',
+      'failed'
+    )),
+
+  CONSTRAINT story_generation_jobs_lifecycle_check
+    CHECK (
+      (status = 'queued' AND stage = 'queued' AND started_at IS NULL AND completed_at IS NULL AND failure_code IS NULL AND completed_run_id IS NULL)
+      OR
+      (status = 'running' AND stage NOT IN ('queued', 'completed', 'failed') AND started_at IS NOT NULL AND completed_at IS NULL AND failure_code IS NULL AND completed_run_id IS NULL)
+      OR
+      (status = 'completed' AND stage = 'completed' AND started_at IS NOT NULL AND completed_at IS NOT NULL AND failure_code IS NULL AND completed_run_id IS NOT NULL)
+      OR
+      (status = 'failed' AND stage = 'failed' AND started_at IS NOT NULL AND completed_at IS NOT NULL AND failure_code IS NOT NULL AND completed_run_id IS NULL)
+    )
+);
+
+-- One source version can incur the cost of at most one active generation job.
+CREATE UNIQUE INDEX story_generation_jobs_one_active_source_idx
+  ON story_generation_jobs(source_version_id)
+  WHERE status IN ('queued', 'running');
+
+CREATE INDEX story_generation_jobs_source_created_idx
+  ON story_generation_jobs(source_version_id, created_at DESC, id DESC);
+
 -- Human editorial decisions are immutable audit events against one exact
 -- completed orchestration run. They intentionally do not alter the retained
 -- orchestration evidence or current story/publication state.
@@ -935,6 +1004,7 @@ DROP TABLE story_releases;
 DROP TABLE story_orchestration_run_draft_ingest_editions;
 DROP TABLE story_orchestration_run_draft_ingests;
 DROP TABLE story_orchestration_run_editorial_reviews;
+DROP TABLE story_generation_jobs;
 DROP TABLE story_orchestration_runs;
 DROP TABLE story_source_versions;
 DROP TABLE story_sources;

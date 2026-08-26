@@ -6,6 +6,7 @@ const sourceVersionA = '11111111-1111-4111-8111-111111111111'
 const sourceVersionB = '22222222-2222-4222-8222-222222222222'
 const runA = '33333333-3333-4333-8333-333333333333'
 const runB = '44444444-4444-4444-8444-444444444444'
+const generationJobID = '77777777-7777-4777-8777-777777777777'
 const timestamp = '2026-08-18T12:00:00Z'
 const sourceSHA = 'a'.repeat(64)
 const analysisSHA = 'b'.repeat(64)
@@ -24,6 +25,18 @@ type DraftIngest = {
   createdAt: string
   outcome: DraftIngestOutcome
   editions: Array<{ editionKey: typeof generatedKeys[number]; editionId: string; storyVersionId: string }>
+}
+type GenerationJobStatus = 'queued' | 'running' | 'completed' | 'failed'
+type GenerationJob = {
+  id: string
+  sourceVersionId: string
+  status: GenerationJobStatus
+  stage: string
+  createdAt: string
+  startedAt?: string
+  completedAt?: string
+  failureCode?: string
+  completedRunId?: string
 }
 
 const draftIngestID = '77777777-7777-4777-8777-777777777777'
@@ -130,8 +143,8 @@ class ReviewAPI {
   history = new Map<string, Array<ReturnType<typeof summary>>>()
   runs = new Map<string, ReturnType<typeof orchestrationRun>>()
   generationResult: 'pass' | 'needs_review' | 'fail' = 'fail'
-  generationGate: ReturnType<typeof deferred<void>> | null = null
   generationFailure: { status: number; code: string } | null = null
+  generationJob: GenerationJob | null = null
   historyGates = new Map<string, ReturnType<typeof deferred<void>>>()
   runGates = new Map<string, ReturnType<typeof deferred<void>>>()
   editorialHistory = new Map<string, EditorialReview[]>()
@@ -153,6 +166,35 @@ class ReviewAPI {
     return this.requests.filter((request) => request.method === method && request.path === path).length
   }
 
+  completeGeneration() {
+    const job = this.generationJob
+    if (!job || (job.status !== 'queued' && job.status !== 'running')) throw new Error('no active generation job')
+    const created = orchestrationRun(runA, job.sourceVersionId, this.generationResult)
+    this.runs.set(created.id, created)
+    this.history.set(job.sourceVersionId, [summary(created), ...(this.history.get(job.sourceVersionId) ?? [])])
+    this.generationJob = {
+      ...job,
+      status: 'completed',
+      stage: 'completed',
+      startedAt: timestamp,
+      completedAt: timestamp,
+      completedRunId: created.id,
+    }
+  }
+
+  failGeneration() {
+    const job = this.generationJob
+    if (!job || (job.status !== 'queued' && job.status !== 'running')) throw new Error('no active generation job')
+    this.generationJob = {
+      ...job,
+      status: 'failed',
+      stage: 'failed',
+      startedAt: timestamp,
+      completedAt: timestamp,
+      failureCode: 'generation_timeout',
+    }
+  }
+
   private async fulfill(route: Route, body: unknown, status = 200) {
     await route.fulfill({ status, contentType: 'application/json', headers: { 'Cache-Control': 'no-store' }, body: JSON.stringify(body) })
   }
@@ -167,22 +209,33 @@ class ReviewAPI {
     if (path === '/api/v1/admin/stories/panda-tale' && method === 'GET') return this.fulfill(route, storyDetail())
     if (path === '/api/v1/admin/stories/panda-tale/source' && method === 'GET') return this.fulfill(route, sourceDetail())
 
-    const generate = /^\/api\/v1\/admin\/source-versions\/([^/]+)\/generate$/.exec(path)
-    if (generate && method === 'POST') {
-      if (this.generationGate) {
-        const gate = this.generationGate
-        this.generationGate = null
-        await gate.promise
-      }
+    const generationJobCreate = /^\/api\/v1\/admin\/source-versions\/([^/]+)\/generation-jobs$/.exec(path)
+    if (generationJobCreate && method === 'POST') {
       if (this.generationFailure) {
         const failure = this.generationFailure
         this.generationFailure = null
         return this.fulfill(route, { error: { code: failure.code, message: 'internal message must never be displayed' } }, failure.status)
       }
-      const created = orchestrationRun(runA, generate[1], this.generationResult)
-      this.runs.set(created.id, created)
-      this.history.set(generate[1], [summary(created), ...(this.history.get(generate[1]) ?? [])])
-      return this.fulfill(route, { id: created.id, sourceVersionId: created.sourceVersionId, semanticResult: created.semanticResult, createdAt: created.createdAt }, 201)
+      if (!this.generationJob || this.generationJob.sourceVersionId !== generationJobCreate[1] || !['queued', 'running'].includes(this.generationJob.status)) {
+        this.generationJob = { id: generationJobID, sourceVersionId: generationJobCreate[1], status: 'queued', stage: 'queued', createdAt: timestamp }
+      }
+      return this.fulfill(route, this.generationJob, 202)
+    }
+
+    const activeGenerationJob = /^\/api\/v1\/admin\/source-versions\/([^/]+)\/generation-jobs\/active$/.exec(path)
+    if (activeGenerationJob && method === 'GET') {
+      if (!this.generationJob || this.generationJob.sourceVersionId !== activeGenerationJob[1] || !['queued', 'running'].includes(this.generationJob.status)) {
+        return this.fulfill(route, { error: { code: 'generation_job_not_found', message: 'no active generation job' } }, 404)
+      }
+      return this.fulfill(route, this.generationJob)
+    }
+
+    const generationJob = /^\/api\/v1\/admin\/generation-jobs\/([^/]+)$/.exec(path)
+    if (generationJob && method === 'GET') {
+      if (!this.generationJob || this.generationJob.id !== generationJob[1]) {
+        return this.fulfill(route, { error: { code: 'generation_job_not_found', message: 'generation job was not found' } }, 404)
+      }
+      return this.fulfill(route, this.generationJob)
     }
 
     const history = /^\/api\/v1\/admin\/source-versions\/([^/]+)\/orchestration-runs$/.exec(path)
@@ -267,25 +320,24 @@ async function openReview(page: Page, api: ReviewAPI) {
   await expect(page.getByLabel('Canonical source revision')).toHaveValue(sourceVersionA)
 }
 
-test('generation uses the exact source version, keeps the request in view, then opens a reviewable semantic fail', async ({ page }) => {
+test('generation uses the exact source version, survives reload, then opens a reviewable semantic fail', async ({ page }) => {
   const api = new ReviewAPI()
-  const gate = deferred<void>()
-  api.generationGate = gate
   await openReview(page, api)
 
   const panel = page.locator('.generation-review')
   const generate = panel.getByRole('button', { name: 'Generate adaptations' })
   await generate.click()
-  await expect(panel.getByText('Generating four adaptations. This can take several minutes.')).toBeVisible()
-  await expect(panel.getByRole('button', { name: 'Generating adaptations…' })).toBeDisabled()
+  await expect(panel.getByText('Generation is queued. You can safely leave this page; Panda Pages will continue in the background.')).toBeVisible()
+  await expect(panel.getByRole('button', { name: 'Generation in progress' })).toBeDisabled()
   await expect(page.getByRole('heading', { name: 'Leave while generation is running?' })).toHaveCount(0)
-  await page.getByRole('button', { name: 'Source review' }).click()
-  await expect(page.getByRole('heading', { name: 'Leave while generation is running?' })).toBeVisible()
-  await page.getByRole('button', { name: 'Cancel' }).click()
-  expect(api.count('POST', `/api/v1/admin/source-versions/${sourceVersionA}/generate`)).toBe(1)
-  expect(api.requests.find((request) => request.path.endsWith('/generate'))?.body).toBeNull()
+  expect(api.count('POST', `/api/v1/admin/source-versions/${sourceVersionA}/generation-jobs`)).toBe(1)
+  expect(api.requests.find((request) => request.path.endsWith('/generation-jobs'))?.body).toBeNull()
 
-  gate.resolve()
+  await page.reload()
+  await expect(panel.getByText('Generation is queued. You can safely leave this page; Panda Pages will continue in the background.')).toBeVisible()
+  expect(api.count('GET', `/api/v1/admin/source-versions/${sourceVersionA}/generation-jobs/active`)).toBeGreaterThanOrEqual(2)
+
+  api.completeGeneration()
   await expect(page.getByRole('heading', { name: 'Generated adaptations' })).toBeVisible()
   await expect(panel.getByText('Fail — machine assessment').first()).toBeVisible()
   expect(api.count('GET', `/api/v1/admin/source-versions/${sourceVersionA}/orchestration-runs`)).toBeGreaterThanOrEqual(2)
@@ -325,6 +377,8 @@ for (const result of ['pass', 'needs_review'] as const) {
     api.generationResult = result
     await openReview(page, api)
     await page.getByRole('button', { name: 'Generate adaptations' }).click()
+    await expect(page.getByText('Generation is queued. You can safely leave this page; Panda Pages will continue in the background.')).toBeVisible()
+    api.completeGeneration()
     await expect(page.getByRole('heading', { name: 'Generated adaptations' })).toBeVisible()
     await expect(page.getByText(result === 'pass' ? 'Pass — machine assessment' : 'Needs review — machine assessment').first()).toBeVisible()
     expect(api.count('GET', `/api/v1/admin/source-versions/${sourceVersionA}/orchestration-runs`)).toBeGreaterThanOrEqual(2)
@@ -692,12 +746,12 @@ test('editorial integrity errors stay local to review controls and do not hide i
   await expect(page.getByText('Generated story')).toBeVisible()
 })
 
-test('a generation timeout remains an operational error and the review layout stays usable at a narrow width', async ({ page }) => {
+test('a failed durable generation remains operational and the review layout stays usable at a narrow width', async ({ page }) => {
   const api = new ReviewAPI()
-  api.generationFailure = { status: 504, code: 'generation_timeout' }
   await openReview(page, api)
   await page.getByRole('button', { name: 'Generate adaptations' }).click()
-  await expect(page.getByText(/Refresh recent generations before retrying/)).toBeVisible()
+  api.failGeneration()
+  await expect(page.getByText('Generation did not complete')).toBeVisible()
   await expect(page.getByText('Fail — machine assessment')).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Try again' })).toBeVisible()
 

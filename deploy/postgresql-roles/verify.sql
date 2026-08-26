@@ -172,6 +172,7 @@ WITH runtime_table(name, can_update, can_delete) AS (
     ('story_sections', true, true),
     ('story_source_versions', false, false),
     ('story_orchestration_runs', false, false),
+    ('story_generation_jobs', true, false),
     ('story_orchestration_run_editorial_reviews', false, false),
     ('story_orchestration_run_draft_ingests', false, false),
     ('story_orchestration_run_draft_ingest_editions', false, false),
@@ -198,7 +199,7 @@ WITH runtime_table(name, can_update, can_delete) AS (
     AND class.relkind IN ('r', 'p')
 )
 SELECT
-  count(*) = 25
+  count(*) = 26
   AND to_regclass('public.child_profiles') IS NULL
   AND to_regclass('public.prompt_profiles') IS NULL
   AND to_regclass('public.profile_settings') IS NULL
@@ -268,6 +269,7 @@ WITH runtime_table(name) AS (
     ('story_sections'),
     ('story_source_versions'),
     ('story_orchestration_runs'),
+    ('story_generation_jobs'),
     ('story_orchestration_run_editorial_reviews'),
     ('story_orchestration_run_draft_ingests'),
     ('story_orchestration_run_draft_ingest_editions'),

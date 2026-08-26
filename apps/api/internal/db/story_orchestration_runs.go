@@ -52,6 +52,22 @@ func (s *Store) PersistCompletedStoryOrchestrationRunContext(
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	persisted, err := persistCompletedStoryOrchestrationRunTx(ctx, tx, sourceVersionID, result)
+	if err != nil {
+		return storyorchestration.PersistedRun{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return storyorchestration.PersistedRun{}, err
+	}
+	return persisted, nil
+}
+
+func persistCompletedStoryOrchestrationRunTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	sourceVersionID string,
+	result storyorchestration.Result,
+) (storyorchestration.PersistedRun, error) {
 	source, err := loadStoryOrchestrationSourceVersion(ctx, tx, sourceVersionID)
 	if err != nil {
 		return storyorchestration.PersistedRun{}, err
@@ -80,9 +96,6 @@ func (s *Store) PersistCompletedStoryOrchestrationRunContext(
 		&persisted.CreatedAt,
 	)
 	if err != nil {
-		return storyorchestration.PersistedRun{}, err
-	}
-	if err := tx.Commit(); err != nil {
 		return storyorchestration.PersistedRun{}, err
 	}
 	persisted.Result = result

@@ -319,6 +319,7 @@ WITH runtime_table(name) AS (
     ('story_sections'),
     ('story_source_versions'),
     ('story_orchestration_runs'),
+    ('story_generation_jobs'),
     ('story_orchestration_run_editorial_reviews'),
     ('story_orchestration_run_draft_ingests'),
     ('story_orchestration_run_draft_ingest_editions'),
@@ -356,8 +357,8 @@ WHERE namespace.nspname = 'public'
   AND class.relkind IN ('r', 'p')
 \gexec
 
--- Review decisions are mutable, but review history is never deleted by the
--- runtime application role.
+-- Quality reviews and operational jobs are mutable, but neither can be
+-- deleted by the runtime application role.
 SELECT format(
   'REVOKE DELETE ON TABLE public.%I FROM %I',
   class.relname,
@@ -366,7 +367,7 @@ SELECT format(
 FROM pg_class class
 JOIN pg_namespace namespace ON namespace.oid = class.relnamespace
 WHERE namespace.nspname = 'public'
-  AND class.relname = 'source_acquisition_quality_reviews'
+  AND class.relname IN ('source_acquisition_quality_reviews', 'story_generation_jobs')
   AND class.relkind IN ('r', 'p')
 \gexec
 

@@ -115,7 +115,7 @@ query() {
 
 schema_version=$(query "SELECT version_id FROM goose_db_version WHERE is_applied ORDER BY id DESC LIMIT 1;")
 [[ "$schema_version" == 1 ]] || {
-  printf 'expected complete baseline schema at Goose version 1, got %s\n' "$schema_version" >&2
+  printf 'expected complete schema at Goose version 1, got %s\n' "$schema_version" >&2
   exit 1
 }
 [[ $(query "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('principals','external_identities','account_memberships');") == 3 ]]

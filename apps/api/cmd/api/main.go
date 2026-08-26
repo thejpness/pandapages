@@ -29,6 +29,7 @@ import (
 	"pandapages/api/internal/sourceprovider/gutenberg"
 	"pandapages/api/internal/storyeditorialreview"
 	"pandapages/api/internal/storygeneration"
+	"pandapages/api/internal/storygenerationjobs"
 	"pandapages/api/internal/storygenerationservice"
 	"pandapages/api/internal/storyorchestration"
 	"pandapages/api/internal/storyvalidation"
@@ -147,7 +148,7 @@ func newStoryGenerationService(
 	apiKey string,
 	sourceLoader storygenerationservice.SourceVersionLoader,
 	runStore storygenerationservice.CompletedRunStore,
-) (httpadmin.StoryGenerationService, error) {
+) (storygenerationservice.Runner, error) {
 	apiKey = strings.TrimSpace(apiKey)
 	if apiKey == "" {
 		return nil, nil
@@ -157,8 +158,12 @@ func newStoryGenerationService(
 	if err != nil {
 		return nil, fmt.Errorf("create OpenAI Responses client: %w", err)
 	}
+	retryingResponses, err := storygeneration.NewRateLimitRetryGateway(storygeneration.RateLimitRetryConfig{Gateway: responses})
+	if err != nil {
+		return nil, fmt.Errorf("configure OpenAI rate-limit retry gateway: %w", err)
+	}
 	generator, err := storygeneration.NewV2Runner(storygeneration.V2RunnerConfig{
-		Gateway:                 responses,
+		Gateway:                 retryingResponses,
 		AnalysisReasoningEffort: policy.AnalysisReasoningEffort,
 		AnalysisMaxOutputTokens: policy.AnalysisMaxOutputTokens,
 		EditionReasoningEffort:  policy.EditionReasoningEffort,
@@ -168,7 +173,7 @@ func newStoryGenerationService(
 		return nil, fmt.Errorf("create story generation runner: %w", err)
 	}
 	validator, err := storyvalidation.NewRunner(storyvalidation.RunnerConfig{
-		Gateway:         responses,
+		Gateway:         retryingResponses,
 		Model:           policy.ValidatorModel,
 		ReasoningEffort: policy.ValidatorReasoning,
 		MaxOutputTokens: policy.ValidatorMaxOutputTokens,
@@ -191,6 +196,15 @@ func newStoryGenerationService(
 	return service, nil
 }
 
+// storyGenerationJobHTTPService prevents an optional concrete worker service
+// becoming a non-nil typed interface at the HTTP boundary.
+func storyGenerationJobHTTPService(service *storygenerationjobs.Service) httpadmin.StoryGenerationJobService {
+	if service == nil {
+		return nil
+	}
+	return service
+}
+
 func run() error {
 	cfg, err := loadRuntimeConfig(os.Getenv)
 	if err != nil {
@@ -202,6 +216,8 @@ func run() error {
 
 	store := db.MustOpen(cfg.databaseURL)
 	defer store.Close()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	editorialReviews, err := storyeditorialreview.New(storyeditorialreview.Config{
 		ValidatedRunReader: store,
 		Writer:             store,
@@ -216,6 +232,17 @@ func run() error {
 	}
 	if storyGeneration == nil {
 		slog.Warn("story generation is unavailable", "category", "openai_configuration")
+	}
+	var storyGenerationJobs *storygenerationjobs.Service
+	if storyGeneration != nil {
+		storyGenerationJobs, err = storygenerationjobs.New(storygenerationjobs.Config{
+			Store:  store,
+			Runner: storyGeneration,
+			Logger: slog.Default(),
+		})
+		if err != nil {
+			return fmt.Errorf("configure story generation jobs: %w", err)
+		}
 	}
 
 	verifier, err := supabaseauth.New(cfg.supabaseAuth)
@@ -254,7 +281,7 @@ func run() error {
 		SourceDiscovery:                    sourceDiscovery,
 		SourceAcquisition:                  sourceDiscovery,
 		SourceEligibility:                  sourceEligibility,
-		StoryGeneration:                    storyGeneration,
+		StoryGenerationJobs:                storyGenerationJobHTTPService(storyGenerationJobs),
 		StoryOrchestrationRuns:             store,
 		StoryOrchestrationRunHistory:       store,
 		StoryOrchestrationEditorialReviews: editorialReviews,
@@ -262,9 +289,19 @@ func run() error {
 	}, store)
 
 	server := newServer(newRootHandler(public, identity, admin))
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
+	if storyGenerationJobs != nil {
+		if err := storyGenerationJobs.Start(ctx); err != nil {
+			return fmt.Errorf("start story generation jobs: %w", err)
+		}
+	}
+	stopStoryGenerationJobs := func() error {
+		if storyGenerationJobs == nil {
+			return nil
+		}
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		return storyGenerationJobs.Stop(shutdownCtx)
+	}
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- server.ListenAndServe()
@@ -274,6 +311,9 @@ func run() error {
 
 	select {
 	case err := <-errCh:
+		if stopErr := stopStoryGenerationJobs(); stopErr != nil {
+			return fmt.Errorf("stop story generation jobs: %w", stopErr)
+		}
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return fmt.Errorf("serve HTTP: %w", err)
 		}
@@ -284,6 +324,9 @@ func run() error {
 
 		if err := server.Shutdown(shutdownCtx); err != nil {
 			return fmt.Errorf("graceful shutdown: %w", err)
+		}
+		if err := stopStoryGenerationJobs(); err != nil {
+			return fmt.Errorf("stop story generation jobs: %w", err)
 		}
 		if err := <-errCh; err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return fmt.Errorf("serve HTTP: %w", err)

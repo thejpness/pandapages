@@ -4,6 +4,7 @@ import { loadTypeScript } from './helpers/typescript-module.mjs'
 
 const sourceVersionID = '11111111-1111-4111-8111-111111111111'
 const runID = '22222222-2222-4222-8222-222222222222'
+const generationJobID = '99999999-9999-4999-8999-999999999999'
 const timestamp = '2026-08-18T12:00:00Z'
 const sourceSHA = 'a'.repeat(64)
 const analysisSHA = 'b'.repeat(64)
@@ -20,6 +21,17 @@ async function loadAPI() {
 
 function response(body, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+}
+
+function generationJob(status = 'queued', stage = 'queued') {
+  return {
+    id: generationJobID,
+    sourceVersionId: sourceVersionID,
+    status,
+    stage,
+    createdAt: timestamp,
+    ...(status === 'queued' ? {} : { startedAt: timestamp }),
+  }
 }
 
 function usage() {
@@ -114,22 +126,28 @@ function draftIngest(outcome = 'created') {
   }
 }
 
-test('orchestration wrappers preserve endpoint identity, empty generation body, and actual artifact casing', async (t) => {
+test('durable generation-job and completed-run wrappers preserve endpoint identity, empty body, and artifact casing', async (t) => {
   const originalFetch = globalThis.fetch
   t.after(() => { globalThis.fetch = originalFetch })
   const requests = []
   globalThis.fetch = async (url, init = {}) => {
     requests.push({ url: String(url), init })
-    if (String(url).endsWith('/generate')) return response({ id: runID, sourceVersionId: sourceVersionID, semanticResult: 'fail', createdAt: timestamp }, 201)
+    if (String(url).endsWith('/generation-jobs/active')) return response(generationJob())
+    if (String(url).endsWith(`/generation-jobs/${generationJobID}`)) return response(generationJob('running', 'analysing_source'))
+    if (String(url).endsWith('/generation-jobs')) return response(generationJob(), 202)
     if (String(url).includes('/source-versions/')) return response({ items: [{ id: runID, sourceVersionId: sourceVersionID, sourceSha256: sourceSHA, semanticResult: 'fail', createdAt: timestamp }] })
     return response(run())
   }
   const api = await loadAPI()
-  const generation = await api.adminGenerateSourceVersion(sourceVersionID)
+  const generation = await api.adminCreateStoryGenerationJob(sourceVersionID)
+  const running = await api.adminGetStoryGenerationJob(generationJobID)
+  const active = await api.adminGetActiveStoryGenerationJob(sourceVersionID)
   const history = await api.adminListStoryOrchestrationRuns(sourceVersionID)
   const detail = await api.adminGetStoryOrchestrationRun(runID)
 
-  assert.equal(generation.semanticResult, 'fail')
+  assert.equal(generation.status, 'queued')
+  assert.equal(running.stage, 'analysing_source')
+  assert.equal(active?.id, generationJobID)
   assert.deepEqual(history.items.map((item) => item.id), [runID])
   assert.deepEqual(detail.editions.map((item) => item.EditionKey), generatedKeys)
   assert.equal(detail.analysisArtifact.PromptVersion, 'panda-pages-source-analysis-prompt-v3')
@@ -138,7 +156,9 @@ test('orchestration wrappers preserve endpoint identity, empty generation body, 
   assert.deepEqual(detail.editionAssessments[0].Assessment.editionKeys, [])
   assert.equal(detail.bundleAssessment.Assessment.assessmentScope, 'bundle')
   assert.deepEqual(requests.map((request) => request.url), [
-    `/api/v1/admin/source-versions/${sourceVersionID}/generate`,
+    `/api/v1/admin/source-versions/${sourceVersionID}/generation-jobs`,
+    `/api/v1/admin/generation-jobs/${generationJobID}`,
+    `/api/v1/admin/source-versions/${sourceVersionID}/generation-jobs/active`,
     `/api/v1/admin/source-versions/${sourceVersionID}/orchestration-runs`,
     `/api/v1/admin/story-orchestration-runs/${runID}`,
   ])

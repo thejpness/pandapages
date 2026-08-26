@@ -45,6 +45,28 @@ type SemanticValidator interface {
 	) (storyvalidation.AssessmentArtifact, error)
 }
 
+// Stage is one durable operation boundary in the fixed orchestration flow.
+// It is intentionally not a percentage and reveals no prompt or content.
+type Stage string
+
+const (
+	StageAnalysingSource            Stage = "analysing_source"
+	StageGeneratingConfidentReaders Stage = "generating_confident_readers"
+	StageGeneratingGrowingReaders   Stage = "generating_growing_readers"
+	StageGeneratingStoryExplorers   Stage = "generating_story_explorers"
+	StageGeneratingLittleListeners  Stage = "generating_little_listeners"
+	StageValidatingConfidentReaders Stage = "validating_confident_readers"
+	StageValidatingGrowingReaders   Stage = "validating_growing_readers"
+	StageValidatingStoryExplorers   Stage = "validating_story_explorers"
+	StageValidatingLittleListeners  Stage = "validating_little_listeners"
+	StageValidatingBundle           Stage = "validating_bundle"
+)
+
+// StageReporter observes a stage immediately before its corresponding model
+// operation begins. Returning an error stops the run before more provider work
+// is incurred.
+type StageReporter func(Stage) error
+
 // Config supplies the already-configured generation and semantic-validation
 // services. Orchestrator deliberately owns no model, token, reasoning, retry,
 // or transport configuration.
@@ -114,10 +136,19 @@ func New(cfg Config) (*Orchestrator, error) {
 // artifact failures stop the flow and return an error. Valid semantic pass,
 // needs_review, and fail results complete the flow and are returned together.
 func (orchestrator *Orchestrator) Run(ctx context.Context, input Input) (Result, error) {
+	return orchestrator.RunWithStageReporter(ctx, input, nil)
+}
+
+// RunWithStageReporter executes the fixed flow while exposing only its real
+// operation boundaries to a durable job runner.
+func (orchestrator *Orchestrator) RunWithStageReporter(ctx context.Context, input Input, report StageReporter) (Result, error) {
 	if err := validateInput(input); err != nil {
 		return Result{}, err
 	}
 
+	if err := reportStage(report, StageAnalysingSource); err != nil {
+		return Result{}, err
+	}
 	analysis, err := orchestrator.generator.AnalyseSource(ctx, storygeneration.SourceAnalysisPromptInput{
 		Title:           input.Title,
 		Author:          input.Author,
@@ -133,6 +164,9 @@ func (orchestrator *Orchestrator) Run(ctx context.Context, input Input) (Result,
 	editionKeys := storygeneration.DerivedEditionKeysV2()
 	editions := make([]storygeneration.GeneratedEditionArtifact, 0, len(editionKeys))
 	for _, editionKey := range editionKeys {
+		if err := reportStage(report, generationStageForEdition(editionKey)); err != nil {
+			return Result{}, err
+		}
 		edition, err := orchestrator.generator.GenerateEdition(ctx, storygeneration.GenerateEditionInput{
 			EditionKey:       editionKey,
 			Title:            input.Title,
@@ -158,6 +192,9 @@ func (orchestrator *Orchestrator) Run(ctx context.Context, input Input) (Result,
 
 	editionAssessments := make([]storyvalidation.AssessmentArtifact, 0, len(editions))
 	for _, edition := range editions {
+		if err := reportStage(report, validationStageForEdition(edition.EditionKey)); err != nil {
+			return Result{}, err
+		}
 		assessment, err := orchestrator.validator.ValidateEdition(ctx, storyvalidation.EditionValidationPromptInput{
 			Title:            input.Title,
 			Author:           input.Author,
@@ -180,6 +217,9 @@ func (orchestrator *Orchestrator) Run(ctx context.Context, input Input) (Result,
 		editionAssessments = append(editionAssessments, assessment)
 	}
 
+	if err := reportStage(report, StageValidatingBundle); err != nil {
+		return Result{}, err
+	}
 	bundleAssessment, err := orchestrator.validator.ValidateBundle(ctx, storyvalidation.BundleValidationPromptInput{
 		Title:             input.Title,
 		Author:            input.Author,
@@ -211,6 +251,46 @@ func (orchestrator *Orchestrator) Run(ctx context.Context, input Input) (Result,
 		BundleAssessment:   bundleAssessment,
 		SemanticResult:     worstSemanticResult(editionAssessments, bundleAssessment),
 	}, nil
+}
+
+func reportStage(report StageReporter, stage Stage) error {
+	if report == nil {
+		return nil
+	}
+	if err := report(stage); err != nil {
+		return fmt.Errorf("report orchestration stage %q: %w", stage, err)
+	}
+	return nil
+}
+
+func generationStageForEdition(key model.AdminStoryEditionKey) Stage {
+	switch key {
+	case model.AdminStoryEditionConfidentReaders:
+		return StageGeneratingConfidentReaders
+	case model.AdminStoryEditionGrowingReaders:
+		return StageGeneratingGrowingReaders
+	case model.AdminStoryEditionStoryExplorers:
+		return StageGeneratingStoryExplorers
+	case model.AdminStoryEditionLittleListeners:
+		return StageGeneratingLittleListeners
+	default:
+		return ""
+	}
+}
+
+func validationStageForEdition(key model.AdminStoryEditionKey) Stage {
+	switch key {
+	case model.AdminStoryEditionConfidentReaders:
+		return StageValidatingConfidentReaders
+	case model.AdminStoryEditionGrowingReaders:
+		return StageValidatingGrowingReaders
+	case model.AdminStoryEditionStoryExplorers:
+		return StageValidatingStoryExplorers
+	case model.AdminStoryEditionLittleListeners:
+		return StageValidatingLittleListeners
+	default:
+		return ""
+	}
 }
 
 func validateInput(input Input) error {

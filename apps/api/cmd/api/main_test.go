@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"pandapages/api/internal/httpadmin"
 	"pandapages/api/internal/storygeneration"
+	"pandapages/api/internal/storygenerationjobs"
 	"pandapages/api/internal/storyorchestration"
 )
 
@@ -42,13 +42,16 @@ func TestNewStoryGenerationServiceIsOptionalAndOffline(t *testing.T) {
 	if err != nil || service != nil {
 		t.Fatalf("missing key service/error = %#v / %v", service, err)
 	}
-	adminConfig := httpadmin.Config{StoryGeneration: service}
-	if adminConfig.StoryGeneration != nil {
-		t.Fatalf("missing key admin story generation = %#v, want nil", adminConfig.StoryGeneration)
-	}
 	service, err = newStoryGenerationService("test-openai-key", loader, runStore)
 	if err != nil || service == nil {
 		t.Fatalf("configured offline service/error = %#v / %v", service, err)
+	}
+}
+
+func TestStoryGenerationJobHTTPServiceDoesNotCreateTypedNil(t *testing.T) {
+	var jobs *storygenerationjobs.Service
+	if service := storyGenerationJobHTTPService(jobs); service != nil {
+		t.Fatalf("optional generation jobs HTTP service = %#v, want nil", service)
 	}
 }
 

@@ -12,7 +12,7 @@ type Config struct {
 	SourceDiscovery                    sourceprovider.Discovery
 	SourceAcquisition                  sourceprovider.Acquisition
 	SourceEligibility                  *sourceeligibility.Service
-	StoryGeneration                    StoryGenerationService
+	StoryGenerationJobs                StoryGenerationJobService
 	StoryOrchestrationRuns             StoryOrchestrationRunReader
 	StoryOrchestrationRunHistory       StoryOrchestrationRunHistoryReader
 	StoryOrchestrationEditorialReviews StoryOrchestrationEditorialReviewService

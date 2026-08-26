@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"pandapages/api/internal/adaptationcontract"
 	"pandapages/api/internal/model"
@@ -143,6 +144,55 @@ func TestRunCompletesCanonicalFlowInOrderAndKeepsEditionsIndependent(t *testing.
 	}
 	if result.SemanticResult != adaptationcontract.ResultPass {
 		t.Fatalf("SemanticResult = %q, want pass", result.SemanticResult)
+	}
+}
+
+func TestRateLimitedValidationRetryDoesNotRestartEarlierOrchestrationStages(t *testing.T) {
+	input, generator, validator := testServices(t, nil, adaptationcontract.ResultPass)
+	provider := &rateLimitThenSuccessGateway{}
+	retryingGateway, err := storygeneration.NewRateLimitRetryGateway(storygeneration.RateLimitRetryConfig{
+		Gateway: provider,
+		Wait: func(context.Context, time.Duration) error {
+			return nil
+		},
+		Jitter: func() float64 { return 0.5 },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	retryingValidator := &retryingSemanticValidator{delegate: validator, gateway: retryingGateway}
+
+	result, err := newOrchestrator(t, generator, retryingValidator).Run(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	keys := storygeneration.DerivedEditionKeysV2()
+	if len(generator.analysisInputs) != 1 || len(generator.editionInputs) != len(keys) {
+		t.Fatalf("analysis/generation calls = %d/%d, want 1/%d", len(generator.analysisInputs), len(generator.editionInputs), len(keys))
+	}
+	generationCalls := make(map[model.AdminStoryEditionKey]int, len(keys))
+	for _, call := range generator.editionInputs {
+		generationCalls[call.EditionKey]++
+	}
+	for _, key := range keys {
+		if generationCalls[key] != 1 {
+			t.Fatalf("GenerateEdition(%q) calls = %d, want 1", key, generationCalls[key])
+		}
+	}
+	if len(validator.editionInputs) != len(keys) || len(validator.bundleInputs) != 1 || result.SemanticResult != adaptationcontract.ResultPass {
+		t.Fatalf("validation/bundle/result = %d/%d/%q", len(validator.editionInputs), len(validator.bundleInputs), result.SemanticResult)
+	}
+	providerCalls := make(map[model.AdminStoryEditionKey]int, len(keys))
+	for _, call := range provider.calls {
+		providerCalls[model.AdminStoryEditionKey(call.Prompt.UserInputJSON)]++
+	}
+	if providerCalls[keys[0]] != 2 {
+		t.Fatalf("rate-limited validation provider calls for %q = %d, want 2", keys[0], providerCalls[keys[0]])
+	}
+	for _, key := range keys[1:] {
+		if providerCalls[key] != 1 {
+			t.Fatalf("subsequent validation provider calls for %q = %d, want 1", key, providerCalls[key])
+		}
 	}
 }
 
@@ -651,6 +701,44 @@ type fakeSemanticValidator struct {
 	mutateAnalysisDuringBundleValidation  bool
 	editionInputs                         []storyvalidation.EditionValidationPromptInput
 	bundleInputs                          []storyvalidation.BundleValidationPromptInput
+}
+
+type rateLimitThenSuccessGateway struct {
+	calls []storygeneration.ResponsesCall
+}
+
+func (gateway *rateLimitThenSuccessGateway) Create(_ context.Context, call storygeneration.ResponsesCall) (storygeneration.ResponsesResult, error) {
+	gateway.calls = append(gateway.calls, call)
+	if len(gateway.calls) == 1 {
+		return storygeneration.ResponsesResult{}, storygeneration.ErrOpenAIRateLimited
+	}
+	return storygeneration.ResponsesResult{ResponseID: "resp-retry", Model: "validator-test", OutputText: "{}"}, nil
+}
+
+type retryingSemanticValidator struct {
+	delegate *fakeSemanticValidator
+	gateway  storygeneration.ResponsesGateway
+}
+
+func (validator *retryingSemanticValidator) ValidateEdition(ctx context.Context, input storyvalidation.EditionValidationPromptInput) (storyvalidation.AssessmentArtifact, error) {
+	_, err := validator.gateway.Create(ctx, storygeneration.ResponsesCall{
+		Model:           "validator-test",
+		ReasoningEffort: storygeneration.ReasoningEffortMedium,
+		MaxOutputTokens: 1,
+		Prompt: storygeneration.Prompt{
+			Version:               storyvalidation.EditionJudgementPromptVersionV3,
+			DeveloperInstructions: "Validate one generated edition.",
+			UserInputJSON:         string(input.GeneratedEdition.EditionKey),
+		},
+	})
+	if err != nil {
+		return storyvalidation.AssessmentArtifact{}, err
+	}
+	return validator.delegate.ValidateEdition(ctx, input)
+}
+
+func (validator *retryingSemanticValidator) ValidateBundle(ctx context.Context, input storyvalidation.BundleValidationPromptInput) (storyvalidation.AssessmentArtifact, error) {
+	return validator.delegate.ValidateBundle(ctx, input)
 }
 
 func (validator *fakeSemanticValidator) ValidateEdition(_ context.Context, input storyvalidation.EditionValidationPromptInput) (storyvalidation.AssessmentArtifact, error) {

@@ -165,7 +165,7 @@ verify_policy
 version=$(psql_as "$migration_role" --tuples-only --no-align \
   --command="SELECT version_id FROM goose_db_version WHERE is_applied ORDER BY id DESC LIMIT 1;")
 [[ "$version" == 1 ]] || {
-  printf 'expected complete baseline schema at Goose version 1, got %s\n' "$version" >&2
+  printf 'expected complete schema at Goose version 1, got %s\n' "$version" >&2
   exit 1
 }
 
@@ -309,6 +309,20 @@ psql_as "$application_role" --command="
     'a1500000-0000-4000-8000-000000000056'
   FROM story_orchestration_run_draft_ingests AS ingest
   WHERE ingest.run_id = 'a1500000-0000-4000-8000-000000000054';
+  INSERT INTO story_generation_jobs (
+    id, source_version_id, requester_principal_id, requester_account_id
+  ) VALUES (
+    'a1500000-0000-4000-8000-000000000057',
+    'a1500000-0000-4000-8000-000000000053',
+    'a1500000-0000-4000-8000-000000000041',
+    'a1500000-0000-4000-8000-000000000001'
+  );
+  UPDATE story_generation_jobs
+  SET status='running', stage='analysing_source', started_at=now()
+  WHERE id='a1500000-0000-4000-8000-000000000057';
+  UPDATE story_generation_jobs
+  SET status='queued', stage='queued', started_at=NULL
+  WHERE id='a1500000-0000-4000-8000-000000000057';
   SELECT count(*) FROM story_orchestration_run_editorial_reviews;
   SELECT count(*) FROM story_orchestration_run_draft_ingests;
   SELECT count(*) FROM story_orchestration_run_draft_ingest_editions;
@@ -352,6 +366,11 @@ expect_denied \
   'application editorial review deletion' \
   "$application_role" \
   "DELETE FROM story_orchestration_run_editorial_reviews WHERE run_id='a1500000-0000-4000-8000-000000000054';"
+
+expect_denied \
+  'application generation job deletion' \
+  "$application_role" \
+  "DELETE FROM story_generation_jobs WHERE id='a1500000-0000-4000-8000-000000000057';"
 
 expect_denied \
   'application draft ingest mutation' \
