@@ -376,20 +376,53 @@ func TestResponsesClientCreateFailsClosedOnProviderOutcomes(t *testing.T) {
 	}
 }
 
-func TestResponsesClientCreateRetainsOnlyBoundedRetryAfterForRateLimitRetry(t *testing.T) {
+func TestResponsesClientCreateRetainsOnlyAllowlistedRateLimitMetadata(t *testing.T) {
+	providerMessage := "provider-message-must-not-be-retained"
+	promptSecret := "prompt-must-not-be-retained"
 	client, _ := newTestResponsesClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Retry-After", "7")
+		w.Header().Set("X-Request-ID", "req_safe")
+		w.Header().Set("X-RateLimit-Limit-Requests", "60")
+		w.Header().Set("X-RateLimit-Remaining-Requests", "0")
+		w.Header().Set("X-RateLimit-Reset-Requests", "1s")
+		w.Header().Set("X-RateLimit-Limit-Tokens", "150000")
+		w.Header().Set("X-RateLimit-Remaining-Tokens", "42")
+		w.Header().Set("X-RateLimit-Reset-Tokens", "6m0s")
+		w.Header().Set("X-RateLimit-Limit-Project-Tokens", "60000")
+		w.Header().Set("X-RateLimit-Remaining-Project-Tokens", "0")
+		w.Header().Set("X-RateLimit-Reset-Project-Tokens", "3s")
+		w.Header().Set("Authorization", "Bearer response-secret-must-not-be-retained")
+		w.Header().Set("X-Unrelated-Provider-Header", "arbitrary-header-must-not-be-retained")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusTooManyRequests)
-		fmt.Fprint(w, `{"error":{"message":"provider detail must not be retained","type":"rate_limit_exceeded","code":"rate_limit_exceeded"}}`)
+		fmt.Fprintf(w, `{"error":{"message":%q,"type":"rate_limit_exceeded","code":"rate_limit_exceeded"}}`, providerMessage)
 	}))
 
-	_, err := client.Create(context.Background(), validResponsesCall())
+	call := validResponsesCall()
+	call.Prompt.DeveloperInstructions = promptSecret
+	_, err := client.Create(context.Background(), call)
 	if !errors.Is(err, ErrOpenAIRateLimited) {
 		t.Fatalf("Create() error = %v", err)
 	}
 	if delay, ok := openAIRetryAfter(err); !ok || delay != 7*time.Second {
 		t.Fatalf("retry-after = %v / %v, want 7s / true", delay, ok)
+	}
+	metadata, ok := openAIRateLimitMetadataFor(err)
+	if !ok || metadata.requestID != "req_safe" || !metadata.requests.hasLimit || metadata.requests.limit != 60 ||
+		!metadata.requests.hasRemaining || metadata.requests.remaining != 0 || !metadata.requests.hasReset || metadata.requests.reset != time.Second ||
+		!metadata.tokens.hasLimit || metadata.tokens.limit != 150000 || !metadata.tokens.hasRemaining || metadata.tokens.remaining != 42 || metadata.tokens.reset != 6*time.Minute ||
+		!metadata.projectTokens.hasLimit || metadata.projectTokens.limit != 60000 || !metadata.projectTokens.hasRemaining || metadata.projectTokens.remaining != 0 || metadata.projectTokens.reset != 3*time.Second {
+		t.Fatalf("rate limit metadata = %#v", metadata)
+	}
+	var rateLimitErr *openAIRateLimitedError
+	if !errors.As(err, &rateLimitErr) {
+		t.Fatalf("rate limit error = %T, want *openAIRateLimitedError", err)
+	}
+	retained := fmt.Sprintf("%#v", rateLimitErr)
+	for _, forbidden := range []string{providerMessage, promptSecret, "response-secret-must-not-be-retained", "arbitrary-header-must-not-be-retained"} {
+		if strings.Contains(err.Error(), forbidden) || strings.Contains(retained, forbidden) {
+			t.Fatalf("rate limit error unexpectedly retained %q: %s", forbidden, retained)
+		}
 	}
 }
 
