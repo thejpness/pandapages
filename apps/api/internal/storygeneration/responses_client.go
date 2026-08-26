@@ -21,8 +21,14 @@ const (
 	responsesRequestTimeout = 5 * time.Minute
 	maxResponsesBodyBytes   = 4 << 20
 	maxOutputTokensV2       = 128000
-	maxOpenAIRetryAfter     = time.Minute
 	maxOpenAIErrorBodyBytes = 64 << 10
+
+	// This is deliberately longer than the durable job's one-hour context. A
+	// valid provider minimum therefore cannot trigger an early retry within a
+	// job, while malformed or malicious values remain bounded.
+	maxOpenAIRateLimitDelay         = 2 * time.Hour
+	maxOpenAIRequestIDBytes         = 256
+	maxOpenAIRateLimitMetadataBytes = 32
 )
 
 var (
@@ -85,11 +91,32 @@ type ResponsesResult struct {
 	Usage      ResponsesUsage
 }
 
-// openAIRateLimitedError retains only a bounded Retry-After duration. It
-// deliberately does not retain the provider response body or headers.
-type openAIRateLimitedError struct {
+// openAIRateLimitDimension contains only parsed, allowlisted rate-limit
+// metadata. It deliberately retains neither raw headers nor provider bodies.
+type openAIRateLimitDimension struct {
+	limit        int64
+	hasLimit     bool
+	remaining    int64
+	hasRemaining bool
+	reset        time.Duration
+	hasReset     bool
+}
+
+// openAIRateLimitMetadata contains the small, non-secret subset of response
+// headers needed to choose a safe retry delay and make rate-limit logs useful.
+type openAIRateLimitMetadata struct {
+	requestID     string
 	retryAfter    time.Duration
 	hasRetryAfter bool
+	requests      openAIRateLimitDimension
+	tokens        openAIRateLimitDimension
+	projectTokens openAIRateLimitDimension
+}
+
+// openAIRateLimitedError deliberately retains only parsed allowlisted metadata.
+// It never retains the provider response body or arbitrary response headers.
+type openAIRateLimitedError struct {
+	metadata openAIRateLimitMetadata
 }
 
 func (err *openAIRateLimitedError) Error() string {
@@ -213,7 +240,7 @@ func classifyOpenAITooManyRequests(response *http.Response, now time.Time) error
 	case quotaExceeded:
 		return fmt.Errorf("%w: HTTP 429", ErrOpenAIQuotaExceeded)
 	case rateLimited:
-		return newOpenAIRateLimitedError(response.Header.Get("Retry-After"), now)
+		return newOpenAIRateLimitedError(response.Header, now)
 	default:
 		// HTTP 429 by itself is not sufficient evidence that retrying is safe.
 		return fmt.Errorf("%w: unclassified HTTP 429", ErrOpenAIUnavailable)
@@ -253,17 +280,96 @@ func boundedOpenAIErrorMetadata(value string) string {
 	return value
 }
 
-func newOpenAIRateLimitedError(rawRetryAfter string, now time.Time) error {
-	delay, ok := parseOpenAIRetryAfter(rawRetryAfter, now)
-	return &openAIRateLimitedError{retryAfter: delay, hasRetryAfter: ok}
+func newOpenAIRateLimitedError(headers http.Header, now time.Time) error {
+	return &openAIRateLimitedError{metadata: parseOpenAIRateLimitMetadata(headers, now)}
 }
 
 func openAIRetryAfter(err error) (time.Duration, bool) {
-	var rateLimitErr *openAIRateLimitedError
-	if !errors.As(err, &rateLimitErr) || !rateLimitErr.hasRetryAfter {
+	metadata, ok := openAIRateLimitMetadataFor(err)
+	if !ok || !metadata.hasRetryAfter {
 		return 0, false
 	}
-	return rateLimitErr.retryAfter, true
+	return metadata.retryAfter, true
+}
+
+func openAIRateLimitMetadataFor(err error) (openAIRateLimitMetadata, bool) {
+	var rateLimitErr *openAIRateLimitedError
+	if !errors.As(err, &rateLimitErr) {
+		return openAIRateLimitMetadata{}, false
+	}
+	return rateLimitErr.metadata, true
+}
+
+func parseOpenAIRateLimitMetadata(headers http.Header, now time.Time) openAIRateLimitMetadata {
+	metadata := openAIRateLimitMetadata{
+		requestID: boundedOpenAIRequestID(headers.Get("X-Request-ID")),
+		requests: parseOpenAIRateLimitDimension(
+			headers.Get("X-RateLimit-Limit-Requests"),
+			headers.Get("X-RateLimit-Remaining-Requests"),
+			headers.Get("X-RateLimit-Reset-Requests"),
+		),
+		tokens: parseOpenAIRateLimitDimension(
+			headers.Get("X-RateLimit-Limit-Tokens"),
+			headers.Get("X-RateLimit-Remaining-Tokens"),
+			headers.Get("X-RateLimit-Reset-Tokens"),
+		),
+		projectTokens: parseOpenAIRateLimitDimension(
+			headers.Get("X-RateLimit-Limit-Project-Tokens"),
+			headers.Get("X-RateLimit-Remaining-Project-Tokens"),
+			headers.Get("X-RateLimit-Reset-Project-Tokens"),
+		),
+	}
+	metadata.retryAfter, metadata.hasRetryAfter = parseOpenAIRetryAfter(headers.Get("Retry-After"), now)
+	return metadata
+}
+
+func parseOpenAIRateLimitDimension(rawLimit, rawRemaining, rawReset string) openAIRateLimitDimension {
+	limit, hasLimit := parseOpenAIRateLimitCount(rawLimit)
+	remaining, hasRemaining := parseOpenAIRateLimitCount(rawRemaining)
+	reset, hasReset := parseOpenAIRateLimitReset(rawReset)
+	return openAIRateLimitDimension{
+		limit:        limit,
+		hasLimit:     hasLimit,
+		remaining:    remaining,
+		hasRemaining: hasRemaining,
+		reset:        reset,
+		hasReset:     hasReset,
+	}
+}
+
+func boundedOpenAIRequestID(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" || len(value) > maxOpenAIRequestIDBytes || !utf8.ValidString(value) {
+		return ""
+	}
+	return value
+}
+
+func parseOpenAIRateLimitCount(raw string) (int64, bool) {
+	value := strings.TrimSpace(raw)
+	if value == "" || len(value) > maxOpenAIRateLimitMetadataBytes {
+		return 0, false
+	}
+	count, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || count < 0 {
+		return 0, false
+	}
+	return count, true
+}
+
+func parseOpenAIRateLimitReset(raw string) (time.Duration, bool) {
+	value := strings.TrimSpace(raw)
+	if value == "" || len(value) > maxOpenAIRateLimitMetadataBytes {
+		return 0, false
+	}
+	delay, err := time.ParseDuration(value)
+	if err != nil || delay <= 0 {
+		return 0, false
+	}
+	if delay > maxOpenAIRateLimitDelay {
+		return maxOpenAIRateLimitDelay, true
+	}
+	return delay, true
 }
 
 func parseOpenAIRetryAfter(raw string, now time.Time) (time.Duration, bool) {
@@ -275,8 +381,8 @@ func parseOpenAIRetryAfter(raw string, now time.Time) (time.Duration, bool) {
 		if seconds <= 0 {
 			return 0, false
 		}
-		if seconds > int64(maxOpenAIRetryAfter/time.Second) {
-			return maxOpenAIRetryAfter, true
+		if seconds > int64(maxOpenAIRateLimitDelay/time.Second) {
+			return maxOpenAIRateLimitDelay, true
 		}
 		return time.Duration(seconds) * time.Second, true
 	}
@@ -288,8 +394,8 @@ func parseOpenAIRetryAfter(raw string, now time.Time) (time.Duration, bool) {
 	if delay <= 0 {
 		return 0, false
 	}
-	if delay > maxOpenAIRetryAfter {
-		return maxOpenAIRetryAfter, true
+	if delay > maxOpenAIRateLimitDelay {
+		return maxOpenAIRateLimitDelay, true
 	}
 	return delay, true
 }
